@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "opencode-patchline",
+  "version": "1.0.0",
+  "description": "Snapshot-aware, stale-safe precision code editing for OpenCode.",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/demyanovvvv/opencode-patchline#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/demyanovvvv/opencode-patchline.git"
+  },
+  "bugs": {
+    "url": "https://github.com/demyanovvvv/opencode-patchline/issues"
+  },
+  "engines": {
+    "node": ">=20",
+    "opencode": ">=1.18.0 <2"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./plugin": {
+      "types": "./dist/plugin.d.ts",
+      "import": "./dist/plugin.js"
+    },
+    "./server": {
+      "types": "./dist/plugin.d.ts",
+      "import": "./dist/plugin.js"
+    }
+  },
+  "bin": {
+    "opencode-patchline": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "README.ru.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "docs"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint . --max-warnings 0",
+    "doctor": "tsx src/cli.ts doctor",
+    "bench": "tsx benchmarks/runner.ts",
+    "smoke:plugin": "npm run build && node scripts/plugin-smoke.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@ast-grep/napi": "^0.45.3",
+    "@node-rs/xxhash": "^1.7.8",
+    "@oh-my-pi/hashline": "^18.1.5",
+    "@opencode-ai/plugin": "1.18.30",
+    "diff": "^8.0.2",
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "@typescript-eslint/eslint-plugin": "^8.44.0",
+    "@typescript-eslint/parser": "^8.44.0",
+    "eslint": "^9.36.0",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "main": "./dist/index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "code-editing",
+    "developer-tools",
+    "stale-safe",
+    "snapshot"
+  ],
+  "author": "Patchline contributors"
+}

@@ -1,0 +1,11 @@
+export { DEFAULT_CONFIG, parseConfig, type PatchlineConfig } from "./config.js"
+export { EditService, type EditRequest, type EditResult, type ExactEdit } from "./edit-service.js"
+export { PatchlineError, type PatchlineErrorCode } from "./errors.js"
+export { PatchlinePlugin } from "./plugin.js"
+export { isFileReadResult, ReadService, type DirectoryReadResult, type FileReadResult, type ReadRequest, type ReadResult } from "./read-service.js"
+export { routeSearch, type SearchMechanism } from "./search/router.js"
+export { runOpenCodeLspBridge, type LspBridgeOperation } from "./search/lsp.js"
+export { ScopedSnapshotStore, type FileIdentity, type FileSnapshot, type SnapshotScope } from "./snapshot/store.js"
+export { WriteService, type WriteRequest } from "./write-service.js"
+
+export { default } from "./plugin.js"
