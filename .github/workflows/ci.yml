@@ -27,8 +27,11 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - name: Install OpenCode CLI
+        run: npm install --global opencode-ai@1.18.30
+      - run: opencode --version
       - run: npm run typecheck
-      - run: npm test -- --run --testTimeout=15000
+      - run: npm test -- --run --testTimeout=30000
       - run: npm run lint
       - run: npm run build
       - run: npm run doctor

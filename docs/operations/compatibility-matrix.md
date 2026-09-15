@@ -7,4 +7,4 @@
 | `@oh-my-pi/hashline` | 18.1.5 | API verified; Bun-oriented runtime is optional under Node |
 | Node.js | 22.22.2 | development environment |
 | Windows | current development host | tested |
-| Linux/macOS | GitHub Actions, Node.js 22 | verified by CI matrix |
+| Linux/macOS | GitHub Actions, Node.js 22 | configured; hosted run pending |

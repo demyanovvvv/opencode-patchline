@@ -15,6 +15,10 @@
 - Reject `apply_patch` input above 8 MiB before parsing or permission requests.
 - Upgrade Vitest to 5.0.1 and add Node.js 22 CI coverage for Windows, Linux and
   macOS.
+- Install the pinned OpenCode CLI in the cross-platform CI job so the LSP bridge
+  smoke test has the same required executable on every runner.
+- Bound AST result traversal so searches stop after one match beyond the
+  requested result limit instead of materializing every match.
 
 ## Unreleased
 
