@@ -51,6 +51,7 @@
     "doctor": "tsx src/cli.ts doctor",
     "bench": "tsx benchmarks/runner.ts",
     "smoke:plugin": "npm run build && node scripts/plugin-smoke.mjs",
+    "smoke:package": "npm run build && node scripts/package-smoke.mjs",
     "prepack": "npm run build"
   },
   "dependencies": {
@@ -68,7 +69,7 @@
     "eslint": "^9.36.0",
     "tsx": "^4.23.13",
     "typescript": "^5.9.2",
-    "vitest": "^3.2.4"
+    "vitest": "^5.0.1"
   },
   "main": "./dist/index.js",
   "directories": {

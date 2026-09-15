@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- Bound directory reads to 4,096 entries before pagination to prevent unbounded
+  directory enumeration memory use.
+- Reject directory pages whose rendered output exceeds 20,000 characters.
+- Reject file pages whose rendered output exceeds 20,000 characters before
+  recording a snapshot.
+- Bound literal-search directory enumeration to 4,096 entries per directory.
+- Bound formatted grep and AST tool responses to 20,000 characters.
+- Reject create batches above 500 files before path resolution or mutation.
+- Reject edit batches above 500 edits before preflight and cap successful
+  mutation-batch reports at 20,000 characters with a truncation marker.
+- Reject `apply_patch` input above 8 MiB before parsing or permission requests.
+- Upgrade Vitest to 5.0.1 and add Node.js 22 CI coverage for Windows, Linux and
+  macOS.
+
+## Unreleased
+
+- Bound diagnostic output during execution and enforce the 20,000-character cap on the complete result.
+- Terminate timed-out diagnostic process trees and settle even when descendants inherit output pipes.
+- Add a reproducible isolated tarball installation and public-export smoke test.
+- Propagate OpenCode cancellation to diagnostic commands and terminate their process trees before rejecting.
+- Bound and time-limit the shell-free OpenCode LSP bridge, and propagate tool cancellation to its subprocess.
+- Reject classic apply_patch sections outside a single complete patch envelope before creating files.
+- Skip text-search files over 8 MiB and cap each returned matching-line preview at 2,000 characters.
+- Reject AST input over 8 MiB and cap each returned node preview at 2,000 characters.
+- Reject ignored content before the first Hashline section before requesting edit permission.
+- Bound file reads before loading input: reject files over 8 MiB and selected lines over 20,000 characters before snapshot creation.
+- Bound mutation payloads: writes and edit results are limited to 8 MiB, including an 8 MiB aggregate create-batch budget before the first mutation.
+
 ## 1.0.0 - 2026-09-13
 
 - First stable release of the Patchline OpenCode plugin.

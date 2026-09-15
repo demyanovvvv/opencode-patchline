@@ -8,6 +8,137 @@ import { ScopedSnapshotStore } from "../src/snapshot/store.js"
 import { temporaryWorkspace } from "./helpers/workspace.js"
 
 describe("read and exact edit", () => {
+  it("rejects oversized files before recording a snapshot", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "oversized.ts"), `const value = 1\n${" ".repeat(10 * 1024 * 1024)}`)
+      const snapshots = new ScopedSnapshotStore()
+
+      await expect(new ReadService(snapshots).read({ sessionId: "s", worktree: workspace.path, filePath: "oversized.ts" })).rejects.toMatchObject({
+        code: "INVALID_ARGUMENT",
+        path: "oversized.ts",
+      })
+      expect(snapshots.size).toBe(0)
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("rejects a selected source line that exceeds the read output budget", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "long-line.ts"), `const value = "${"x".repeat(25_000)}"\n`)
+      const snapshots = new ScopedSnapshotStore()
+
+      await expect(new ReadService(snapshots).read({ sessionId: "s", worktree: workspace.path, filePath: "long-line.ts" })).rejects.toMatchObject({
+        code: "INVALID_ARGUMENT",
+        path: "long-line.ts",
+      })
+      expect(snapshots.size).toBe(0)
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("rejects directories that exceed the enumeration budget", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await mkdir(path.join(workspace.path, "large-directory"))
+      await Promise.all(Array.from({ length: 4_097 }, (_, index) => writeFile(path.join(workspace.path, "large-directory", `file-${index}.ts`), "")))
+
+      await expect(new ReadService(new ScopedSnapshotStore()).read({
+        sessionId: "s",
+        worktree: workspace.path,
+        filePath: "large-directory",
+      })).rejects.toMatchObject({
+        code: "INVALID_ARGUMENT",
+        path: "large-directory",
+      })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("rejects a directory page that exceeds the read output budget", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await mkdir(path.join(workspace.path, "long-directory"))
+      await Promise.all(Array.from({ length: 120 }, (_, index) => writeFile(path.join(workspace.path, "long-directory", `${String(index).padStart(3, "0")}-${"x".repeat(240)}.ts`), "")))
+
+      await expect(new ReadService(new ScopedSnapshotStore()).read({
+        sessionId: "s",
+        worktree: workspace.path,
+        filePath: "long-directory",
+      })).rejects.toMatchObject({
+        code: "INVALID_ARGUMENT",
+        path: "long-directory",
+      })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("rejects a file page whose rendered output exceeds the read output budget", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "wide-page.ts"), `${Array.from({ length: 120 }, (_, index) => `${String(index).padStart(3, "0")}:${"x".repeat(200)}`).join("\n")}\n`)
+      const snapshots = new ScopedSnapshotStore()
+
+      await expect(new ReadService(snapshots).read({
+        sessionId: "s",
+        worktree: workspace.path,
+        filePath: "wide-page.ts",
+      })).rejects.toMatchObject({
+        code: "INVALID_ARGUMENT",
+        path: "wide-page.ts",
+      })
+      expect(snapshots.size).toBe(0)
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("counts the actual path and metadata when bounding file read output", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const directory = "d".repeat(180)
+      const filePath = `${directory}/file.ts`
+      await mkdir(path.join(workspace.path, directory))
+      await writeFile(path.join(workspace.path, filePath), `${Array.from({ length: 120 }, (_, index) => `${String(index).padStart(3, "0")}:${"x".repeat(180)}`).join("\n")}\n`)
+      const snapshots = new ScopedSnapshotStore()
+
+      await expect(new ReadService(snapshots).read({
+        sessionId: "s",
+        worktree: workspace.path,
+        filePath,
+      })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+      expect(snapshots.size).toBe(0)
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("rejects an oversized exact edit before preparing replacement bytes", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "edit.ts"), "const value = 1\n")
+      const snapshots = new ScopedSnapshotStore()
+      const read = await new ReadService(snapshots).read({ sessionId: "s", worktree: workspace.path, filePath: "edit.ts" })
+      if (!isFileReadResult(read)) throw new Error("expected file result")
+
+      await expect(new EditService(snapshots).edit({
+        sessionId: "s",
+        worktree: workspace.path,
+        filePath: "edit.ts",
+        snapshot: read.snapshot,
+        exact: { oldString: "1", newString: "x".repeat(8 * 1024 * 1024 + 1) },
+      })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+      expect(await readFile(path.join(workspace.path, "edit.ts"), "utf8")).toBe("const value = 1\n")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
   it("preserves the built-in read contract for directories without creating a snapshot", async () => {
     const workspace = await temporaryWorkspace()
     try {

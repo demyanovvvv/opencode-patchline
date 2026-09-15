@@ -26,6 +26,51 @@ describe("search", () => {
     }
   })
 
+  it("skips oversized files before loading them into search memory", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "oversized.txt"), `${"x".repeat(10 * 1024 * 1024)}needle`)
+
+      const result = await grepWorkspace({ worktree: workspace.path, pattern: "needle", maxResults: 10 })
+
+      expect(result).toEqual({ matches: [], truncated: false })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("rejects directories that exceed the literal-search enumeration budget", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await mkdir(path.join(workspace.path, "large-search-directory"))
+      await Promise.all(Array.from({ length: 4_097 }, (_, index) => writeFile(path.join(workspace.path, "large-search-directory", `file-${index}.ts`), "")))
+
+      await expect(grepWorkspace({
+        worktree: workspace.path,
+        pattern: "needle",
+        path: "large-search-directory",
+        maxResults: 10,
+      })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("bounds the text returned for a single long matching line", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "long-line.txt"), `needle${"x".repeat(100_000)}`)
+
+      const result = await grepWorkspace({ worktree: workspace.path, pattern: "needle", maxResults: 10 })
+
+      expect(result.matches).toHaveLength(1)
+      expect(result.matches[0]!.text.length).toBeLessThanOrEqual(2_000)
+      expect(result.matches[0]!.text).toContain("truncated")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
   it("rejects invalid result limits at the search service boundary", async () => {
     const workspace = await temporaryWorkspace()
     try {
@@ -109,6 +154,42 @@ describe("search", () => {
     }
   })
 
+  it("rejects oversized AST source before parsing it", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "oversized.ts"), `const value = 1\n${" ".repeat(10 * 1024 * 1024)}`)
+
+      await expect(astSearchFile({
+        worktree: workspace.path,
+        filePath: "oversized.ts",
+        pattern: "const $A = $B",
+        maxResults: 10,
+      })).rejects.toMatchObject({ code: "INVALID_ARGUMENT", path: "oversized.ts" })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("bounds the source text returned for one large AST match", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "large-node.ts"), `function large() {\n/*${"x".repeat(100_000)}*/\n}\n`)
+
+      const result = await astSearchFile({
+        worktree: workspace.path,
+        filePath: "large-node.ts",
+        pattern: "function $A() { $$$BODY }",
+        maxResults: 10,
+      })
+
+      expect(result.matches).toHaveLength(1)
+      expect(result.matches[0]!.text.length).toBeLessThanOrEqual(2_000)
+      expect(result.matches[0]!.text).toContain("truncated")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
   it("rejects invalid UTF-8 before AST parsing", async () => {
     const workspace = await temporaryWorkspace()
     try {
@@ -134,6 +215,22 @@ describe("search", () => {
       await workspace.cleanup()
     }
   }, 30_000)
+
+  it("does not start the OpenCode LSP bridge after tool cancellation", async () => {
+    const workspace = await temporaryWorkspace()
+    const controller = new AbortController()
+    controller.abort()
+    try {
+      await expect(runOpenCodeLspBridge({
+        worktree: workspace.path,
+        operation: "workspaceSymbol",
+        query: "MissingSymbol",
+        signal: controller.signal,
+      })).rejects.toMatchObject({ name: "AbortError" })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
 
   it("passes Windows LSP queries as literal arguments instead of shell commands", async () => {
     if (process.platform !== "win32") return

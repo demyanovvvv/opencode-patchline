@@ -8,6 +8,21 @@ import { ScopedSnapshotStore } from "../src/snapshot/store.js"
 import { temporaryWorkspace } from "./helpers/workspace.js"
 
 describe("stale-state protection", () => {
+  it("rejects an oversized edit batch before snapshot or path preflight", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await expect(new EditService(new ScopedSnapshotStore()).editBatch(Array.from({ length: 501 }, (_, index) => ({
+        sessionId: "s",
+        worktree: workspace.path,
+        filePath: `missing-${index}.ts`,
+        snapshot: "missing",
+        exact: { oldString: "1", newString: "2" },
+      })))).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
   it("does not overwrite an external change inside the target", async () => {
     const workspace = await temporaryWorkspace()
     try {

@@ -1,8 +1,36 @@
-import { readdir, readFile, stat } from "node:fs/promises"
+import { opendir, open, stat } from "node:fs/promises"
 import { PatchlineError } from "./errors.js"
 import { decodeUtf8 } from "./preservation/text.js"
 import { ScopedSnapshotStore, type SnapshotScope } from "./snapshot/store.js"
 import { resolveWorkspacePath } from "./workspace/paths.js"
+
+const MAX_READ_FILE_BYTES = 8 * 1024 * 1024
+const MAX_READ_LINE_CHARS = 20_000
+const MAX_READ_OUTPUT_CHARS = 20_000
+const MAX_DIRECTORY_ENTRIES = 4_096
+
+async function readBoundedFile(absolute: string, relative: string): Promise<Buffer> {
+  const handle = await open(absolute, "r")
+  try {
+    const info = await handle.stat()
+    if (info.size > BigInt(MAX_READ_FILE_BYTES)) {
+      throw new PatchlineError("INVALID_ARGUMENT", `File exceeds the 8 MiB read limit: ${relative}`, { path: relative })
+    }
+    const bytes = Buffer.allocUnsafe(MAX_READ_FILE_BYTES + 1)
+    let offset = 0
+    while (offset < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    if (offset > MAX_READ_FILE_BYTES) {
+      throw new PatchlineError("INVALID_ARGUMENT", `File exceeds the 8 MiB read limit: ${relative}`, { path: relative })
+    }
+    return bytes.subarray(0, offset)
+  } finally {
+    await handle.close()
+  }
+}
 
 export type ReadRequest = SnapshotScope & {
   filePath: string
@@ -62,15 +90,40 @@ export class ReadService {
     const limit = Math.min(this.defaultLimit, request.limit ?? this.defaultLimit)
 
     if (fileInfo.isDirectory()) {
-      const entries = (await readdir(resolved.absolute, { withFileTypes: true }))
-        .map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`)
-        .sort((left, right) => left.localeCompare(right))
+      const directory = await opendir(resolved.absolute)
+      const entries: string[] = []
+      try {
+        while (true) {
+          const entry = await directory.read()
+          if (entry === null) break
+          entries.push(`${entry.name}${entry.isDirectory() ? "/" : ""}`)
+          if (entries.length > MAX_DIRECTORY_ENTRIES) {
+            throw new PatchlineError("INVALID_ARGUMENT", `Directory exceeds the ${MAX_DIRECTORY_ENTRIES}-entry read limit: ${displayPath}`, { path: displayPath })
+          }
+        }
+      } finally {
+        await directory.close()
+      }
+      entries.sort((left, right) => left.localeCompare(right))
       if (offset > entries.length && !(entries.length === 0 && offset === 1)) {
         throw new PatchlineError("INVALID_ARGUMENT", `Offset ${offset} is out of range for this directory (${entries.length} entries)`, { path: displayPath })
       }
       const selected = entries.slice(offset - 1, offset - 1 + limit)
       const endEntry = selected.length === 0 ? offset - 1 : offset + selected.length - 1
       const truncated = endEntry < entries.length
+      const output = [
+        `Path: ${displayPath}`,
+        "Type: directory",
+        "",
+        ...selected,
+        "",
+        truncated
+          ? `(Showing ${selected.length} of ${entries.length} entries. Use offset=${endEntry + 1} to continue.)`
+          : `(${entries.length} entries)`,
+      ].join("\n")
+      if (output.length > MAX_READ_OUTPUT_CHARS) {
+        throw new PatchlineError("INVALID_ARGUMENT", `Directory read output exceeds the 20,000-character limit: ${displayPath}`, { path: displayPath })
+      }
       return {
         kind: "directory",
         path: displayPath,
@@ -78,20 +131,11 @@ export class ReadService {
         endEntry,
         totalEntries: entries.length,
         truncated,
-        output: [
-          `Path: ${displayPath}`,
-          "Type: directory",
-          "",
-          ...selected,
-          "",
-          truncated
-            ? `(Showing ${selected.length} of ${entries.length} entries. Use offset=${endEntry + 1} to continue.)`
-            : `(${entries.length} entries)`,
-        ].join("\n"),
+        output,
       }
     }
 
-    const document = decodeUtf8(await readFile(resolved.absolute), resolved.relative)
+    const document = decodeUtf8(await readBoundedFile(resolved.absolute, resolved.relative), resolved.relative)
     const lines = document.normalizedText.length === 0 ? [] : document.normalizedText.split("\n")
     if (document.normalizedText.endsWith("\n")) lines.pop()
     const totalLines = lines.length
@@ -99,13 +143,29 @@ export class ReadService {
       throw new PatchlineError("INVALID_ARGUMENT", `Offset ${offset} is out of range for this file (${totalLines} lines)`, { path: displayPath })
     }
     const endLine = Math.min(totalLines, offset + limit - 1)
+    const selectedLines = lines.slice(offset - 1, endLine)
+    if (selectedLines.some((line) => line.length > MAX_READ_LINE_CHARS)) {
+      throw new PatchlineError("INVALID_ARGUMENT", `Read range contains a line exceeding the 20,000-character output limit: ${displayPath}`, { path: displayPath })
+    }
+    const rows = selectedLines.map((line, index) => `${offset + index}:${line}`)
+    const more = endLine < totalLines ? `\n\nMore content is available after line ${endLine}.` : ""
+    const outputPrefix = [
+      `Path: ${displayPath}`,
+      `Snapshot: ${"x".repeat(17)}`,
+      `Hashline: [${resolved.relative}#${"x".repeat(4)}]`,
+      `Range: ${offset}-${endLine} of ${totalLines}`,
+      `Text: ${document.lineEnding}, BOM ${document.bom ? "yes" : "no"}`,
+      "",
+      ...rows,
+    ].join("\n") + more
+    if (outputPrefix.length > MAX_READ_OUTPUT_CHARS) {
+      throw new PatchlineError("INVALID_ARGUMENT", `File read output exceeds the 20,000-character limit: ${displayPath}`, { path: displayPath })
+    }
     const seenLines = Array.from({ length: Math.max(0, endLine - offset + 1) }, (_, index) => offset + index)
     const snapshot = this.snapshots.record(request, resolved.canonical, resolved.relative, document, seenLines, {
       device: fileInfo.dev,
       inode: fileInfo.ino,
     })
-    const rows = lines.slice(offset - 1, endLine).map((line, index) => `${offset + index}:${line}`)
-    const more = endLine < totalLines ? `\n\nMore content is available after line ${endLine}.` : ""
     const output = [
       `Path: ${displayPath}`,
       `Snapshot: ${snapshot.id}`,

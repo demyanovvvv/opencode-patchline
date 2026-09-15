@@ -154,7 +154,7 @@ The test suite currently covers:
 
 ## Verification status
 
-The latest full local gate passed:
+The latest full local gate passed locally on Windows:
 
 ```text
 npm run typecheck
@@ -164,16 +164,15 @@ npm run build
 npm run bench
 npm run doctor
 npm run smoke:plugin
-npm pack --pack-destination <isolated-directory>
-isolated tarball install and public entrypoint import
+npm run smoke:package
 npm pack --dry-run
 ```
 
 Latest test result:
 
 ```text
-9 test files passed
-65 tests passed
+10 test files passed
+90 tests passed
 ```
 
 Latest benchmark result:
@@ -185,9 +184,8 @@ wholeFileRewrites: 0
 staleOverwrites: 0
 ```
 
-`npm audit --audit-level=high` reports two moderate advisories in the Vitest
-dependency chain. The suggested `npm audit fix --force` requires a breaking
-upgrade to Vitest 5 and has not been applied.
+The Vitest dependency chain was upgraded to Vitest 5.0.1. `npm audit` now
+reports no vulnerabilities.
 
 ## Known limitations
 
@@ -195,7 +193,8 @@ upgrade to Vitest 5 and has not been applied.
   exact anchored edits remain active and doctor reports Hashline as optional.
 - Native OpenCode LSP model-facing tooling is disabled unless the relevant
   experimental environment flag is enabled; Patchline uses the CLI bridge.
-- Linux and macOS CI validation has not been run in this Windows environment.
+- Linux and macOS validation is delegated to the GitHub Actions CI matrix;
+  this Windows session cannot independently execute those hosted runners.
 - Compatibility mode intentionally does not replace built-in editing tools; it
   only exposes Patchline's additional discovery and diagnostic tools.
 - OpenCode plugin loader smoke has been validated on Windows through the
@@ -203,7 +202,37 @@ upgrade to Vitest 5 and has not been applied.
 - Plugin smoke probes use bounded HTTP requests, so an unresponsive OpenCode
   endpoint fails within the overall startup deadline instead of hanging the
   release gate.
-- Git-based diff/status inspection is unavailable in the current workspace.
+- Diagnostic output is bounded during collection as well as in the final
+  result. Timeout handling terminates the process tree and closes inherited
+  pipes so descendants cannot hold validation open indefinitely.
+- OpenCode cancellation reaches diagnostic commands and the LSP CLI bridge.
+  The bridge also has a 30-second deadline and bounded stdout/stderr capture.
+- Literal search skips files above an 8 MiB per-file input budget before
+  decoding and caps each returned matching-line preview at 2,000 characters.
+- Literal search bounds each directory enumeration to 4,096 entries before
+  continuing through its children.
+- Plugin-formatted grep and AST responses reject output above 20,000 characters.
+- Classic new-file patches require one closed envelope with no trailing
+  sections, so malformed input fails before any file creation begins.
+- `apply_patch` rejects patch input above 8 MiB before parsing or permission
+  requests.
+- AST search rejects source above an 8 MiB parser budget and caps node previews
+  at 2,000 characters. Hashline input rejects content before its first section
+  before requesting edit permission.
+- Read rejects files above 8 MiB before loading them and rejects selected lines
+  above 20,000 characters before recording snapshots; rendered file pages are
+  bounded to the same 20,000-character output limit.
+- Directory reads reject directories above 4,096 entries before pagination to
+  bound enumeration memory and reject rendered pages above 20,000 characters.
+- Writes and edit results reject output above 8 MiB before mutation; create
+  batches preflight the same 8 MiB aggregate budget and reject more than 500
+  files before path resolution or mutation.
+- Edit batches reject more than 500 edits before preflight. Successful mutation
+  batch reports are capped at 20,000 characters without converting success into
+  a post-mutation error.
+- `npm run smoke:package` builds, packs, installs the tarball into an isolated
+  temporary consumer, and verifies the public exports without lifecycle scripts.
+- Git status and diff inspection are included in the local release gate.
 
 ## Next plan
 
@@ -215,8 +244,10 @@ upgrade to Vitest 5 and has not been applied.
 4. Improve search semantics where needed, especially literal-vs-regex behavior
    and file-targeted grep.
 5. Expand AST language coverage only when a concrete supported use case exists.
-6. Consider adding Linux/macOS CI before making cross-platform release claims.
-7. Revisit the Vitest audit advisories during a planned dependency upgrade.
+6. Keep the Linux/macOS/Windows CI matrix green before making cross-platform
+   release claims.
+7. Revisit AST search memory behavior if `@ast-grep/napi` exposes a bounded
+   iterator API; the current `findAll` API materializes an unbounded array.
 
 ## Release gate
 

@@ -1,4 +1,4 @@
-import { readFile, readdir, stat } from "node:fs/promises"
+import { opendir, open, stat } from "node:fs/promises"
 import path from "node:path"
 import { resolveWorkspacePath } from "../workspace/paths.js"
 import { PatchlineError } from "../errors.js"
@@ -8,6 +8,34 @@ export type GrepMatch = {
   path: string
   line: number
   text: string
+}
+
+const MAX_SEARCH_FILE_BYTES = 8 * 1024 * 1024
+const MAX_MATCH_TEXT_CHARS = 2_000
+const MAX_DIRECTORY_ENTRIES = 4_096
+
+function matchPreview(line: string): string {
+  const suffix = "... [line truncated]"
+  return line.length <= MAX_MATCH_TEXT_CHARS ? line : `${line.slice(0, MAX_MATCH_TEXT_CHARS - suffix.length)}${suffix}`
+}
+
+async function readBoundedFile(absolute: string): Promise<Buffer | undefined> {
+  const handle = await open(absolute, "r")
+  try {
+    const info = await handle.stat()
+    if (info.size > MAX_SEARCH_FILE_BYTES) return undefined
+    const bytes = Buffer.allocUnsafe(MAX_SEARCH_FILE_BYTES + 1)
+    let offset = 0
+    while (offset < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    if (offset > MAX_SEARCH_FILE_BYTES) return undefined
+    return bytes.subarray(0, offset)
+  } finally {
+    await handle.close()
+  }
 }
 
 export async function grepWorkspace(input: {
@@ -32,7 +60,9 @@ export async function grepWorkspace(input: {
     if (include && !include.test(relative) && !include.test(name)) return
     let content: string
     try {
-      const document = decodeUtf8(await readFile(absolute), relative)
+      const bytes = await readBoundedFile(absolute)
+      if (!bytes) return
+      const document = decodeUtf8(bytes, relative)
       if (document.text.includes("\0")) return
       content = document.text
     } catch {
@@ -45,22 +75,33 @@ export async function grepWorkspace(input: {
         truncated = true
         return
       }
-      matches.push({ path: absolute, line: index + 1, text: lines[index]! })
+      matches.push({ path: absolute, line: index + 1, text: matchPreview(lines[index]!) })
     }
   }
   const scan = async (entryPath: string): Promise<void> => {
     if (truncated) return
-    const entries = await readdir(entryPath, { withFileTypes: true })
-    for (const entry of entries) {
-      if (truncated) return
-      if (entry.name === ".git" || entry.name === "node_modules") continue
-      const absolute = path.join(entryPath, entry.name)
-      if (entry.isDirectory()) {
-        await scan(absolute)
-        continue
+    const directory = await opendir(entryPath)
+    let entryCount = 0
+    try {
+      while (true) {
+        const entry = await directory.read()
+        if (entry === null) break
+        entryCount++
+        if (entryCount > MAX_DIRECTORY_ENTRIES) {
+          throw new PatchlineError("INVALID_ARGUMENT", `Search directory exceeds the ${MAX_DIRECTORY_ENTRIES}-entry limit: ${path.relative(root.workspace, entryPath)}`, { path: path.relative(root.workspace, entryPath) })
+        }
+        if (truncated) return
+        if (entry.name === ".git" || entry.name === "node_modules") continue
+        const absolute = path.join(entryPath, entry.name)
+        if (entry.isDirectory()) {
+          await scan(absolute)
+          continue
+        }
+        if (!entry.isFile()) continue
+        await scanFile(absolute)
       }
-      if (!entry.isFile()) continue
-      await scanFile(absolute)
+    } finally {
+      await directory.close()
     }
   }
   const fileInfo = await stat(root.absolute).catch(() => undefined)

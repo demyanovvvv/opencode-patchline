@@ -17,6 +17,23 @@ import { validationCommand } from "./validation/router.js"
 import { WriteService } from "./write-service.js"
 import { resolveWorkspacePath } from "./workspace/paths.js"
 
+const MAX_SEARCH_OUTPUT_CHARS = 20_000
+const MAX_PATCH_INPUT_BYTES = 8 * 1024 * 1024
+
+function boundedSearchOutput(output: string): string {
+  if (output.length > MAX_SEARCH_OUTPUT_CHARS) {
+    throw new PatchlineError("INVALID_ARGUMENT", "Search output exceeds the 20,000-character limit.")
+  }
+  return output
+}
+
+function boundedMutationOutput(output: string): string {
+  const suffix = "\n... Output truncated."
+  return output.length <= MAX_SEARCH_OUTPUT_CHARS
+    ? output
+    : `${output.slice(0, MAX_SEARCH_OUTPUT_CHARS - suffix.length)}${suffix}`
+}
+
 const POLICY = `PATCHLINE EDITING POLICY
 - Locate before broad reads; use LSP for symbols, grep for text, and AST for structure.
 - Read the smallest useful source range.
@@ -49,6 +66,9 @@ function parseApplyPatchPaths(patchText: string): string[] {
 
 function splitHashlineSections(patchText: string): Array<{ path: string; tag: string; patch: string }> {
   const headers = [...patchText.matchAll(/^\[([^\]\r\n]+)#([A-Fa-f0-9]{4})\]\s*$/gm)]
+  if (headers.length > 0 && patchText.slice(0, headers[0]!.index).trim()) {
+    throw new PatchlineError("INVALID_ARGUMENT", "Hashline patch must not contain content before its first section header.")
+  }
   return headers.map((header, index) => ({
     path: header[1]!,
     tag: header[2]!,
@@ -58,9 +78,13 @@ function splitHashlineSections(patchText: string): Array<{ path: string; tag: st
 
 function parseNewFilePatch(patchText: string): Array<{ path: string; content: string }> {
   const lines = patchText.replace(/\r\n/g, "\n").split("\n")
+  const endIndex = lines.indexOf("*** End Patch")
+  if (lines[0] !== "*** Begin Patch" || endIndex === -1 || lines.indexOf("*** End Patch", endIndex + 1) !== -1 || lines.slice(endIndex + 1).some((line) => line.trim())) {
+    throw new PatchlineError("INVALID_ARGUMENT", "Classic apply_patch input must contain one complete patch envelope with no trailing content.")
+  }
   const files: Array<{ path: string; content: string }> = []
-  let index = lines[0] === "*** Begin Patch" ? 1 : 0
-  while (index < lines.length) {
+  let index = 1
+  while (index <= endIndex) {
     const line = lines[index]!
     if (line === "*** End Patch" || line === "") {
       index++
@@ -72,7 +96,7 @@ function parseNewFilePatch(patchText: string): Array<{ path: string; content: st
     }
     const content: string[] = []
     index++
-    while (index < lines.length && !lines[index]!.startsWith("*** ")) {
+    while (index < endIndex && !lines[index]!.startsWith("*** ")) {
       const body = lines[index]!
       if (!body.startsWith("+")) throw new PatchlineError("INVALID_ARGUMENT", `New-file patch rows must start with '+': ${match[1]}`)
       content.push(body.slice(1))
@@ -137,7 +161,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
              if (command) {
                await context.ask({ permission: "bash", patterns: [command], always: ["*"], metadata: { command, reason: "post-edit validation" } })
              }
-             const diagnostic = command ? await runDiagnosticCommand(command, context.worktree, 120_000, config.maxDiagnostics) : undefined
+             const diagnostic = command ? await runDiagnosticCommand(command, context.worktree, 120_000, config.maxDiagnostics, context.abort) : undefined
         return {
           title: result.path,
           output: `${result.output}\nDiagnostics: ${diagnostic ? (diagnostic.ok ? "clean" : `failed\n${diagnostic.output}`) : "not configured; OpenCode native diagnostics may run"}`,
@@ -176,6 +200,9 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         description: "Apply one or more Hashline sections linked to snapshots returned by read. Existing files require [PATH#TAG] and PUT/CUT operations.",
         args: { patchText: tool.schema.string() },
         async execute(args, context) {
+          if (Buffer.byteLength(args.patchText, "utf8") > MAX_PATCH_INPUT_BYTES) {
+            throw new PatchlineError("INVALID_ARGUMENT", "Patch input exceeds the 8 MiB limit.")
+          }
           const sections = splitHashlineSections(args.patchText)
           if (sections.length === 0) {
             if (!config.applyPatchFallback) {
@@ -187,7 +214,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             await context.ask({ permission: "edit", patterns: files.map((file) => file.path), always: ["*"], metadata: { paths: files.map((file) => file.path) } })
             const created = await writes.createBatch(files.map((file) => ({ worktree: context.worktree, filePath: file.path, content: file.content })))
             for (const result of created) metrics.record({ name: "write", path: result.path })
-            return created.map((result) => result.output).join("\n")
+            return boundedMutationOutput(created.map((result) => result.output).join("\n"))
           }
           await context.ask({ permission: "edit", patterns: sections.map((section) => section.path), always: ["*"] , metadata: { paths: sections.map((section) => section.path) } })
           const requests: EditRequest[] = sections.map((section) => ({
@@ -198,7 +225,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
           }))
           const results = await edits.editBatch(requests)
           for (const result of results) metrics.record({ name: "edit", path: result.path, added: result.added, deleted: result.deleted })
-          return results.map((result) => result.output).join("\n\n")
+          return boundedMutationOutput(results.map((result) => result.output).join("\n\n"))
         },
         }),
       } : {}),
@@ -216,7 +243,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
           metrics.record({ name: "grep", lines: result.matches.length })
           return result.matches.length === 0
             ? "No matches found."
-            : `${result.matches.map((match) => `${path.relative(context.worktree, match.path)}:${match.line}: ${match.text}`).join("\n")}${result.truncated ? "\nResults truncated." : ""}`
+             : boundedSearchOutput(`${result.matches.map((match) => `${path.relative(context.worktree, match.path)}:${match.line}: ${match.text}`).join("\n")}${result.truncated ? "\nResults truncated." : ""}`)
         },
       }),
       ast_search: tool({
@@ -233,7 +260,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
           metrics.record({ name: "ast_search", lines: result.matches.length })
           return result.matches.length === 0
             ? "No structural matches found."
-            : `${result.matches.map((match) => `${match.path}:${match.startLine}-${match.endLine}: ${match.text}`).join("\n")}${result.truncated ? "\nResults truncated." : ""}`
+             : boundedSearchOutput(`${result.matches.map((match) => `${match.path}:${match.startLine}-${match.endLine}: ${match.text}`).join("\n")}${result.truncated ? "\nResults truncated." : ""}`)
         },
       }),
       patchline_route_search: tool({
@@ -252,7 +279,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         },
         async execute(args, context) {
           if (args.filePath) await context.ask({ permission: "read", patterns: [args.filePath], always: ["*"], metadata: { path: args.filePath } })
-          return runOpenCodeLspBridge({ worktree: context.worktree, operation: args.operation, query: args.query, filePath: args.filePath })
+          return runOpenCodeLspBridge({ worktree: context.worktree, operation: args.operation, query: args.query, filePath: args.filePath, signal: context.abort })
         },
       }),
       patchline_edit_batch: tool({
@@ -264,7 +291,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             oldString: tool.schema.string(),
             newString: tool.schema.string(),
             replaceAll: tool.schema.boolean().optional(),
-          })).min(1),
+          })).min(1).max(500),
         },
         async execute(args, context) {
           await context.ask({ permission: "edit", patterns: args.edits.map((edit) => edit.filePath), always: ["*"] , metadata: { paths: args.edits.map((edit) => edit.filePath) } })
@@ -275,7 +302,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             exact: { oldString: edit.oldString, newString: edit.newString, replaceAll: edit.replaceAll },
           }))
           const result = await edits.editBatch(requests)
-          return result.map((item) => item.output).join("\n\n")
+          return boundedMutationOutput(result.map((item) => item.output).join("\n\n"))
         },
       }),
       patchline_diagnostics: tool({
@@ -283,7 +310,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         args: { command: tool.schema.string() },
         async execute(args, context) {
           await context.ask({ permission: "bash", patterns: [args.command], always: ["*"], metadata: { command: args.command, reason: "diagnostics" } })
-          const result = await runDiagnosticCommand(args.command, context.worktree, 120_000, config.maxDiagnostics)
+          const result = await runDiagnosticCommand(args.command, context.worktree, 120_000, config.maxDiagnostics, context.abort)
           metrics.record({ name: "diagnostics", details: { ok: result.ok } })
           return `${result.ok ? "Diagnostics clean." : `Diagnostics failed (${result.exitCode}).`}\n${result.output}`.trim()
         },

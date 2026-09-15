@@ -11,3 +11,7 @@ OpenCode's native experimental tool when that capability is enabled.
 When the native tool flag is disabled, Patchline's `lsp` tool bridges
 `workspaceSymbol`, `documentSymbol`, and diagnostics through the installed
 OpenCode CLI. Definition/reference/call hierarchy remain native-only.
+
+The CLI bridge never invokes a shell. It propagates OpenCode tool cancellation,
+has a 30-second execution deadline, and bounds each captured output stream to
+200,000 characters so an unhealthy CLI cannot retain unbounded memory.

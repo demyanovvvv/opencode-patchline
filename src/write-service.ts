@@ -7,6 +7,15 @@ import { atomicReplace, readFileIdentity } from "./writing/atomic.js"
 import { normalizedIdentity, resolveWorkspacePath } from "./workspace/paths.js"
 import { digestBytes, type FileIdentity } from "./snapshot/store.js"
 
+const MAX_WRITE_CONTENT_BYTES = 8 * 1024 * 1024
+const MAX_BATCH_ITEMS = 500
+
+function assertWriteSize(content: string, pathName: string): void {
+  if (Buffer.byteLength(content, "utf8") > MAX_WRITE_CONTENT_BYTES) {
+    throw new PatchlineError("INVALID_ARGUMENT", `Write content exceeds the 8 MiB limit: ${pathName}`, { path: pathName })
+  }
+}
+
 export type WriteRequest = {
   worktree: string
   filePath: string
@@ -93,6 +102,7 @@ export class WriteService {
   }
 
   async write(request: WriteRequest): Promise<{ path: string; created: boolean; output: string }> {
+    assertWriteSize(request.content, request.filePath)
     const resolved = await resolveWorkspacePath(request.worktree, request.filePath)
     if (resolved.exists && this.config.protectExistingWrites) {
       const allowed = matchesAllowedPath(resolved.relative, this.config.allowedFullReplacements)
@@ -126,9 +136,17 @@ export class WriteService {
 
   async createBatch(requests: readonly WriteRequest[]): Promise<Array<{ path: string; created: true; output: string }>> {
     if (requests.length === 0) throw new PatchlineError("INVALID_ARGUMENT", "Create batch must contain at least one file.")
+    if (requests.length > MAX_BATCH_ITEMS) throw new PatchlineError("INVALID_ARGUMENT", `Create batch must contain at most ${MAX_BATCH_ITEMS} files.`)
     const prepared: PreparedWrite[] = []
     const paths = new Set<string>()
+    let totalBytes = 0
     for (const request of requests) {
+      const bytes = Buffer.byteLength(request.content, "utf8")
+      assertWriteSize(request.content, request.filePath)
+      totalBytes += bytes
+      if (totalBytes > MAX_WRITE_CONTENT_BYTES) {
+        throw new PatchlineError("INVALID_ARGUMENT", "Create batch content exceeds the 8 MiB aggregate limit.")
+      }
       const resolved = await resolveWorkspacePath(request.worktree, request.filePath)
       if (resolved.exists) {
         throw new PatchlineError("WRITE_PROTECTED", `Existing file cannot be created through apply_patch: ${resolved.relative}. Use snapshot-anchored edit.`, {

@@ -8,6 +8,9 @@ import { digestBytes, ScopedSnapshotStore, type FileIdentity, type FileSnapshot,
 import { atomicReplace, readFileIdentity } from "./writing/atomic.js"
 import { normalizedIdentity, resolveWorkspacePath } from "./workspace/paths.js"
 
+const MAX_EDIT_CONTENT_BYTES = 8 * 1024 * 1024
+const MAX_BATCH_ITEMS = 500
+
 export type ExactEdit = {
   oldString: string
   newString: string
@@ -100,7 +103,11 @@ function applyExact(snapshot: FileSnapshot, edit: ExactEdit): string {
       }
     }
   }
-  return edit.replaceAll ? snapshot.text.split(edit.oldString).join(edit.newString) : snapshot.text.replace(edit.oldString, edit.newString)
+  const result = edit.replaceAll ? snapshot.text.split(edit.oldString).join(edit.newString) : snapshot.text.replace(edit.oldString, edit.newString)
+  if (Buffer.byteLength(result, "utf8") > MAX_EDIT_CONTENT_BYTES) {
+    throw new PatchlineError("INVALID_ARGUMENT", "Edit result exceeds the 8 MiB limit.", { path: snapshot.relativePath, snapshotId: snapshot.id })
+  }
+  return result
 }
 
 export class EditService {
@@ -173,6 +180,9 @@ export class EditService {
       normalizedAfter = applyExact(snapshot, request.exact)
     } else {
       const result = await applyHashlineInMemory(snapshot, request.hashlinePatch!)
+      if (Buffer.byteLength(result.text, "utf8") > MAX_EDIT_CONTENT_BYTES) {
+        throw new PatchlineError("INVALID_ARGUMENT", "Edit result exceeds the 8 MiB limit.", { path: snapshot.relativePath, snapshotId: snapshot.id })
+      }
       normalizedAfter = result.text
       warnings = result.warnings
     }
@@ -254,6 +264,7 @@ export class EditService {
 
   async editBatch(requests: readonly EditRequest[]): Promise<EditResult[]> {
     if (requests.length === 0) throw new PatchlineError("INVALID_ARGUMENT", "Batch must contain at least one edit.")
+    if (requests.length > MAX_BATCH_ITEMS) throw new PatchlineError("INVALID_ARGUMENT", `Batch must contain at most ${MAX_BATCH_ITEMS} edits.`)
     const prepared: PreparedEdit[] = []
     const paths = new Set<string>()
     for (const request of requests) {

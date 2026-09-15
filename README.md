@@ -29,7 +29,8 @@ only on model instructions.
 - A project opened as an OpenCode worktree.
 
 Patchline is verified against OpenCode `1.18.30` and
-`@opencode-ai/plugin@1.18.30`. Linux and macOS CI verification is still planned.
+`@opencode-ai/plugin@1.18.30`. Linux, macOS and Windows are covered by the
+Node.js 22 GitHub Actions CI matrix.
 
 ## Installation
 

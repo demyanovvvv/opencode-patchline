@@ -7,6 +7,48 @@ import { WriteService } from "../src/write-service.js"
 import { temporaryWorkspace } from "./helpers/workspace.js"
 
 describe("write guard", () => {
+  it("rejects an oversized create batch before creating directories", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await expect(new WriteService(DEFAULT_CONFIG).createBatch(Array.from({ length: 501 }, (_, index) => ({
+        worktree: workspace.path,
+        filePath: `oversized-batch/file-${index}.ts`,
+        content: "",
+      })))).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+      await expect(readFile(path.join(workspace.path, "oversized-batch", "file-0.ts"), "utf8")).rejects.toMatchObject({ code: "ENOENT" })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("rejects oversized new-file content before creating directories", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await expect(new WriteService(DEFAULT_CONFIG).write({
+        worktree: workspace.path,
+        filePath: "oversized/new.ts",
+        content: "x".repeat(8 * 1024 * 1024 + 1),
+      })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+      await expect(readFile(path.join(workspace.path, "oversized", "new.ts"), "utf8")).rejects.toMatchObject({ code: "ENOENT" })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("preflights the aggregate create-batch content budget before creating files", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await expect(new WriteService(DEFAULT_CONFIG).createBatch([
+        { worktree: workspace.path, filePath: "first.ts", content: "a".repeat(4 * 1024 * 1024) },
+        { worktree: workspace.path, filePath: "second.ts", content: "b".repeat(4 * 1024 * 1024 + 1) },
+      ])).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+      await expect(readFile(path.join(workspace.path, "first.ts"), "utf8")).rejects.toMatchObject({ code: "ENOENT" })
+      await expect(readFile(path.join(workspace.path, "second.ts"), "utf8")).rejects.toMatchObject({ code: "ENOENT" })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
   it("allows new files", async () => {
     const workspace = await temporaryWorkspace()
     try {

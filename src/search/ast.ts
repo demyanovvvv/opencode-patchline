@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises"
+import { open } from "node:fs/promises"
 import path from "node:path"
 import { Lang, parse, pattern as compilePattern } from "@ast-grep/napi"
 import { PatchlineError } from "../errors.js"
@@ -12,6 +12,37 @@ const languages: Record<string, Lang> = {
   jsx: Lang.JavaScript,
   ts: Lang.TypeScript,
   tsx: Lang.Tsx,
+}
+
+const MAX_AST_FILE_BYTES = 8 * 1024 * 1024
+const MAX_MATCH_TEXT_CHARS = 2_000
+
+async function readAstSource(absolute: string, relative: string): Promise<Buffer> {
+  const handle = await open(absolute, "r")
+  try {
+    const info = await handle.stat()
+    if (info.size > MAX_AST_FILE_BYTES) {
+      throw new PatchlineError("INVALID_ARGUMENT", `AST source exceeds the 8 MiB limit: ${relative}`, { path: relative })
+    }
+    const bytes = Buffer.allocUnsafe(MAX_AST_FILE_BYTES + 1)
+    let offset = 0
+    while (offset < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    if (offset > MAX_AST_FILE_BYTES) {
+      throw new PatchlineError("INVALID_ARGUMENT", `AST source exceeds the 8 MiB limit: ${relative}`, { path: relative })
+    }
+    return bytes.subarray(0, offset)
+  } finally {
+    await handle.close()
+  }
+}
+
+function matchPreview(text: string): string {
+  const suffix = "... [node truncated]"
+  return text.length <= MAX_MATCH_TEXT_CHARS ? text : `${text.slice(0, MAX_MATCH_TEXT_CHARS - suffix.length)}${suffix}`
 }
 
 export type AstMatch = {
@@ -39,7 +70,7 @@ export async function astSearchFile(input: {
     throw new PatchlineError("CAPABILITY_UNAVAILABLE", `AST language is not supported by the bundled parser: ${languageName}`)
   }
   try {
-    const document = decodeUtf8(await readFile(resolved.absolute), resolved.relative)
+    const document = decodeUtf8(await readAstSource(resolved.absolute, resolved.relative), resolved.relative)
     const root = parse(language, document.text)
     const matcher = compilePattern(language, input.pattern)
     const found = root.root().findAll(matcher)
@@ -51,7 +82,7 @@ export async function astSearchFile(input: {
           path: resolved.relative,
           startLine: range.start.line + 1,
           endLine: range.end.line + 1,
-          text: node.text(),
+          text: matchPreview(node.text()),
         }
       }),
       truncated,
