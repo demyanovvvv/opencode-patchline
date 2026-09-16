@@ -10,7 +10,7 @@ describe("workspace paths", () => {
     try {
       const result = await resolveWorkspacePath(workspace.path, "new/nested/file.ts")
       expect(result.exists).toBe(false)
-      expect(result.canonical).toBe(path.join(workspace.path, "new", "nested", "file.ts"))
+      expect(path.relative(result.workspace, result.canonical)).toBe(path.join("new", "nested", "file.ts"))
     } finally {
       await workspace.cleanup()
     }

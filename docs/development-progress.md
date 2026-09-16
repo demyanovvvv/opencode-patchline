@@ -172,7 +172,7 @@ Latest test result:
 
 ```text
 10 test files passed
-90 tests passed
+92 tests passed
 ```
 
 Latest benchmark result:
@@ -194,14 +194,20 @@ reports no vulnerabilities.
 - Native OpenCode LSP model-facing tooling is disabled unless the relevant
   experimental environment flag is enabled; Patchline uses the CLI bridge.
 - Linux and macOS validation is delegated to the GitHub Actions CI matrix;
-  this Windows session cannot independently execute those hosted runners.
+  this Windows session cannot independently execute those hosted runners. The
+  workflow installs OpenCode `1.18.30` before running the LSP bridge tests.
 - Compatibility mode intentionally does not replace built-in editing tools; it
   only exposes Patchline's additional discovery and diagnostic tools.
-- OpenCode plugin loader smoke has been validated on Windows through the
-  headless server and `/experimental/tool/ids`; five Patchline tools registered.
 - Plugin smoke probes use bounded HTTP requests, so an unresponsive OpenCode
   endpoint fails within the overall startup deadline instead of hanging the
   release gate.
+- On Windows, plugin smoke resolves `opencode.exe` directly and passes arguments
+  without shell dispatch, matching the LSP bridge process boundary.
+- Plugin smoke creates a temporary Git worktree before starting OpenCode, which
+  avoids the global-project bootstrap path and matches production usage.
+- Windows CI uses the direct plugin registration smoke while Linux and macOS run
+  the OpenCode HTTP registry smoke; hosted Windows OpenCode server bootstrap is
+  currently blocked independently of Patchline.
 - Diagnostic output is bounded during collection as well as in the final
   result. Timeout handling terminates the process tree and closes inherited
   pipes so descendants cannot hold validation open indefinitely.
@@ -217,8 +223,9 @@ reports no vulnerabilities.
 - `apply_patch` rejects patch input above 8 MiB before parsing or permission
   requests.
 - AST search rejects source above an 8 MiB parser budget and caps node previews
-  at 2,000 characters. Hashline input rejects content before its first section
-  before requesting edit permission.
+  at 2,000 characters. AST traversal stops after one match beyond the requested
+  result limit instead of materializing all matches. Hashline input rejects
+  content before its first section before requesting edit permission.
 - Read rejects files above 8 MiB before loading them and rejects selected lines
   above 20,000 characters before recording snapshots; rendered file pages are
   bounded to the same 20,000-character output limit.
@@ -246,8 +253,9 @@ reports no vulnerabilities.
 5. Expand AST language coverage only when a concrete supported use case exists.
 6. Keep the Linux/macOS/Windows CI matrix green before making cross-platform
    release claims.
-7. Revisit AST search memory behavior if `@ast-grep/napi` exposes a bounded
-   iterator API; the current `findAll` API materializes an unbounded array.
+7. Monitor `@ast-grep/napi` traversal APIs for future parser-level performance
+   improvements; Patchline currently performs bounded traversal at its service
+   boundary.
 
 ## Release gate
 

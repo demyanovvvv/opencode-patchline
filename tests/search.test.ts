@@ -1,13 +1,31 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
-import { astSearchFile } from "../src/search/ast.js"
+import { astSearchFile, collectBoundedAstMatches, type AstTraversalNode } from "../src/search/ast.js"
 import { grepWorkspace } from "../src/search/grep.js"
 import { runOpenCodeLspBridge } from "../src/search/lsp.js"
 import { routeSearch } from "../src/search/router.js"
 import { temporaryWorkspace } from "./helpers/workspace.js"
 
 describe("search", () => {
+  it("bounds AST traversal after one match beyond the requested result limit", () => {
+    const visited: string[] = []
+    const node = (name: string, children: AstTraversalNode[] = []): AstTraversalNode => ({
+      children: () => children,
+      matches: () => {
+        visited.push(name)
+        return name.startsWith("match")
+      },
+    })
+    const root = node("root", [node("match-1"), node("match-2"), node("match-3")])
+
+    const result = collectBoundedAstMatches(root, {}, 2)
+
+    expect(result.matches).toHaveLength(2)
+    expect(result.truncated).toBe(true)
+    expect(visited).toEqual(["root", "match-1", "match-2", "match-3"])
+  })
+
   it("routes semantic, structural and literal queries", () => {
     expect(routeSearch("find references to createOrder")).toBe("lsp")
     expect(routeSearch("find structural pattern for empty catch")).toBe("ast")
@@ -54,7 +72,7 @@ describe("search", () => {
     } finally {
       await workspace.cleanup()
     }
-  })
+  }, 30_000)
 
   it("bounds the text returned for a single long matching line", async () => {
     const workspace = await temporaryWorkspace()
@@ -91,7 +109,7 @@ describe("search", () => {
 
       const result = await grepWorkspace({ worktree: workspace.path, pattern: "needle", include: "src/**/*.ts", maxResults: 10 })
 
-      expect(result.matches.map((match) => match.path.replaceAll("\\", "/").split("/").slice(-2).join("/"))).toEqual(["src/file.ts", "nested/file.ts"])
+      expect(result.matches.map((match) => path.relative(workspace.path, match.path).replaceAll("\\", "/"))).toEqual(["src/file.ts", "src/nested/file.ts"])
     } finally {
       await workspace.cleanup()
     }
@@ -149,6 +167,25 @@ describe("search", () => {
       const result = await astSearchFile({ worktree: workspace.path, filePath: "call.ts", pattern: "dangerous($A)", maxResults: 10 })
       expect(result.matches).toHaveLength(1)
       expect(result.matches[0]?.text).toBe("dangerous(input)")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("stops AST matching after the requested result limit", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "calls.ts"), "dangerous(first)\ndangerous(second)\ndangerous(third)\n")
+
+      const result = await astSearchFile({
+        worktree: workspace.path,
+        filePath: "calls.ts",
+        pattern: "dangerous($A)",
+        maxResults: 2,
+      })
+
+      expect(result.matches.map((match) => match.text)).toEqual(["dangerous(first)", "dangerous(second)"])
+      expect(result.truncated).toBe(true)
     } finally {
       await workspace.cleanup()
     }

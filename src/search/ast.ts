@@ -52,6 +52,30 @@ export type AstMatch = {
   text: string
 }
 
+export type AstTraversalNode = {
+  children(): readonly AstTraversalNode[]
+  matches(matcher: unknown): boolean
+}
+
+export function collectBoundedAstMatches<T extends AstTraversalNode>(
+  root: T,
+  matcher: unknown,
+  maxResults: number,
+): { matches: T[]; truncated: boolean } {
+  const matches: T[] = []
+  const pending: AstTraversalNode[] = [root]
+  while (pending.length > 0) {
+    const node = pending.pop()!
+    if (node.matches(matcher)) {
+      if (matches.length === maxResults) return { matches, truncated: true }
+      matches.push(node as T)
+    }
+    const children = node.children()
+    for (let index = children.length - 1; index >= 0; index--) pending.push(children[index]!)
+  }
+  return { matches, truncated: false }
+}
+
 export async function astSearchFile(input: {
   worktree: string
   filePath: string
@@ -73,10 +97,9 @@ export async function astSearchFile(input: {
     const document = decodeUtf8(await readAstSource(resolved.absolute, resolved.relative), resolved.relative)
     const root = parse(language, document.text)
     const matcher = compilePattern(language, input.pattern)
-    const found = root.root().findAll(matcher)
-    const truncated = found.length > input.maxResults
+    const found = collectBoundedAstMatches(root.root(), matcher, input.maxResults)
     return {
-      matches: found.slice(0, input.maxResults).map((node) => {
+      matches: found.matches.map((node) => {
         const range = node.range()
         return {
           path: resolved.relative,
@@ -85,7 +108,7 @@ export async function astSearchFile(input: {
           text: matchPreview(node.text()),
         }
       }),
-      truncated,
+      truncated: found.truncated,
     }
   } catch (cause) {
     if (cause instanceof PatchlineError) throw cause

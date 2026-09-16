@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - windows-latest
+          - windows-2022
           - ubuntu-latest
           - macos-latest
         node: [22.x]
@@ -27,13 +27,21 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - name: Install OpenCode CLI
+        run: npm install --global opencode-ai@1.18.30
+      - run: opencode --version
       - run: npm run typecheck
-      - run: npm test -- --run --testTimeout=15000
+      - run: npm test -- --run --testTimeout=30000
       - run: npm run lint
       - run: npm run build
       - run: npm run doctor
       - run: npm run bench
-      - run: npm run smoke:plugin
+      - name: Run OpenCode plugin smoke
+        if: matrix.os != 'windows-2022'
+        run: npm run smoke:plugin
+      - name: Run Windows direct plugin smoke
+        if: matrix.os == 'windows-2022'
+        run: npm run build; $env:PATCHLINE_PLUGIN_SMOKE_DIRECT = '1'; node scripts/plugin-smoke.mjs
       - run: npm run smoke:package
       - run: npm audit --audit-level=high
       - run: npm pack --dry-run

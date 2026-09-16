@@ -56,7 +56,7 @@ export async function grepWorkspace(input: {
   const scanFile = async (absolute: string): Promise<void> => {
     if (truncated) return
     const name = path.basename(absolute)
-    const relative = path.relative(root.workspace, absolute).replaceAll("\\", "/")
+    const relative = path.relative(root.absolute, absolute).replaceAll("\\", "/")
     if (include && !include.test(relative) && !include.test(name)) return
     let content: string
     try {

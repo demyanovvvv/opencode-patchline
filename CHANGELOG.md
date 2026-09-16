@@ -15,6 +15,23 @@
 - Reject `apply_patch` input above 8 MiB before parsing or permission requests.
 - Upgrade Vitest to 5.0.1 and add Node.js 22 CI coverage for Windows, Linux and
   macOS.
+- Install the pinned OpenCode CLI in the cross-platform CI job so the LSP bridge
+  smoke test has the same required executable on every runner.
+- Bound AST result traversal so searches stop after one match beyond the
+  requested result limit instead of materializing every match.
+- Make search include matching independent of canonical temporary-directory aliases
+  on hosted Windows and macOS runners.
+- Keep the OpenCode plugin smoke startup wait bounded while allowing slower hosted
+  runners up to 60 seconds to load the plugin registry.
+- Resolve the Windows OpenCode smoke executable directly so plugin loading does not
+  depend on shell wrappers or command-file dispatch.
+- Include the last registry HTTP failure and OpenCode startup logs when plugin smoke
+  reaches its bounded timeout.
+- Make plugin smoke create a temporary Git worktree so OpenCode exercises the
+  same project bootstrap path as a real OpenCode worktree.
+- Use direct plugin registration smoke on Windows CI because the hosted Windows
+  OpenCode `1.18.30` server hangs during instance bootstrap; HTTP plugin smoke
+  remains active on Linux and macOS.
 
 ## Unreleased
 
