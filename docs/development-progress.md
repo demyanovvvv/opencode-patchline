@@ -204,6 +204,8 @@ reports no vulnerabilities.
 - Plugin smoke probes use bounded HTTP requests, so an unresponsive OpenCode
   endpoint fails within the overall startup deadline instead of hanging the
   release gate.
+- On Windows, plugin smoke resolves `opencode.exe` directly and passes arguments
+  without shell dispatch, matching the LSP bridge process boundary.
 - Diagnostic output is bounded during collection as well as in the final
   result. Timeout handling terminates the process tree and closes inherited
   pipes so descendants cannot hold validation open indefinitely.

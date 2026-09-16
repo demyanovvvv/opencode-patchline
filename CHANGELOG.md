@@ -23,6 +23,8 @@
   on hosted Windows and macOS runners.
 - Keep the OpenCode plugin smoke startup wait bounded while allowing slower hosted
   runners up to 60 seconds to load the plugin registry.
+- Resolve the Windows OpenCode smoke executable directly so plugin loading does not
+  depend on shell wrappers or command-file dispatch.
 
 ## Unreleased
 

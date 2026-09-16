@@ -1,5 +1,5 @@
 import { createServer } from "node:http"
-import { mkdtemp, rm } from "node:fs/promises"
+import { access, mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -37,6 +37,24 @@ async function waitForTools(url, child, logs) {
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
   throw new Error(`Timed out waiting for OpenCode plugin tools:\n${logs()}`)
+}
+
+async function resolveOpenCodeCommand() {
+  if (process.platform !== "win32") return "opencode"
+  const entries = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)
+  const candidates = entries.flatMap((entry) => [
+    path.join(entry, "opencode.exe"),
+    path.join(entry, "node_modules", "opencode-ai", "bin", "opencode.exe"),
+  ])
+  for (const candidate of candidates) {
+    try {
+      await access(candidate)
+      return candidate
+    } catch {
+      // Keep looking through PATH entries.
+    }
+  }
+  throw new Error("OpenCode executable could not be resolved")
 }
 
 async function waitForClose(child, timeoutMs = 5_000) {
@@ -79,11 +97,10 @@ async function removeWorktree(directory) {
 }
 
 const port = await freePort()
-const command = process.platform === "win32" ? "opencode.cmd" : "opencode"
+const command = await resolveOpenCodeCommand()
 const child = spawn(command, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
   cwd: worktree,
   env: { ...process.env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugin: [pluginPath] }) },
-  shell: process.platform === "win32",
   stdio: ["ignore", "pipe", "pipe"],
   windowsHide: true,
 })
