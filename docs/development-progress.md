@@ -206,6 +206,8 @@ reports no vulnerabilities.
   release gate.
 - On Windows, plugin smoke resolves `opencode.exe` directly and passes arguments
   without shell dispatch, matching the LSP bridge process boundary.
+- The hosted Windows job uses the stable `windows-2022` runner; the newer
+  `windows-latest` image currently hangs in OpenCode project bootstrap.
 - Diagnostic output is bounded during collection as well as in the final
   result. Timeout handling terminates the process tree and closes inherited
   pipes so descendants cannot hold validation open indefinitely.

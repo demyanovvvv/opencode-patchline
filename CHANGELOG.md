@@ -27,6 +27,8 @@
   depend on shell wrappers or command-file dispatch.
 - Include the last registry HTTP failure and OpenCode startup logs when plugin smoke
   reaches its bounded timeout.
+- Pin the Windows CI runner to Windows Server 2022 because OpenCode `1.18.30`
+  hangs during project bootstrap on the hosted Windows Server 2025 image.
 
 ## Unreleased
 
