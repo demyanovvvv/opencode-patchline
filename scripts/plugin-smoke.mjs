@@ -2,13 +2,14 @@ import { createServer } from "node:http"
 import { access, mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { execFile, spawn } from "node:child_process"
 import { promisify } from "node:util"
 
 const pluginPath = path.resolve(fileURLToPath(new URL("../dist/plugin.js", import.meta.url)))
 const worktree = await mkdtemp(path.join(os.tmpdir(), "patchline-plugin-smoke-"))
 const execute = promisify(execFile)
+const required = ["patchline_grep", "ast_search", "patchline_edit_batch", "patchline_diagnostics", "patchline_summary"]
 
 async function freePort() {
   const server = createServer()
@@ -103,6 +104,16 @@ async function removeWorktree(directory) {
 
 const port = await freePort()
 await execute(process.platform === "win32" ? "git.exe" : "git", ["init", "--initial-branch=main"], { cwd: worktree, windowsHide: true })
+if (process.platform === "win32" && process.env.PATCHLINE_PLUGIN_SMOKE_DIRECT === "1") {
+  const module = await import(pathToFileURL(pluginPath).href)
+  const hooks = await module.PatchlinePlugin({ directory: worktree, worktree })
+  const toolIds = Object.keys(hooks.tool ?? {})
+  const missing = required.filter((toolId) => !toolIds.includes(toolId))
+  if (missing.length > 0) throw new Error(`Patchline plugin loaded without required tools: ${missing.join(", ")}`)
+  console.log(`Patchline plugin direct smoke passed (${required.length} tools registered)`)
+  await removeWorktree(worktree)
+  process.exit(0)
+}
 const command = await resolveOpenCodeCommand()
 const child = spawn(command, ["serve", "--hostname", "127.0.0.1", "--port", String(port), "--log-level", "INFO", "--print-logs"], {
   cwd: worktree,
@@ -117,7 +128,6 @@ const logs = () => output.trim()
 
 try {
   const toolIds = await waitForTools(`http://127.0.0.1:${port}/experimental/tool/ids`, child, logs)
-  const required = ["patchline_grep", "ast_search", "patchline_edit_batch", "patchline_diagnostics", "patchline_summary"]
   const missing = required.filter((toolId) => !toolIds.includes(toolId))
   if (missing.length > 0) throw new Error(`OpenCode plugin loaded without required tools: ${missing.join(", ")}`)
   console.log(`OpenCode plugin smoke passed (${required.length} Patchline tools registered)`)

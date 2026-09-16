@@ -195,21 +195,19 @@ reports no vulnerabilities.
   experimental environment flag is enabled; Patchline uses the CLI bridge.
 - Linux and macOS validation is delegated to the GitHub Actions CI matrix;
   this Windows session cannot independently execute those hosted runners. The
-  workflow installs OpenCode `1.18.30` before running the LSP bridge tests and
-  allows the plugin registry up to 60 seconds to start.
+  workflow installs OpenCode `1.18.30` before running the LSP bridge tests.
 - Compatibility mode intentionally does not replace built-in editing tools; it
   only exposes Patchline's additional discovery and diagnostic tools.
-- OpenCode plugin loader smoke has been validated on Windows through the
-  headless server and `/experimental/tool/ids`; five Patchline tools registered.
 - Plugin smoke probes use bounded HTTP requests, so an unresponsive OpenCode
   endpoint fails within the overall startup deadline instead of hanging the
   release gate.
 - On Windows, plugin smoke resolves `opencode.exe` directly and passes arguments
   without shell dispatch, matching the LSP bridge process boundary.
-- The hosted Windows job uses the stable `windows-2022` runner; the newer
-  `windows-latest` image currently hangs in OpenCode project bootstrap.
 - Plugin smoke creates a temporary Git worktree before starting OpenCode, which
   avoids the global-project bootstrap path and matches production usage.
+- Windows CI uses the direct plugin registration smoke while Linux and macOS run
+  the OpenCode HTTP registry smoke; hosted Windows OpenCode server bootstrap is
+  currently blocked independently of Patchline.
 - Diagnostic output is bounded during collection as well as in the final
   result. Timeout handling terminates the process tree and closes inherited
   pipes so descendants cannot hold validation open indefinitely.

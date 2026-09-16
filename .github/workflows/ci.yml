@@ -36,7 +36,12 @@ jobs:
       - run: npm run build
       - run: npm run doctor
       - run: npm run bench
-      - run: npm run smoke:plugin
+      - name: Run OpenCode plugin smoke
+        if: matrix.os != 'windows-2022'
+        run: npm run smoke:plugin
+      - name: Run Windows direct plugin smoke
+        if: matrix.os == 'windows-2022'
+        run: npm run build; $env:PATCHLINE_PLUGIN_SMOKE_DIRECT = '1'; node scripts/plugin-smoke.mjs
       - run: npm run smoke:package
       - run: npm audit --audit-level=high
       - run: npm pack --dry-run

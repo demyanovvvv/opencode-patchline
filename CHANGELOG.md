@@ -27,10 +27,11 @@
   depend on shell wrappers or command-file dispatch.
 - Include the last registry HTTP failure and OpenCode startup logs when plugin smoke
   reaches its bounded timeout.
-- Pin the Windows CI runner to Windows Server 2022 because OpenCode `1.18.30`
-  hangs during project bootstrap on the hosted Windows Server 2025 image.
 - Make plugin smoke create a temporary Git worktree so OpenCode exercises the
   same project bootstrap path as a real OpenCode worktree.
+- Use direct plugin registration smoke on Windows CI because the hosted Windows
+  OpenCode `1.18.30` server hangs during instance bootstrap; HTTP plugin smoke
+  remains active on Linux and macOS.
 
 ## Unreleased
 
