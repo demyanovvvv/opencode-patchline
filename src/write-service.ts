@@ -101,7 +101,7 @@ export class WriteService {
     await rm(currentPath.absolute, { force: true })
   }
 
-  async write(request: WriteRequest): Promise<{ path: string; created: boolean; output: string }> {
+  async write(request: WriteRequest): Promise<{ path: string; created: boolean; bytesWritten: number; output: string }> {
     assertWriteSize(request.content, request.filePath)
     const resolved = await resolveWorkspacePath(request.worktree, request.filePath)
     if (resolved.exists && this.config.protectExistingWrites) {
@@ -131,7 +131,12 @@ export class WriteService {
         relativePath: resolved.relative,
       })
     }
-    return { path: resolved.relative, created: !resolved.exists, output: `${resolved.exists ? "Replaced" : "Created"}: ${resolved.relative}` }
+    return {
+      path: resolved.relative,
+      created: !resolved.exists,
+      bytesWritten: Buffer.byteLength(request.content, "utf8"),
+      output: `${resolved.exists ? "Replaced" : "Created"}: ${resolved.relative}`,
+    }
   }
 
   async createBatch(requests: readonly WriteRequest[]): Promise<Array<{ path: string; created: true; output: string }>> {

@@ -17,7 +17,8 @@ tree state before optimizing convenience or speed.
 - `@opencode-ai/plugin@1.18.30`
 - `@oh-my-pi/hashline@18.1.5`
 - Windows development environment
-- The workspace is not a Git repository, so Git status and diff are unavailable
+- The project is maintained in a Git repository; release checks include status,
+  diff, package contents, and tag/version consistency.
 
 ## Completed
 
@@ -124,6 +125,12 @@ tree state before optimizing convenience or speed.
 - Public exports include `PatchlinePlugin`, read result types, services, errors,
   snapshot store, search bridge, and configuration helpers.
 - Package dry-run and isolated tarball installation passed.
+- Coverage gate runs through `npm run test:coverage` with enforced minimums for
+  statements, branches, functions, and lines.
+- Release metadata validation is covered by tests for matching and mismatched
+  version tags.
+- The tag-triggered release workflow publishes through npm Trusted Publishing
+  and creates the matching GitHub Release after publication.
 
 ## Regression coverage
 
@@ -154,25 +161,28 @@ The test suite currently covers:
 
 ## Verification status
 
-The latest full local gate passed locally on Windows:
+The latest full local gate passed locally on Windows. CI also covers Node.js 20
+and 22 on Windows, Linux, and macOS:
 
 ```text
 npm run typecheck
 npm test -- --run
+npm run test:coverage
 npm run lint
 npm run build
 npm run bench
 npm run doctor
 npm run smoke:plugin
 npm run smoke:package
+npm audit --audit-level=high
 npm pack --dry-run
 ```
 
 Latest test result:
 
 ```text
-10 test files passed
-92 tests passed
+12 test files passed
+100 tests passed
 ```
 
 Latest benchmark result:
@@ -256,6 +266,8 @@ reports no vulnerabilities.
 7. Monitor `@ast-grep/napi` traversal APIs for future parser-level performance
    improvements; Patchline currently performs bounded traversal at its service
    boundary.
+8. Keep structured tool metadata and CLI diagnostics backward-compatible as the
+   public recovery contract evolves.
 
 ## Release gate
 

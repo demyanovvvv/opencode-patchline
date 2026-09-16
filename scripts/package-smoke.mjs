@@ -23,13 +23,15 @@ try {
   await runNpm(["init", "-y"], { cwd: workspace })
   await runNpm(["install", "--ignore-scripts", tarball], { cwd: workspace, maxBuffer: 5_000_000 })
   const probe = [
-    "import('opencode-patchline').then((module) => {",
-    "  for (const name of ['PatchlinePlugin', 'EditService', 'WriteService']) {",
-    "    if (typeof module[name] !== 'function') throw new Error(`Missing public export: ${name}`)",
-    "  }",
-    "})",
+    "const required = { main: { PatchlinePlugin: 'function', EditService: 'function', WriteService: 'function', recoveryActionFor: 'function' }, plugin: { PatchlinePlugin: 'function', default: 'object' }, server: { PatchlinePlugin: 'function', default: 'object' } }",
+    "const check = async (specifier, names) => { const module = await import(specifier); for (const [name, type] of Object.entries(names)) if (typeof module[name] !== type) throw new Error(`Missing public export: ${specifier}#${name}`) }",
+    "await check('opencode-patchline', required.main)",
+    "await check('opencode-patchline/plugin', required.plugin)",
+    "await check('opencode-patchline/server', required.server)",
   ].join("\n")
   await execute(process.execPath, ["--input-type=module", "--eval", probe], { cwd: workspace })
+  const cli = process.platform === "win32" ? path.join(workspace, "node_modules", ".bin", "opencode-patchline.cmd") : path.join(workspace, "node_modules", ".bin", "opencode-patchline")
+  await execute(cli, ["config", "show"], { cwd: workspace, shell: process.platform === "win32" })
   console.log("Package smoke passed (isolated tarball install and public imports)")
 } finally {
   if (tarball) await rm(tarball, { force: true })

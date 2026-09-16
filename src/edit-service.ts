@@ -45,6 +45,7 @@ export type EditResult = {
   snapshot: string
   added: number
   deleted: number
+  bytesWritten: number
   warnings: string[]
   output: string
 }
@@ -247,6 +248,7 @@ export class EditService {
       snapshot: next.id,
       added: prepared.stats.added,
       deleted: prepared.stats.deleted,
+      bytesWritten: prepared.afterBytes.byteLength,
       warnings: prepared.warnings,
       output: [
         `Changed: ${prepared.snapshot.relativePath}`,

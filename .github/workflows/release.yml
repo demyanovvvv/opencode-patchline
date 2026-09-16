@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    name: Verify and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - run: npm ci
+      - run: node scripts/check-release.mjs "$GITHUB_REF_NAME"
+      - run: npm install --global opencode-ai@1.18.30
+      - run: opencode --version
+      - run: npm run typecheck
+      - run: npm test -- --run --testTimeout=30000
+      - run: npm run test:coverage
+      - run: npm run lint
+      - run: npm run build
+      - run: npm run doctor
+      - run: npm run bench
+      - run: npm run smoke:plugin
+      - run: npm run smoke:package
+      - run: npm audit --audit-level=high
+      - run: npm pack --dry-run
+      - run: npm publish --access public
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes

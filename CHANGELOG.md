@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added structured OpenCode tool metadata with bounded recovery actions and
+  bytes/validation details, plus CLI JSON diagnostics, configuration validation,
+  and stable error explanations.
+- Added tag/version/changelog release checks, npm trusted-publishing workflow,
+  and a private vulnerability reporting policy.
+- Added enforced V8 coverage thresholds, release metadata regression tests, and
+  Node.js 20/22 CI coverage across Windows, Linux, and macOS.
+
 - Bound directory reads to 4,096 entries before pagination to prevent unbounded
   directory enumeration memory use.
 - Reject directory pages whose rendered output exceeds 20,000 characters.
@@ -13,8 +21,8 @@
 - Reject edit batches above 500 edits before preflight and cap successful
   mutation-batch reports at 20,000 characters with a truncation marker.
 - Reject `apply_patch` input above 8 MiB before parsing or permission requests.
-- Upgrade Vitest to 5.0.1 and add Node.js 22 CI coverage for Windows, Linux and
-  macOS.
+- Upgrade Vitest to 5.0.1 and add Node.js 20/22 CI coverage for Windows, Linux
+  and macOS.
 - Install the pinned OpenCode CLI in the cross-platform CI job so the LSP bridge
   smoke test has the same required executable on every runner.
 - Bound AST result traversal so searches stop after one match beyond the

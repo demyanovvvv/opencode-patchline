@@ -37,10 +37,33 @@ describe("OpenCode plugin", () => {
       }
       const read = await hooks.tool!.read!.execute({ filePath: "a.ts" }, context)
       expect(typeof read).not.toBe("string")
+      expect(read).toMatchObject({ metadata: { status: "observed", recoveryAction: "Use the returned snapshot for an edit." } })
       const snapshot = typeof read === "string" ? "" : String(read.metadata?.snapshot)
       const edit = await hooks.tool!.edit!.execute({ filePath: "a.ts", snapshot, oldString: "1", newString: "2" }, context)
       expect(typeof edit === "string" ? edit : edit.output).toContain("Diff: +1 -1")
+      expect(edit).toMatchObject({ metadata: { status: "applied", recoveryAction: "Use the returned snapshot for the next edit.", bytesWritten: Buffer.byteLength("const value = 2\n", "utf8") } })
       expect(ask).toHaveBeenCalledTimes(2)
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("returns structured creation metadata", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const result = await hooks.tool!.write!.execute({ filePath: "created.ts", content: "export {}\n" }, {
+        sessionID: "s",
+        messageID: "m",
+        agent: "build",
+        directory: workspace.path,
+        worktree: workspace.path,
+        abort: new AbortController().signal,
+        metadata: vi.fn(),
+        ask: vi.fn(async () => undefined),
+      })
+
+      expect(result).toMatchObject({ metadata: { status: "applied", created: true, bytesWritten: Buffer.byteLength("export {}\n", "utf8"), recoveryAction: "Read the new file before editing it." } })
     } finally {
       await workspace.cleanup()
     }
@@ -214,6 +237,7 @@ describe("OpenCode plugin", () => {
         retryable: true,
         path: "stale.ts",
         writes: 0,
+        recoveryAction: "Re-read the affected range and retry the edit.",
       })
       expect(await readFile(file, "utf8")).toBe("const value = external()\n")
     } finally {

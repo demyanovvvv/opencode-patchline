@@ -1,9 +1,28 @@
 # Security Policy
 
-Patchline treats the current working tree as authoritative and refuses stale
-or out-of-workspace edits. Please report security issues privately to the
-repository maintainers rather than opening a public issue with an exploitable
-payload.
+## Supported Versions
 
-Security-sensitive behavior includes path resolution, symlink handling,
-existing-file write guards, patch parsing, and multi-file commit recovery.
+Security fixes are applied to the latest published version of Patchline. The
+`1.x` line is currently supported.
+
+## Reporting a Vulnerability
+
+Do not report security vulnerabilities in a public issue. Use GitHub's private
+security advisory workflow for this repository:
+
+<https://github.com/demyanovvvv/opencode-patchline/security/advisories/new>
+
+Include the affected version, operating system, OpenCode version, reproduction
+steps, and the smallest available proof of impact. Do not include source files,
+credentials, or other private workspace data unless it is necessary to explain
+the issue.
+
+We will acknowledge a report within 7 days and provide a status update when the
+issue has been triaged. Coordinated disclosure timing is agreed with the
+reporter based on severity and the availability of a fix.
+
+## Scope
+
+Reports involving workspace escapes, stale writes, symlink handling, protected
+Git paths, encoding preservation, rollback safety, command execution, package
+contents, or release authentication are in scope.

@@ -15,7 +15,12 @@ report zero source lines. `edit` accepts `filePath`, `snapshot`, and either
 `patchline_diagnostics`.
 
 Outputs are bounded and include no unchanged full file. Errors contain a stable
-code and a corrective action.
+code and a corrective action. Successful tool results expose bounded structured
+metadata where the OpenCode adapter supports it: `status` (`observed` or
+`applied`), `recoveryAction`, and operation-specific fields such as `snapshot`,
+`bytesWritten` (actual UTF-8 bytes committed), `bytesRendered`, `added`, `deleted`, `created`, and `validation`. The existing
+human-readable output remains available, but consumers should use metadata for
+recovery decisions.
 
 File reads reject files larger than 8 MiB before loading them and reject a
 requested range containing a line longer than 20,000 characters before creating

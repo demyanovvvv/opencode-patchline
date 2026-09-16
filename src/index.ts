@@ -1,6 +1,6 @@
 export { DEFAULT_CONFIG, parseConfig, type PatchlineConfig } from "./config.js"
 export { EditService, type EditRequest, type EditResult, type ExactEdit } from "./edit-service.js"
-export { PatchlineError, type PatchlineErrorCode } from "./errors.js"
+export { PatchlineError, recoveryActionFor, type PatchlineErrorCode } from "./errors.js"
 export { PatchlinePlugin } from "./plugin.js"
 export { isFileReadResult, ReadService, type DirectoryReadResult, type FileReadResult, type ReadRequest, type ReadResult } from "./read-service.js"
 export { routeSearch, type SearchMechanism } from "./search/router.js"

@@ -29,8 +29,9 @@ only on model instructions.
 - A project opened as an OpenCode worktree.
 
 Patchline is verified against OpenCode `1.18.30` and
-`@opencode-ai/plugin@1.18.30`. Windows is verified locally; Linux and macOS are
-configured in the Node.js 22 GitHub Actions CI matrix and require a hosted run.
+`@opencode-ai/plugin@1.18.30`. Windows, Linux and macOS are covered by the
+GitHub Actions matrix on Node.js 20 and 22; Windows uses direct plugin
+registration smoke because the hosted OpenCode HTTP bootstrap is blocked.
 
 ## Installation
 
@@ -53,6 +54,9 @@ Restart OpenCode after changing configuration. Check the local environment with:
 
 ```bash
 npx opencode-patchline doctor
+npx opencode-patchline doctor --json
+npx opencode-patchline config show
+npx opencode-patchline explain STALE_SNAPSHOT
 ```
 
 The package also provides a non-destructive installer that delegates config

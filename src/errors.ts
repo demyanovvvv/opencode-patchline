@@ -19,6 +19,32 @@ export type PatchlineErrorCode =
   | "VALIDATION_FAILED"
   | "FALLBACK_REJECTED"
 
+const RECOVERY_ACTIONS: Record<PatchlineErrorCode, string> = {
+  OPENCODE_UNSUPPORTED: "Upgrade OpenCode to a supported version and run doctor again.",
+  CAPABILITY_UNAVAILABLE: "Check doctor output or use the supported fallback.",
+  INVALID_ARGUMENT: "Correct the arguments and retry.",
+  PATH_OUTSIDE_WORKSPACE: "Use a path inside the OpenCode worktree.",
+  SYMLINK_ESCAPE: "Use a non-escaping path inside the worktree.",
+  GIT_INTERNAL_PATH: "Choose a source path outside .git.",
+  FILE_NOT_FOUND: "Re-discover the path and read it before retrying.",
+  SNAPSHOT_NOT_FOUND: "Read the target again to create a fresh snapshot.",
+  SNAPSHOT_SCOPE_MISMATCH: "Read the file in the current OpenCode session.",
+  STALE_SNAPSHOT: "Re-read the affected range and retry the edit.",
+  INVALID_ANCHOR: "Read the current range and provide a precise anchor.",
+  PATCH_PREFLIGHT_FAILED: "Correct the patch and retry from a fresh snapshot.",
+  WRITE_PROTECTED: "Use snapshot-anchored edit for existing files.",
+  GENERATED_FILE: "Update the canonical source or generator instead.",
+  ENCODING_UNSUPPORTED: "Convert the file to supported UTF-8 text before editing.",
+  TRANSACTION_FAILED: "Inspect the reported conflicts and re-read affected files before retrying.",
+  DIAGNOSTICS_UNAVAILABLE: "Check the configured command and granted permissions.",
+  VALIDATION_FAILED: "Inspect diagnostics before making another edit.",
+  FALLBACK_REJECTED: "Use a snapshot-tagged operation or enable the fallback explicitly.",
+}
+
+export function recoveryActionFor(code: PatchlineErrorCode): string {
+  return RECOVERY_ACTIONS[code]
+}
+
 export class PatchlineError extends Error {
   readonly code: PatchlineErrorCode
   readonly path: string | undefined
@@ -26,6 +52,7 @@ export class PatchlineError extends Error {
   readonly retryable: boolean
   readonly writes: number
   readonly details: Record<string, unknown> | undefined
+  readonly recoveryAction: string
 
   constructor(
     code: PatchlineErrorCode,
@@ -47,6 +74,7 @@ export class PatchlineError extends Error {
     this.retryable = options.retryable ?? false
     this.writes = options.writes ?? 0
     this.details = options.details
+    this.recoveryAction = recoveryActionFor(code)
   }
 }
 

@@ -30,7 +30,9 @@ Patchline - готовый к использованию плагин OpenCode �
 - Проект, открытый в OpenCode как worktree.
 
 Плагин проверен с OpenCode `1.18.30` и `@opencode-ai/plugin@1.18.30`.
-Проверка в CI на Linux и macOS пока запланирована.
+Windows, Linux и macOS входят в CI-матрицу Node.js 20 и 22; на Windows
+используется direct plugin smoke, поскольку bootstrap HTTP-сервера OpenCode на
+hosted runner зависает независимо от Patchline.
 
 ## Установка
 
@@ -54,6 +56,9 @@ npm install opencode-patchline
 
 ```bash
 npx opencode-patchline doctor
+npx opencode-patchline doctor --json
+npx opencode-patchline config show
+npx opencode-patchline explain STALE_SNAPSHOT
 ```
 
 Также доступен установщик, который передаёт изменение конфигурации штатной

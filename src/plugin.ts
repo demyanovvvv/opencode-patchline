@@ -55,6 +55,7 @@ function toolError(error: unknown): Error {
     retryable: error.retryable,
     writes: error.writes,
     details: error.details,
+    recoveryAction: error.recoveryAction,
   })
 }
 
@@ -131,8 +132,30 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             const lines = result.kind === "file" ? result.endLine - result.offset + 1 : 0
             metrics.record({ name: "read", path: result.path, lines, bytes: result.output.length, durationMs: Date.now() - started })
             return result.kind === "file"
-              ? { title: result.path, output: result.output, metadata: { snapshot: result.snapshot, tag: result.tag, lines } }
-              : { title: result.path, output: result.output, metadata: { directory: true, entries: result.totalEntries, truncated: result.truncated } }
+              ? {
+                  title: result.path,
+                  output: result.output,
+                  metadata: {
+                    status: "observed",
+                    recoveryAction: "Use the returned snapshot for an edit.",
+                    snapshot: result.snapshot,
+                    tag: result.tag,
+                    lines,
+                    bytesRendered: Buffer.byteLength(result.output, "utf8"),
+                  },
+                }
+              : {
+                  title: result.path,
+                  output: result.output,
+                  metadata: {
+                    status: "observed",
+                    recoveryAction: "Read a file entry to create a snapshot before editing.",
+                    directory: true,
+                    entries: result.totalEntries,
+                    truncated: result.truncated,
+                    bytesRendered: Buffer.byteLength(result.output, "utf8"),
+                  },
+                }
       } catch (error) {
         return Promise.reject(toolError(error))
       }
@@ -165,7 +188,16 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         return {
           title: result.path,
           output: `${result.output}\nDiagnostics: ${diagnostic ? (diagnostic.ok ? "clean" : `failed\n${diagnostic.output}`) : "not configured; OpenCode native diagnostics may run"}`,
-          metadata: { added: result.added, deleted: result.deleted, snapshot: result.snapshot, diagnostics: diagnostic?.ok },
+           metadata: {
+             status: "applied",
+             recoveryAction: "Use the returned snapshot for the next edit.",
+             added: result.added,
+             deleted: result.deleted,
+             bytesWritten: result.bytesWritten,
+             snapshot: result.snapshot,
+             diagnostics: diagnostic?.ok,
+             validation: diagnostic === undefined ? "not_configured" : diagnostic.ok ? "passed" : "failed",
+           },
         }
       } catch (error) {
         if (error instanceof PatchlineError && error.code === "STALE_SNAPSHOT") metrics.record({ name: "stale_conflict", path: error.path })
@@ -182,7 +214,16 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         await context.ask({ permission: "edit", patterns: [args.filePath], always: ["*"] , metadata: { path: args.filePath } })
         const result = await writes.write({ worktree: context.worktree, ...args })
         metrics.record({ name: "write", path: result.path, bytes: args.content.length })
-        return { title: result.path, output: result.output, metadata: { created: result.created } }
+        return {
+          title: result.path,
+          output: result.output,
+          metadata: {
+            status: "applied",
+            recoveryAction: "Read the new file before editing it.",
+            created: result.created,
+            bytesWritten: result.bytesWritten,
+          },
+        }
       } catch (error) {
         if (error instanceof PatchlineError && error.code === "WRITE_PROTECTED") metrics.record({ name: "write_prevented", path: error.path })
         return Promise.reject(toolError(error))
