@@ -22,6 +22,7 @@ async function freePort() {
 
 async function waitForTools(url, child, logs) {
   const deadline = Date.now() + 60_000
+  let lastFailure = "server is still bootstrapping"
   while (Date.now() < deadline) {
     if (child.exitCode !== null) throw new Error(`OpenCode exited before plugin load:\n${logs()}`)
     try {
@@ -31,12 +32,14 @@ async function waitForTools(url, child, logs) {
         if (!Array.isArray(toolIds)) throw new Error("OpenCode returned a non-array tool registry")
         return toolIds
       }
-    } catch {
+      lastFailure = `HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`
+    } catch (error) {
+      lastFailure = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
       // The server may still be bootstrapping.
     }
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
-  throw new Error(`Timed out waiting for OpenCode plugin tools:\n${logs()}`)
+  throw new Error(`Timed out waiting for OpenCode plugin tools (${lastFailure}):\n${logs()}`)
 }
 
 async function resolveOpenCodeCommand() {
@@ -98,7 +101,7 @@ async function removeWorktree(directory) {
 
 const port = await freePort()
 const command = await resolveOpenCodeCommand()
-const child = spawn(command, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
+const child = spawn(command, ["serve", "--hostname", "127.0.0.1", "--port", String(port), "--log-level", "INFO", "--print-logs"], {
   cwd: worktree,
   env: { ...process.env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugin: [pluginPath] }) },
   stdio: ["ignore", "pipe", "pipe"],

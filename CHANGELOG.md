@@ -25,6 +25,8 @@
   runners up to 60 seconds to load the plugin registry.
 - Resolve the Windows OpenCode smoke executable directly so plugin loading does not
   depend on shell wrappers or command-file dispatch.
+- Include the last registry HTTP failure and OpenCode startup logs when plugin smoke
+  reaches its bounded timeout.
 
 ## Unreleased
 
