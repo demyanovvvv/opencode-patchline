@@ -3,10 +3,12 @@ import { access, mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { spawn } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
+import { promisify } from "node:util"
 
 const pluginPath = path.resolve(fileURLToPath(new URL("../dist/plugin.js", import.meta.url)))
 const worktree = await mkdtemp(path.join(os.tmpdir(), "patchline-plugin-smoke-"))
+const execute = promisify(execFile)
 
 async function freePort() {
   const server = createServer()
@@ -100,6 +102,7 @@ async function removeWorktree(directory) {
 }
 
 const port = await freePort()
+await execute(process.platform === "win32" ? "git.exe" : "git", ["init", "--initial-branch=main"], { cwd: worktree, windowsHide: true })
 const command = await resolveOpenCodeCommand()
 const child = spawn(command, ["serve", "--hostname", "127.0.0.1", "--port", String(port), "--log-level", "INFO", "--print-logs"], {
   cwd: worktree,

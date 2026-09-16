@@ -208,6 +208,8 @@ reports no vulnerabilities.
   without shell dispatch, matching the LSP bridge process boundary.
 - The hosted Windows job uses the stable `windows-2022` runner; the newer
   `windows-latest` image currently hangs in OpenCode project bootstrap.
+- Plugin smoke creates a temporary Git worktree before starting OpenCode, which
+  avoids the global-project bootstrap path and matches production usage.
 - Diagnostic output is bounded during collection as well as in the final
   result. Timeout handling terminates the process tree and closes inherited
   pipes so descendants cannot hold validation open indefinitely.

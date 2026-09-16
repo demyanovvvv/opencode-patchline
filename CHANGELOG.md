@@ -29,6 +29,8 @@
   reaches its bounded timeout.
 - Pin the Windows CI runner to Windows Server 2022 because OpenCode `1.18.30`
   hangs during project bootstrap on the hosted Windows Server 2025 image.
+- Make plugin smoke create a temporary Git worktree so OpenCode exercises the
+  same project bootstrap path as a real OpenCode worktree.
 
 ## Unreleased
 
