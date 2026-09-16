@@ -19,6 +19,10 @@
   smoke test has the same required executable on every runner.
 - Bound AST result traversal so searches stop after one match beyond the
   requested result limit instead of materializing every match.
+- Make search include matching independent of canonical temporary-directory aliases
+  on hosted Windows and macOS runners.
+- Keep the OpenCode plugin smoke startup wait bounded while allowing slower hosted
+  runners up to 60 seconds to load the plugin registry.
 
 ## Unreleased
 

@@ -21,7 +21,7 @@ async function freePort() {
 }
 
 async function waitForTools(url, child, logs) {
-  const deadline = Date.now() + 20_000
+  const deadline = Date.now() + 60_000
   while (Date.now() < deadline) {
     if (child.exitCode !== null) throw new Error(`OpenCode exited before plugin load:\n${logs()}`)
     try {

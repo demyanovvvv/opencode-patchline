@@ -109,7 +109,7 @@ describe("search", () => {
 
       const result = await grepWorkspace({ worktree: workspace.path, pattern: "needle", include: "src/**/*.ts", maxResults: 10 })
 
-      expect(result.matches.map((match) => match.path.replaceAll("\\", "/").split("/").slice(-2).join("/"))).toEqual(["src/file.ts", "nested/file.ts"])
+      expect(result.matches.map((match) => path.relative(workspace.path, match.path).replaceAll("\\", "/"))).toEqual(["src/file.ts", "src/nested/file.ts"])
     } finally {
       await workspace.cleanup()
     }

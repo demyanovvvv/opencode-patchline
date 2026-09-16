@@ -195,7 +195,8 @@ reports no vulnerabilities.
   experimental environment flag is enabled; Patchline uses the CLI bridge.
 - Linux and macOS validation is delegated to the GitHub Actions CI matrix;
   this Windows session cannot independently execute those hosted runners. The
-  workflow installs OpenCode `1.18.30` before running the LSP bridge tests.
+  workflow installs OpenCode `1.18.30` before running the LSP bridge tests and
+  allows the plugin registry up to 60 seconds to start.
 - Compatibility mode intentionally does not replace built-in editing tools; it
   only exposes Patchline's additional discovery and diagnostic tools.
 - OpenCode plugin loader smoke has been validated on Windows through the
