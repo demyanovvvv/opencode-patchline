@@ -2,7 +2,7 @@
 
 Status: Stable release 1.0.0; continued hardening
 
-Last updated: 2026-09-13
+Last updated: 2026-09-22
 
 ## Objective
 
