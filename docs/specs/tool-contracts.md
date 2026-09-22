@@ -57,8 +57,10 @@ Search result limits are validated at the service boundary and must be integers
 from 1 through 500. Files larger than 8 MiB are skipped before their content is
 loaded, including files that grow past the limit while being read. Each returned
 matching-line preview is capped at 2,000 characters. Each enumerated directory is
-bounded to 4,096 entries before literal search continues. Formatted grep and AST
-responses are rejected above 20,000 characters.
+bounded to 4,096 entries before literal search continues. Directory entries are
+sorted by name before traversal so match order is deterministic and independent
+of filesystem readdir order. Formatted grep and AST responses are rejected above
+20,000 characters.
 
 `apply_patch` accepts snapshot-tagged Hashline sections for existing files. It
 rejects non-whitespace content before the first Hashline section before asking

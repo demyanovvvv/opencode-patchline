@@ -115,6 +115,32 @@ describe("search", () => {
     }
   })
 
+  it("returns literal matches in a deterministic, filesystem-independent order", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await mkdir(path.join(workspace.path, "b"), { recursive: true })
+      await writeFile(path.join(workspace.path, "b", "z.ts"), "needle\n")
+      await writeFile(path.join(workspace.path, "b", "a.ts"), "needle\n")
+      await writeFile(path.join(workspace.path, "z.ts"), "needle\n")
+      await writeFile(path.join(workspace.path, "a.ts"), "needle\n")
+      await writeFile(path.join(workspace.path, "_x.ts"), "needle\n")
+      await writeFile(path.join(workspace.path, "1.ts"), "needle\n")
+
+      const result = await grepWorkspace({ worktree: workspace.path, pattern: "needle", maxResults: 10 })
+
+      expect(result.matches.map((match) => path.relative(workspace.path, match.path).replaceAll("\\", "/"))).toEqual([
+        "_x.ts",
+        "1.ts",
+        "a.ts",
+        "b/a.ts",
+        "b/z.ts",
+        "z.ts",
+      ])
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
   it("treats grep patterns as literal text instead of regular expressions", async () => {
     const workspace = await temporaryWorkspace()
     try {

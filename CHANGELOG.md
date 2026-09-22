@@ -1,7 +1,14 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 - 2026-09-22
 
+- First stable release of the Patchline OpenCode plugin.
+- Snapshot-aware `read` and stale-safe `edit` for existing files.
+- Existing-file `write` protection and guarded multi-file transactions.
+- Literal text search, AST search, LSP bridge, diagnostics, and validation hooks.
+- Precision, compatibility, and disabled runtime modes.
+- Windows, Node.js 20+, OpenCode 1.18.x, package, doctor, benchmark, and plugin
+  smoke verification.
 - Added structured OpenCode tool metadata with bounded recovery actions and
   bytes/validation details, plus CLI JSON diagnostics, configuration validation,
   and stable error explanations.
@@ -9,7 +16,6 @@
   and a private vulnerability reporting policy.
 - Added enforced V8 coverage thresholds, release metadata regression tests, and
   Node.js 20/22 CI coverage across Windows, Linux, and macOS.
-
 - Bound directory reads to 4,096 entries before pagination to prevent unbounded
   directory enumeration memory use.
 - Reject directory pages whose rendered output exceeds 20,000 characters.
@@ -40,9 +46,6 @@
 - Use direct plugin registration smoke on Windows CI because the hosted Windows
   OpenCode `1.18.30` server hangs during instance bootstrap; HTTP plugin smoke
   remains active on Linux and macOS.
-
-## Unreleased
-
 - Bound diagnostic output during execution and enforce the 20,000-character cap on the complete result.
 - Terminate timed-out diagnostic process trees and settle even when descendants inherit output pipes.
 - Add a reproducible isolated tarball installation and public-export smoke test.
@@ -54,23 +57,16 @@
 - Reject ignored content before the first Hashline section before requesting edit permission.
 - Bound file reads before loading input: reject files over 8 MiB and selected lines over 20,000 characters before snapshot creation.
 - Bound mutation payloads: writes and edit results are limited to 8 MiB, including an 8 MiB aggregate create-batch budget before the first mutation.
-
-## 1.0.0 - 2026-09-13
-
-- First stable release of the Patchline OpenCode plugin.
-- Snapshot-aware `read` and stale-safe `edit` for existing files.
-- Existing-file `write` protection and guarded multi-file transactions.
-- Literal text search, AST search, LSP bridge, diagnostics, and validation hooks.
-- Precision, compatibility, and disabled runtime modes.
-- Windows, Node.js 20+, OpenCode 1.18.x, package, doctor, benchmark, and plugin
-  smoke verification.
-
 - Run the OpenCode LSP bridge without shell interpretation, including native
   `opencode.exe` resolution on Windows, so query text cannot execute commands.
 - Record successful edit identity from the atomically renamed temporary file,
   preventing same-byte replacements from inheriting a trusted next snapshot.
 - Read newly created bytes from offset zero on the exclusive file handle so
   create-batch rollback removes unchanged partial files correctly.
+- Sort literal-search directory entries by name before traversal so match order
+  is deterministic and independent of filesystem readdir order.
+- Isolate the release metadata test from the CI `GITHUB_REF_NAME` environment so
+  mismatched-tag rejection is exercised on hosted runners.
 
 ## 0.1.0
 
