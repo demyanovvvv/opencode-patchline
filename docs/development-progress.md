@@ -182,7 +182,7 @@ Latest test result:
 
 ```text
 12 test files passed
-100 tests passed
+101 tests passed
 ```
 
 Latest benchmark result:

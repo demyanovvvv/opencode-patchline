@@ -81,6 +81,7 @@ export async function grepWorkspace(input: {
   const scan = async (entryPath: string): Promise<void> => {
     if (truncated) return
     const directory = await opendir(entryPath)
+    const entries: { name: string; absolute: string; isDirectory: boolean; isFile: boolean }[] = []
     let entryCount = 0
     try {
       while (true) {
@@ -90,18 +91,21 @@ export async function grepWorkspace(input: {
         if (entryCount > MAX_DIRECTORY_ENTRIES) {
           throw new PatchlineError("INVALID_ARGUMENT", `Search directory exceeds the ${MAX_DIRECTORY_ENTRIES}-entry limit: ${path.relative(root.workspace, entryPath)}`, { path: path.relative(root.workspace, entryPath) })
         }
-        if (truncated) return
         if (entry.name === ".git" || entry.name === "node_modules") continue
-        const absolute = path.join(entryPath, entry.name)
-        if (entry.isDirectory()) {
-          await scan(absolute)
-          continue
-        }
-        if (!entry.isFile()) continue
-        await scanFile(absolute)
+        entries.push({ name: entry.name, absolute: path.join(entryPath, entry.name), isDirectory: entry.isDirectory(), isFile: entry.isFile() })
       }
     } finally {
       await directory.close()
+    }
+    entries.sort((left, right) => left.name.localeCompare(right.name))
+    for (const entry of entries) {
+      if (truncated) return
+      if (entry.isDirectory) {
+        await scan(entry.absolute)
+        continue
+      }
+      if (!entry.isFile) continue
+      await scanFile(entry.absolute)
     }
   }
   const fileInfo = await stat(root.absolute).catch(() => undefined)

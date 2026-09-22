@@ -156,7 +156,7 @@ npm run smoke:plugin
 npm pack --dry-run
 ```
 
-The release gate currently covers 12 test files and 100 tests. The latest local
+The release gate currently covers 12 test files and 101 tests. The latest local
 benchmark reports `functionalSuccess: true`, `+1 / -1`, zero whole-file
 rewrites and zero stale overwrites.
 

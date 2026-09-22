@@ -63,6 +63,10 @@
   preventing same-byte replacements from inheriting a trusted next snapshot.
 - Read newly created bytes from offset zero on the exclusive file handle so
   create-batch rollback removes unchanged partial files correctly.
+- Sort literal-search directory entries by name before traversal so match order
+  is deterministic and independent of filesystem readdir order.
+- Isolate the release metadata test from the CI `GITHUB_REF_NAME` environment so
+  mismatched-tag rejection is exercised on hosted runners.
 
 ## 0.1.0
 
