@@ -27,7 +27,9 @@ than allowed to bypass the output bound.
 `precision` (the default) overrides the editing tools and guards direct shell
 writes. `compatibility` leaves the built-in `read`, `edit`, `write`, and
 `apply_patch` tools and shell behavior untouched while retaining Patchline's
-additional discovery and diagnostic tools. `disabled` registers no tools.
+additional discovery and diagnostic tools. The snapshot-dependent
+`patchline_edit_batch` tool is available only in `precision` mode. `disabled`
+registers no tools.
 
 `applyPatchFallback: false` rejects classic new-file `apply_patch` sections;
 snapshot-tagged Hashline sections remain the precision editing path.

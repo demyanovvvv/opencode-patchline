@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.0 - 2026-09-27
+
+- Added `opencode-patchline doctor --lsp` and `opencode-patchline lsp check`
+  with human-readable and JSON setup instructions.
+- Added TypeScript LSP capability detection, including project-local
+  `npx --no-install` detection on Windows and other platforms.
+- Added a ready-to-copy OpenCode TypeScript LSP configuration and explicit
+  `ast_search`/`patchline_grep` fallback guidance.
+- Changed `patchline_lsp` to report `CAPABILITY_UNAVAILABLE` when OpenCode LSP
+  is disabled or unconfigured instead of returning a misleading empty result.
+- Added bounded LSP startup error details and preserved shell-free Windows
+  process invocation, cancellation, and timeout behavior.
+- Restricted snapshot-dependent `patchline_edit_batch` to `precision` mode;
+  compatibility mode now leaves all editing behavior to OpenCode built-ins.
+- Made the OpenCode plugin smoke test explicitly use precision mode and added
+  a real OpenCode black-box runner for isolated tool-call verification.
+- Expanded the test suite to 107 tests and updated English/Russian guidance.
+
 ## 1.0.0 - 2026-09-22
 
 - First stable release of the Patchline OpenCode plugin.

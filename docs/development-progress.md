@@ -1,8 +1,8 @@
 # Development Progress
 
-Status: Stable release 1.0.0; continued hardening
+Status: Stable release 1.1.0; continued hardening
 
-Last updated: 2026-09-22
+Last updated: 2026-09-27
 
 ## Objective
 
@@ -105,6 +105,12 @@ tree state before optimizing convenience or speed.
 - Direct shell writes are guarded in precision mode.
 - `compatibility` mode leaves built-in editing tools and shell behavior alone.
 - `disabled` mode registers no tools.
+- `patchline_edit_batch` is restricted to precision mode so compatibility mode
+  cannot expose a snapshot-dependent editor without Patchline read snapshots.
+- LSP bridge reports disabled/unconfigured servers as `CAPABILITY_UNAVAILABLE`
+  with bounded recovery guidance instead of a false empty success.
+- `doctor --lsp` and `lsp check` provide actionable setup instructions and a
+  ready-to-copy TypeScript configuration without mutating OpenCode config.
 
 ### Runtime configuration
 
@@ -120,7 +126,7 @@ tree state before optimizing convenience or speed.
 ### Packaging
 
 - Public package name is `opencode-patchline`.
-- Stable package version is `1.0.0`.
+- Stable package version is `1.1.0`.
 - Complete English and Russian user guides are included in the package.
 - Public exports include `PatchlinePlugin`, read result types, services, errors,
   snapshot store, search bridge, and configuration helpers.

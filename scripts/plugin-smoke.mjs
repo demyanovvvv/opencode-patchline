@@ -117,7 +117,12 @@ if (process.platform === "win32" && process.env.PATCHLINE_PLUGIN_SMOKE_DIRECT ==
 const command = await resolveOpenCodeCommand()
 const child = spawn(command, ["serve", "--hostname", "127.0.0.1", "--port", String(port), "--log-level", "INFO", "--print-logs"], {
   cwd: worktree,
-  env: { ...process.env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugin: [pluginPath] }) },
+  env: {
+    ...process.env,
+    OPENCODE_CONFIG_CONTENT: JSON.stringify({
+      plugin: [[pluginPath, { mode: "precision", telemetry: false, summary: true }]],
+    }),
+  },
   stdio: ["ignore", "pipe", "pipe"],
   windowsHide: true,
 })

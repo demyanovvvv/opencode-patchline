@@ -3,7 +3,7 @@ import path from "node:path"
 import { describe, expect, it } from "vitest"
 import { astSearchFile, collectBoundedAstMatches, type AstTraversalNode } from "../src/search/ast.js"
 import { grepWorkspace } from "../src/search/grep.js"
-import { runOpenCodeLspBridge } from "../src/search/lsp.js"
+import { buildLspArgs, interpretLspOutput, runOpenCodeLspBridge } from "../src/search/lsp.js"
 import { routeSearch } from "../src/search/router.js"
 import { temporaryWorkspace } from "./helpers/workspace.js"
 
@@ -30,6 +30,38 @@ describe("search", () => {
     expect(routeSearch("find references to createOrder")).toBe("lsp")
     expect(routeSearch("find structural pattern for empty catch")).toBe("ast")
     expect(routeSearch("find API_KEY text")).toBe("grep")
+  })
+
+  it("reports disabled OpenCode LSP instead of returning an empty symbol result", () => {
+    expect(() => interpretLspOutput("documentSymbol", "[]", "all LSPs are disabled", 0)).toThrowError(expect.objectContaining({
+      code: "CAPABILITY_UNAVAILABLE",
+      message: expect.stringContaining("ast_search"),
+    }))
+  })
+
+  it("preserves non-zero LSP bridge failures as diagnostics errors", () => {
+    expect(() => interpretLspOutput("diagnostics", "", "language server crashed", 1)).toThrowError(expect.objectContaining({
+      code: "DIAGNOSTICS_UNAVAILABLE",
+    }))
+  })
+
+  it("bounds capability failure details returned from OpenCode startup logs", () => {
+    expect(() => interpretLspOutput("documentSymbol", "", `all LSPs are disabled ${"x".repeat(10_000)}`, 0)).toThrowError(
+      expect.objectContaining({ message: expect.stringMatching(/LSP detail truncated/) }),
+    )
+  })
+
+  it("requests OpenCode startup logs so disabled LSP is distinguishable from no results", () => {
+    expect(buildLspArgs("documentSymbol", "file:///tmp/file.ts")).toEqual([
+      "debug",
+      "lsp",
+      "document-symbols",
+      "file:///tmp/file.ts",
+      "--pure",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+    ])
   })
 
   it("finds bounded literal matches", async () => {
@@ -272,8 +304,9 @@ describe("search", () => {
   it("uses the installed OpenCode LSP status bridge", async () => {
     const workspace = await temporaryWorkspace()
     try {
-      const output = await runOpenCodeLspBridge({ worktree: workspace.path, operation: "workspaceSymbol", query: "MissingSymbol" })
-      expect(() => JSON.parse(output)).not.toThrow()
+      await expect(runOpenCodeLspBridge({ worktree: workspace.path, operation: "workspaceSymbol", query: "MissingSymbol" })).rejects.toMatchObject({
+        code: "CAPABILITY_UNAVAILABLE",
+      })
     } finally {
       await workspace.cleanup()
     }
@@ -302,7 +335,9 @@ describe("search", () => {
       const marker = path.join(workspace.path, "lsp-shell-injection.txt")
       const query = "MissingSymbol & echo injected>lsp-shell-injection.txt & rem"
 
-      await runOpenCodeLspBridge({ worktree: workspace.path, operation: "workspaceSymbol", query })
+      await expect(runOpenCodeLspBridge({ worktree: workspace.path, operation: "workspaceSymbol", query })).rejects.toMatchObject({
+        code: "CAPABILITY_UNAVAILABLE",
+      })
 
       await expect(readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" })
     } finally {

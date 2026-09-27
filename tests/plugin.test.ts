@@ -309,6 +309,7 @@ describe("OpenCode plugin", () => {
       expect(hooks.tool).not.toHaveProperty("edit")
       expect(hooks.tool).not.toHaveProperty("write")
       expect(hooks.tool).not.toHaveProperty("apply_patch")
+      expect(hooks.tool).not.toHaveProperty("patchline_edit_batch")
       await expect(hooks["tool.execute.before"]?.(
         { tool: "bash", sessionID: "s", callID: "c" },
         { args: { command: "Set-Content -Path a.ts -Value bad" } },

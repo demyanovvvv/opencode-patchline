@@ -30,6 +30,15 @@ async function commandVersion(command: string, args: string[]): Promise<string |
   })
 }
 
+async function lspSetupCheck(): Promise<CapabilityCheck> {
+  const flagEnabled = process.env.OPENCODE_EXPERIMENTAL_LSP_TOOL === "true" || process.env.OPENCODE_EXPERIMENTAL === "true"
+  const server = await commandVersion("typescript-language-server", ["--version"])
+    ?? await commandVersion(process.platform === "win32" ? "npx.cmd" : "npx", ["--no-install", "typescript-language-server", "--version"])
+  if (server !== undefined) return { name: "LSP setup", ok: true, detail: `typescript-language-server ${server}` }
+  if (flagEnabled) return { name: "LSP setup", ok: true, detail: "OpenCode experimental LSP flag enabled; verify a language server for the project" }
+  return { name: "LSP setup", ok: false, detail: "no TypeScript language server found and OpenCode LSP flag is disabled" }
+}
+
 async function canImport(specifier: string): Promise<{ ok: boolean; detail: string }> {
   try {
     await import(specifier)
@@ -114,6 +123,7 @@ export async function inspectCapabilities(): Promise<CapabilityCheck[]> {
       ok: process.env.OPENCODE_EXPERIMENTAL_LSP_TOOL === "true" || process.env.OPENCODE_EXPERIMENTAL === "true",
       detail: process.env.OPENCODE_EXPERIMENTAL_LSP_TOOL === "true" || process.env.OPENCODE_EXPERIMENTAL === "true" ? "enabled" : "optional, disabled",
     },
+    await lspSetupCheck(),
     await preservationCheck(),
     await safetyCheck(),
   ]

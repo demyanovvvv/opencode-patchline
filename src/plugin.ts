@@ -312,7 +312,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         },
       }),
       patchline_lsp: tool({
-        description: "Use OpenCode's existing LSP integration for symbols and diagnostics. Navigation operations beyond this bridge require OPENCODE_EXPERIMENTAL_LSP_TOOL=true.",
+         description: "Use OpenCode's existing LSP integration for symbols and diagnostics. If unavailable, follow the capability instructions and use ast_search for structure or patchline_grep for literal text.",
         args: {
           operation: tool.schema.enum(["workspaceSymbol", "documentSymbol", "diagnostics"]),
           query: tool.schema.string().optional(),
@@ -323,7 +323,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
           return runOpenCodeLspBridge({ worktree: context.worktree, operation: args.operation, query: args.query, filePath: args.filePath, signal: context.abort })
         },
       }),
-      patchline_edit_batch: tool({
+      ...(config.mode === "precision" ? { patchline_edit_batch: tool({
         description: "Preflight and apply several snapshot-anchored exact edits as one recoverable batch.",
         args: {
           edits: tool.schema.array(tool.schema.object({
@@ -345,7 +345,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
           const result = await edits.editBatch(requests)
           return boundedMutationOutput(result.map((item) => item.output).join("\n\n"))
         },
-      }),
+      }) } : {}),
       patchline_diagnostics: tool({
         description: "Run a configured targeted diagnostic command inside the worktree.",
         args: { command: tool.schema.string() },

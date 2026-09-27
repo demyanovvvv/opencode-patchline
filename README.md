@@ -140,7 +140,15 @@ skipped by literal search. The AST provider is capability-detected. Hashline is
 loaded lazily because its upstream runtime is Bun-oriented; on Node.js, exact
 snapshot-anchored edits remain available and `doctor` reports Hashline as
 optional. Native OpenCode LSP is used only when its experimental capability is
-enabled; otherwise Patchline uses the CLI bridge.
+enabled; otherwise Patchline uses the CLI bridge. When OpenCode reports that
+LSP is disabled or unconfigured, `patchline_lsp` returns an explicit capability
+error instead of presenting the condition as an empty result.
+
+For an interactive setup guide, use `opencode-patchline doctor --lsp` or
+`opencode-patchline lsp check --json`. The guide shows the TypeScript language
+server installation command, a ready-to-copy OpenCode configuration, and the
+`ast_search`/`patchline_grep` fallbacks. It never edits configuration or installs
+dependencies automatically.
 
 ## Development and verification
 
@@ -156,7 +164,7 @@ npm run smoke:plugin
 npm pack --dry-run
 ```
 
-The release gate currently covers 12 test files and 101 tests. The latest local
+The release gate currently covers 12 test files and 107 tests. The latest local
 benchmark reports `functionalSuccess: true`, `+1 / -1`, zero whole-file
 rewrites and zero stale overwrites.
 

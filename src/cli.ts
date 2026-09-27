@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 import { inspectCapabilities } from "./compatibility.js"
 import { spawn } from "node:child_process"
 import { DEFAULT_CONFIG, parseConfig } from "./config.js"
+import { lspGuide, renderLspGuide } from "./lsp-guide.js"
 import type { PatchlineErrorCode } from "./errors.js"
 
 type Output = (line: string) => void
@@ -55,7 +56,13 @@ export async function runCli(args: readonly string[], options: CliOptions = {}):
 
   if (command === "doctor") {
     const checks = await inspect()
-    const required = checks.filter((check) => check.name !== "Native LSP tool flag" && check.name !== "Hashline runtime")
+    if (args.includes("--lsp")) {
+      const guide = lspGuide(checks)
+      if (args.includes("--json")) writeJson(stdout, guide)
+      else for (const line of renderLspGuide(guide)) stdout(line)
+      return guide.status === "ready" ? 0 : 1
+    }
+    const required = checks.filter((check) => check.name !== "Native LSP tool flag" && check.name !== "Hashline runtime" && check.name !== "LSP setup")
     const mode = required.every((check) => check.ok) ? "PRECISION" : "DEGRADED"
     if (args.includes("--json")) {
       writeJson(stdout, { checks, mode })
@@ -65,6 +72,14 @@ export async function runCli(args: readonly string[], options: CliOptions = {}):
       stdout(`Mode: ${mode}`)
     }
     return mode === "PRECISION" ? 0 : 1
+  }
+
+  if (command === "lsp" && (args[1] ?? "check") === "check") {
+    const checks = await inspect()
+    const guide = lspGuide(checks)
+    if (args.includes("--json")) writeJson(stdout, guide)
+    else for (const line of renderLspGuide(guide)) stdout(line)
+    return guide.status === "ready" ? 0 : 1
   }
 
   if (command === "config") {
@@ -112,7 +127,7 @@ export async function runCli(args: readonly string[], options: CliOptions = {}):
     })
   }
 
-  stderr(`Unknown command: ${command}\nUsage: opencode-patchline <doctor|config|explain|install> [--global]`)
+  stderr(`Unknown command: ${command}\nUsage: opencode-patchline <doctor [--lsp]|lsp check|config|explain|install> [--global]`)
   return 1
 }
 

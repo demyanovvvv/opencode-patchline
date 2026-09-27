@@ -14,4 +14,9 @@ OpenCode CLI. Definition/reference/call hierarchy remain native-only.
 
 The CLI bridge never invokes a shell. It propagates OpenCode tool cancellation,
 has a 30-second execution deadline, and bounds each captured output stream to
-200,000 characters so an unhealthy CLI cannot retain unbounded memory.
+200,000 characters so an unhealthy CLI cannot retain unbounded memory. A
+successful empty JSON result is accepted only when OpenCode did not report that
+LSP is disabled or unconfigured; those capability failures are returned as
+`CAPABILITY_UNAVAILABLE` instead of being misreported as no symbols or no
+diagnostics. The bridge requests OpenCode startup logs at INFO level to make
+that distinction observable without changing the user's OpenCode configuration.

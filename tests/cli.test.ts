@@ -23,6 +23,39 @@ describe("Patchline CLI", () => {
     })
   })
 
+  it("prints an actionable LSP setup guide", async () => {
+    const output: string[] = []
+    const exitCode = await runCli(["doctor", "--lsp"], {
+      stdout: (line) => output.push(line),
+      stderr: () => undefined,
+      inspect: async () => [
+        { name: "Node.js", ok: true, detail: "22.0.0" },
+        { name: "OpenCode", ok: true, detail: "1.18.32" },
+        { name: "LSP setup", ok: false, detail: "disabled" },
+      ],
+    })
+
+    expect(exitCode).toBe(1)
+    expect(output.join("\n")).toContain("1. Enable LSP")
+    expect(output.join("\n")).toContain("typescript-language-server")
+    expect(output.join("\n")).toContain("patchline_grep")
+  })
+
+  it("returns the LSP guide as structured JSON", async () => {
+    const output: string[] = []
+    const exitCode = await runCli(["lsp", "check", "--json"], {
+      stdout: (line) => output.push(line),
+      stderr: () => undefined,
+      inspect: async () => [{ name: "LSP setup", ok: false, detail: "disabled" }],
+    })
+
+    expect(exitCode).toBe(1)
+    expect(JSON.parse(output.join(""))).toMatchObject({
+      status: "unavailable",
+      steps: expect.arrayContaining([expect.stringContaining("typescript-language-server")]),
+    })
+  })
+
   it("shows effective configuration without starting OpenCode", async () => {
     const output: string[] = []
     const exitCode = await runCli(["config", "show"], {
