@@ -7,7 +7,7 @@ stale-safe changes to existing source files. It keeps the familiar OpenCode
 workflow while enforcing correctness in deterministic tooling instead of relying
 only on model instructions.
 
-**Package version: `1.1.0`** (see `CHANGELOG.md` for unreleased changes)
+**Package version: `1.2.0`** — see `CHANGELOG.md` for release details.
 
 ## What it provides
 
@@ -21,27 +21,27 @@ only on model instructions.
 - Literal text search, AST structural search and an OpenCode LSP bridge.
 - Permission-aware diagnostics and configured post-edit validation.
 - OpenCode-native unified diff metadata for edits and patch batches, with bounded computation and previews.
-- One-package TUI entrypoint with themed Patchline progress, writes/validation counts, hidden-file indicators and failure cards.
+- Themed conversation cards for all eleven tools: animated status, footer disclosure, progressive output and independently expandable native diffs.
 - `precision`, `compatibility` and `disabled` runtime modes.
 - A doctor command, benchmark, package smoke test and OpenCode plugin smoke test.
 
 ## Requirements
 
 - Node.js 20 or newer.
-- OpenCode 1.18.x.
+- OpenCode >=1.18.0 and <2; the conversation UI host is currently provisioned on Windows x64.
 - A project opened as an OpenCode worktree.
 
-Local verification uses OpenCode `1.18.33` and
+Local host verification uses OpenCode `1.18.34` and
 `@opencode-ai/plugin@1.18.30`. OpenCode loads plugins through Bun, so the full upstream Hashline runtime is
 available there when the native adapter loads. Direct Node use remains supported
 with the bounded PUT/CUT fallback. The optional `hashlineRecovery` setting
 allows only upstream-proven anchor recovery for ordinary edits; `REM` and `MV`
-remain strict stale-safe operations. The TUI entrypoint must be installed in the
-OpenCode TUI configuration separately.
+remain strict stale-safe operations. The installer registers both server and TUI
+entrypoints; full conversation styling requires the compatible host it provisions.
 
 ## Installation
 
-Install the package:
+For manual tool registration (without provisioning the conversation UI host), install the package:
 
 ```bash
 npm install opencode-patchline
@@ -65,19 +65,20 @@ npx opencode-patchline config show
 npx opencode-patchline explain STALE_SNAPSHOT
 ```
 
-The installer registers the server and TUI entrypoints through OpenCode and
-asks independently before installing missing TypeScript LSP dependencies and
-the optional Bun runtime add-on for full native Hashline support:
+The installer registers server and TUI entrypoints and provisions a compatible
+OpenCode conversation UI host on Windows x64. It builds the host using Git/Bun,
+retains the `opencode` command, and requests confirmation unless `--yes` is used.
+Missing TypeScript LSP dependencies are handled independently:
 
 ```bash
 npx --yes opencode-patchline@latest install
 npx --yes opencode-patchline@latest install --global --lang ru
 ```
 
-Repeat installation to replace an existing registration with the latest version.
-Wrappers are also available: `sh install.sh`, `sh uninstall.sh`, `./install.ps1`
-and `./uninstall.ps1`. They forward all CLI arguments, fetch the latest published
-CLI, and use the caller's current project (or `--global`).
+Repeat installation to update the registration and integrated host version.
+Wrappers are available: `sh install.sh`, `sh uninstall.sh`, `./install.ps1` and
+`./uninstall.ps1`. Outside a checkout they fetch the latest published CLI; inside
+a built Patchline checkout, install wrappers use that local package automatically.
 
 `--lang en|ru` (alias `--language`) selects installer/uninstaller messages and
 is remembered for that scope. Other Patchline commands keep their existing
@@ -100,26 +101,42 @@ Direct Patchline dependencies in the selected project/config root and project
 Other plugins are retained; configuration backups are kept next to the original
 files. See [installation and removal](docs/operations/installation.md).
 
-For the new TUI panel, use this installer with a package containing both
-`./server` and `./tui` exports. OpenCode discovers both and updates its server
-and TUI plugin configurations. Adding only the server entry to `opencode.json`
-loads the tools and native diff cards; the sidebar also needs the TUI entry.
-Restart OpenCode after installing either entrypoint. The sidebar must be visible.
-The TUI changes in this worktree are unreleased; an older npm package will not
-contain them.
+### Conversation UI and integrated versions
 
-For a local checkout, build first and use OpenCode's package-directory installer:
+Full styling currently requires a modified OpenCode host: stock OpenCode 1.18.34
+does not expose tool-card renderer slots. The installer prepares this integration
+automatically and replaces the executable with a guarded backup. Restart OpenCode
+after installation. With upstream 1.18.34 and this package, `opencode --version`
+reports `1.18.34+patchline.1.2.0`.
+
+The installer resolves the latest stable upstream version, or accepts
+`--opencode-version 1.18.34`. Plugin/upstream versions form the integrated version
+independently. Exact matching pairs skip rebuilding; new executable replacements
+rotate one `.patchline-previous` backup. Integrated host upgrades delegate to the
+installer. Global `autoupdate` is currently set to `notify` to prevent stock
+replacement; existing `false` is preserved.
+
+Cards use the active theme's warning/success/error border colors, English labels,
+animated progress, and bottom `Show details` / `Hide details` controls. Text
+results reveal twelve lines at a time; files expand independently and native
+diffs reveal complete hunks with line numbers and added/removed colors.
+
+Current limitations: host provisioning requires Windows x64, Git and Bun; binary
+artifact delivery, cross-component transaction recovery and ownership-aware
+legacy-backup/source-cache cleanup are not yet implemented. Uninstall removes
+plugin registrations but does not restore the official executable or update
+preference. Review [the installer contract](docs/specs/installer-contract.md).
+
+For a local checkout, build and install the current directory:
 
 ```bash
 npm install
 npm run build
-opencode plugin /absolute/path/to/opencode-patchline
+node dist/cli.js install --local --global --yes
 ```
 
-The compact sidebar shows up to four files and twelve diff rows per file,
-including explicit preview truncation and validation/rollback outcomes. Native
-`edit` / `apply_patch` cards remain available in the conversation.
-To verify the mounted UI locally, install Bun and run `npm run smoke:tui`.
+Local install wrappers also select the adjacent built package automatically.
+To verify the mounted UI locally, run `npm run smoke:tui` with Bun available.
 
 ## Runtime modes
 
