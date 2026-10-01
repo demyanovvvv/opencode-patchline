@@ -2,15 +2,23 @@ import assert from "node:assert/strict"
 import { testRender } from "@opentui/solid"
 import { createSignal } from "solid-js"
 import { PatchlineTui } from "../dist/tui.js"
+import { RGBA } from "@opentui/core"
 
 const [parts, setParts] = createSignal([])
 let slot
+let registration
 const api = {
   state: { session: { messages: () => [{ id: "message" }] }, part: () => parts() },
   theme: { current: Object.fromEntries(["text", "textMuted", "primary", "success", "error", "borderSubtle", "borderActive", "backgroundPanel", "diffLineNumber", "diffAdded", "diffRemoved", "diffContext", "diffHunkHeader", "diffAddedBg", "diffRemovedBg", "diffContextBg", "diffAddedLineNumberBg", "diffRemovedLineNumberBg"].map((key) => [key, "#ffffff"])) },
-  slots: { register: (registration) => { slot = registration.slots.sidebar_content } },
+  // Distinct theme colors make captured border/sign assertions meaningful.
+  slots: { register: (value) => { registration = value; slot = value.slots.sidebar_content } },
 }
 await PatchlineTui(api)
+Object.assign(api.theme.current, { warning: "#ffaa00", success: "#00cc66", error: "#ee3344", diffAdded: "#00cc66", diffRemoved: "#ee3344", diffAddedBg: "#113322", diffRemovedBg: "#331122", backgroundElement: "#222222", backgroundMenu: "#333333" })
+const borderColor = () => screen.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("│"))?.fg
+for (const tool of ["read", "edit", "write", "apply_patch", "patchline_edit_batch", "patchline_grep", "ast_search", "patchline_route_search", "patchline_lsp", "patchline_diagnostics", "patchline_summary"]) {
+  assert.equal(typeof registration.slots[`tool_${tool}`], "function", `${tool} must have a conversation renderer`)
+}
 const screen = await testRender(() => slot({}, { session_id: "session" }), { width: 100, height: 40 })
 try {
   await screen.renderOnce()
@@ -18,6 +26,7 @@ try {
   setParts([{ type: "tool", tool: "edit", state: { status: "running", input: { filePath: "src/example.ts" }, metadata: { stage: "preflight" } } }])
   await screen.renderOnce()
   assert.match(screen.captureCharFrame(), /Checking snapshots/)
+  assert.ok(borderColor()?.equals(RGBA.fromHex(api.theme.current.warning)), "running border uses theme warning")
   const runningFrame = screen.captureCharFrame()
   await new Promise((resolve) => setTimeout(resolve, 150))
   await screen.renderOnce()
@@ -25,18 +34,61 @@ try {
   setParts([{ type: "tool", tool: "edit", state: { status: "completed", input: { filePath: "src/example.ts" }, metadata: { status: "applied", writes: 1, added: 1, deleted: 1, diff: "@@ -1 +1 @@\n-old\n+new" } } }])
   await screen.renderOnce()
   assert.match(screen.captureCharFrame(), /Changes applied/)
-  assert.match(screen.captureCharFrame(), /Click to view changes/)
-  await screen.mockMouse.click(2, 0)
+  assert.ok(borderColor()?.equals(RGBA.fromHex(api.theme.current.success)), "completed border uses theme success")
+  assert.match(screen.captureCharFrame(), /Show details ↓/)
+  assert.match(screen.captureCharFrame(), /src\/example.ts/, "collapsed mutations must identify the changed file")
+  const collapsedRows = screen.captureCharFrame().split("\n")
+  const headerRow = collapsedRows.findIndex((line) => line.includes("Changes applied"))
+  assert.ok(headerRow >= 2, "tool must have external separation and internal top padding")
+  assert.ok(collapsedRows.slice(0, headerRow).every((line) => !line.replaceAll("│", "").trim()), "top spacing must contain no content")
+  const lastContentRow = collapsedRows.findLastIndex((line) => line.replaceAll("│", "").trim())
+  assert.ok(!collapsedRows[lastContentRow + 1].replaceAll("│", "").trim(), "tool must have internal bottom padding")
+  assert.ok(!collapsedRows[lastContentRow + 2].trim(), "tool must have external bottom separation")
+  assert.ok(!collapsedRows[headerRow + 1].replaceAll("│", "").trim(), "header must be separated from the summary")
+  await screen.mockMouse.click(4, headerRow)
+  await screen.renderOnce()
+  assert.doesNotMatch(screen.captureCharFrame(), /1 - old/, "header must not expand details")
+  const detailsRow = screen.captureCharFrame().split("\n").findIndex((line) => line.includes("Show details"))
+  await screen.mockMouse.click(4, detailsRow)
   await screen.renderOnce()
   assert.match(screen.captureCharFrame(), /\+ new/)
   assert.match(screen.captureCharFrame(), /1 writes/)
   assert.match(screen.captureCharFrame(), /1 - old/)
+  const removedSpan = screen.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("old"))
+  const addedSpan = screen.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("new"))
+  assert.ok(removedSpan?.bg.equals(RGBA.fromHex(api.theme.current.diffRemovedBg)), "removed lines use theme red background")
+  assert.ok(addedSpan?.bg.equals(RGBA.fromHex(api.theme.current.diffAddedBg)), "added lines use theme green background")
+  const fileRow = screen.captureCharFrame().split("\n").findIndex((line) => line.includes("Hide file"))
+  await screen.mockMouse.click(10, fileRow)
+  await screen.renderOnce()
+  assert.doesNotMatch(screen.captureCharFrame(), /1 - old/, "individual files must collapse while the card stays open")
+  const reopenRow = screen.captureCharFrame().split("\n").findIndex((line) => line.includes("Show file"))
+  await screen.mockMouse.click(10, reopenRow)
+  await screen.renderOnce()
+  assert.match(screen.captureCharFrame(), /1 - old/)
+  setParts([{ type: "tool", tool: "edit", state: { status: "completed", input: { filePath: "src/example.ts" }, metadata: { writes: 1, diff: "@@ -1 +1 @@\n-old\n+new\n@@ -20 +20 @@\n-before-second\n+after-second" } } }])
+  await screen.renderOnce()
+  assert.doesNotMatch(screen.captureCharFrame(), /after-second/, "later changes stay collapsed")
+  await screen.mockMouse.click(5, screen.captureCharFrame().split("\n").findIndex((line) => line.includes("Show next change")))
+  await screen.renderOnce()
+  assert.match(screen.captureCharFrame(), /after-second/)
+  await screen.mockMouse.click(5, screen.captureCharFrame().split("\n").findIndex((line) => line.includes("Show fewer changes")))
+  await screen.renderOnce()
+  assert.doesNotMatch(screen.captureCharFrame(), /after-second/)
   setParts([{ type: "tool", tool: "write", state: { status: "completed", input: { filePath: "created.ts" }, metadata: { writes: 1, validation: "not_configured", paths: ["created.ts"] } } }])
   await screen.renderOnce()
   assert.match(screen.captureCharFrame(), /created.ts/)
   assert.match(screen.captureCharFrame(), /Validation: not configured/)
+  setParts([{ type: "tool", tool: "read", state: { status: "completed", input: { filePath: "src/example.ts" }, metadata: { path: "src/example.ts", lines: 12, bytesRendered: 240, snapshot: "snap-1" } } }])
+  await screen.renderOnce()
+  const readRows = screen.captureCharFrame().split("\n")
+  const readHeader = readRows.findIndex((line) => line.includes("Snapshot created"))
+  assert.ok(!readRows[readHeader + 1].replaceAll("│", "").trim(), "read heading must have breathing room")
+  assert.match(readRows[readHeader + 2], /src\/example.ts/, "read path follows heading spacing")
+  assert.match(readRows[readHeader + 3], /12 lines/, "secondary metadata must follow the path")
   setParts([{ type: "tool", tool: "edit", state: { status: "error", input: { filePath: "src/example.ts" }, error: "validation denied", metadata: { stage: "validation", validation: "failed", writes: 1, reason: "validation denied", diff: "@@ -1 +1 @@\n-old\n+new" } } }])
   await screen.renderOnce()
+  assert.ok(borderColor()?.equals(RGBA.fromHex(api.theme.current.error)), "failed border uses theme error")
   assert.match(screen.captureCharFrame(), /Changes applied · validation failed/)
   assert.match(screen.captureCharFrame(), /\+ new/)
   assert.doesNotMatch(screen.captureCharFrame(), /No files changed/)
@@ -44,11 +96,64 @@ try {
   await screen.renderOnce()
   assert.match(screen.captureCharFrame(), /Restored: restored.ts/)
   assert.match(screen.captureCharFrame(), /Preserved conflict: external.ts/)
+  setParts([{ type: "tool", tool: "patchline_grep", state: { status: "completed", input: { pattern: "line" }, metadata: { kind: "search", matches: 25 }, output: Array.from({ length: 25 }, (_, i) => `result-line-${i + 1}`).join("\n") } }])
+  const resultScreen = await testRender(() => registration.slots.tool_patchline_grep({}, { part: parts()[0] }), { width: 100, height: 50 })
+  try {
+    await resultScreen.renderOnce()
+    assert.doesNotMatch(resultScreen.captureCharFrame(), /result-line-1/)
+    await resultScreen.mockMouse.click(4, resultScreen.captureCharFrame().split("\n").findIndex((line) => line.includes("Show details")))
+    await resultScreen.renderOnce()
+    assert.match(resultScreen.captureCharFrame(), /result-line-12/)
+    assert.doesNotMatch(resultScreen.captureCharFrame(), /result-line-13/)
+    await resultScreen.mockMouse.click(5, resultScreen.captureCharFrame().split("\n").findIndex((line) => line.includes("more lines")))
+    await resultScreen.renderOnce()
+    assert.match(resultScreen.captureCharFrame(), /result-line-24/)
+    assert.doesNotMatch(resultScreen.captureCharFrame(), /result-line-25/)
+    await resultScreen.mockMouse.click(5, resultScreen.captureCharFrame().split("\n").findIndex((line) => line.includes("Show fewer lines")))
+    await resultScreen.renderOnce()
+    assert.doesNotMatch(resultScreen.captureCharFrame(), /result-line-13/)
+  } finally { resultScreen.renderer.destroy() }
   assert.doesNotMatch(screen.captureCharFrame(), /No files changed/)
   setParts([{ type: "tool", tool: "edit", state: { status: "running", input: { filePath: "active.ts" }, metadata: { stage: "committing" } } }])
   await screen.renderOnce()
   assert.match(screen.captureCharFrame(), /Writing changes/)
 } finally {
+  await screen.renderer.idle()
   screen.renderer.destroy()
 }
 console.log("TUI smoke passed (mounted renderer, reactive progress, diff and validation failure)")
+
+if (process.env.PATCHLINE_HOST_SMOKE === "1") {
+const source = await Bun.file(new URL("../.opencode-host/packages/tui/src/plugin/slots.tsx", import.meta.url)).text()
+const transpiler = new Bun.Transpiler({ loader: "tsx" })
+const sharedSource = source.replaceAll('from "solid-js"', `from ${JSON.stringify(import.meta.resolve("solid-js"))}`).replaceAll('from "@opentui/solid"', `from ${JSON.stringify(import.meta.resolve("@opentui/solid"))}`).replace('import { isRecord } from "../util/record"', 'const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value)')
+const { createSlots } = await import(`data:text/javascript;base64,${Buffer.from(transpiler.transformSync(sharedSource)).toString("base64")}`)
+const { createComponent, useRenderer } = await import("@opentui/solid")
+const host = createSlots()
+const [part, setPart] = createSignal({ type: "tool", tool: "patchline_grep", callID: "grep", state: { status: "running", input: { pattern: "calculateTotal" }, metadata: { kind: "search", stage: "searching" } } })
+const mounted = await testRender(() => {
+  const real = host.setup({ ...api, renderer: useRenderer() })
+  real.register({ ...registration, id: "patchline-integration" })
+  return createComponent(host.Slot, { name: "tool_patchline_grep", mode: "replace", get part() { return part() }, children: "generic fallback" })
+}, { width: 100, height: 30 })
+try {
+  await mounted.renderOnce()
+  assert.match(mounted.captureCharFrame(), /Patchline/)
+  assert.doesNotMatch(mounted.captureCharFrame(), /generic fallback/)
+  const first = mounted.captureCharFrame()
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  await mounted.renderOnce()
+  assert.notEqual(mounted.captureCharFrame(), first)
+  setPart({ ...part(), state: { status: "completed", input: { pattern: "calculateTotal" }, metadata: { kind: "search", matches: 5 }, output: "pricing.ts:1 calculateTotal" } })
+  await mounted.renderOnce()
+  assert.match(mounted.captureCharFrame(), /5 matches/)
+  const hostDetailsRow = mounted.captureCharFrame().split("\n").findIndex((line) => line.includes("Show details"))
+  await mounted.mockMouse.click(4, hostDetailsRow)
+  await mounted.renderOnce()
+  assert.match(mounted.captureCharFrame(), /pricing.ts:1 calculateTotal/)
+} finally {
+  await mounted.renderer.idle()
+  mounted.renderer.destroy()
+}
+console.log("OpenCode host slot integration passed (real registry, conversation renderer, animation, click)")
+}

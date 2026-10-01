@@ -44,7 +44,11 @@
     "README.ru.md",
     "LICENSE",
     "CHANGELOG.md",
-    "docs"
+    "docs",
+    "install.sh",
+    "uninstall.sh",
+    "install.ps1",
+    "uninstall.ps1"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",

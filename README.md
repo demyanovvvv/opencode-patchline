@@ -70,9 +70,14 @@ asks independently before installing missing TypeScript LSP dependencies and
 the optional Bun runtime add-on for full native Hashline support:
 
 ```bash
-npx opencode-patchline install
-npx opencode-patchline install --global --lang ru
+npx --yes opencode-patchline@latest install
+npx --yes opencode-patchline@latest install --global --lang ru
 ```
+
+Repeat installation to replace an existing registration with the latest version.
+Wrappers are also available: `sh install.sh`, `sh uninstall.sh`, `./install.ps1`
+and `./uninstall.ps1`. They forward all CLI arguments, fetch the latest published
+CLI, and use the caller's current project (or `--global`).
 
 `--lang en|ru` (alias `--language`) selects installer/uninstaller messages and
 is remembered for that scope. Other Patchline commands keep their existing
@@ -84,12 +89,14 @@ settings are preserved.
 Uninstall with a preview or an interactive confirmation:
 
 ```bash
-npx opencode-patchline uninstall --dry-run
-npx opencode-patchline uninstall
-npx opencode-patchline uninstall --global --yes
+npx --yes opencode-patchline@latest uninstall --dry-run
+npx --yes opencode-patchline@latest uninstall
+npx --yes opencode-patchline@latest uninstall --global --yes
 ```
 
 Removal affects Patchline registrations and installer-owned LSP/runtime additions.
+Direct Patchline dependencies in the selected project/config root and project
+`.opencode/` are uninstalled. Shared OpenCode caches and source checkouts remain.
 Other plugins are retained; configuration backups are kept next to the original
 files. See [installation and removal](docs/operations/installation.md).
 

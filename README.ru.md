@@ -71,9 +71,15 @@ npx opencode-patchline explain STALE_SNAPSHOT
 TypeScript LSP и дополнительной runtime-среды Bun для полного native Hashline:
 
 ```bash
-npx opencode-patchline install --lang ru
-npx opencode-patchline install --global --lang ru
+npx --yes opencode-patchline@latest install --lang ru
+npx --yes opencode-patchline@latest install --global --lang ru
 ```
+
+Повторный запуск обновляет существующую регистрацию до последней версии.
+Также доступны `sh install.sh --lang ru` / `sh uninstall.sh --lang ru` и
+`.\install.ps1 --lang ru` / `.\uninstall.ps1 --lang ru` в Windows.
+Скрипты передают все аргументы CLI; запускайте их из нужного проекта или
+добавьте `--global`. Они загружают последнюю **опубликованную** версию пакета.
 
 `--lang ru|en` (синоним `--language`) меняет язык установщика и деинсталлятора;
 выбор сохраняется для этой области установки. `--yes` подтверждает действия
@@ -84,12 +90,15 @@ npx opencode-patchline install --global --lang ru
 Удаление с предварительным просмотром или подтверждением:
 
 ```bash
-npx opencode-patchline uninstall --dry-run
-npx opencode-patchline uninstall
-npx opencode-patchline uninstall --global --yes
+npx --yes opencode-patchline@latest uninstall --dry-run
+npx --yes opencode-patchline@latest uninstall --lang ru
+npx --yes opencode-patchline@latest uninstall --global --yes
 ```
 
 Удаляются записи Patchline и добавленные установщиком LSP/runtime-компоненты.
+Прямые зависимости `opencode-patchline` удаляются из выбранного корня
+проекта/конфигурации и проектной `.opencode/`. Общий кэш OpenCode сохраняется,
+поскольку его могут использовать другие проекты; исходные checkout не удаляются.
 Остальные плагины сохраняются. Резервные копии конфигурации остаются рядом
 с исходными файлами. Подробнее: [установка и удаление](docs/operations/installation.md).
 

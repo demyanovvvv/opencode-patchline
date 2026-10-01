@@ -1,5 +1,5 @@
 import { constants } from "node:fs"
-import { copyFile, lstat, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises"
+import { copyFile, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
@@ -128,4 +128,27 @@ export async function saveState(file: string, state: unknown): Promise<void> {
 export async function removeState(file: string): Promise<void> {
   const snapshot = await readSnapshot(file)
   if (snapshot) { await assertCurrent(snapshot); await rm(file) }
+}
+
+export async function installHostBinary(source: string, target: string): Promise<string> {
+  const from = await lstat(source)
+  const to = await lstat(target)
+  if (!from.isFile() || from.isSymbolicLink() || !to.isFile() || to.isSymbolicLink()) throw new Error("Host binary must be a regular, non-symlink file.")
+  const parent = path.dirname(target)
+  if (path.normalize(await realpath(parent)) !== path.normalize(path.resolve(parent))) throw new Error("Symlink host directory.")
+  const before = await readFile(target)
+  const identity = await readFileIdentity(target)
+  const parentIdentity = await readFileIdentity(parent)
+  const temporary = path.join(parent, `.patchline-host-${randomUUID()}`)
+  const previous = `${target}.patchline-backup-${randomUUID()}`
+  await copyFile(source, temporary, constants.COPYFILE_EXCL)
+  try {
+    const current = await readFileIdentity(target)
+    const directory = await readFileIdentity(parent)
+    if (current.device !== identity.device || current.inode !== identity.inode || directory.device !== parentIdentity.device || directory.inode !== parentIdentity.inode || !(await readFile(target)).equals(before)) throw new Error("Host binary changed during installation.")
+    await rename(target, previous)
+    try { await rename(temporary, target) }
+    catch (error) { await rename(previous, target); throw error }
+    return previous
+  } finally { await rm(temporary, { force: true }) }
 }

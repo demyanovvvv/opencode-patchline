@@ -53,6 +53,7 @@ describe("Patchline installer", () => {
     const exitCode = await installPatchline({
       cwd: root,
       stateDirectory: root,
+      configDirectory: root,
       global: true,
       stdout: (line) => output.push(line),
       stderr: (line) => output.push(line),
@@ -80,6 +81,7 @@ describe("Patchline installer", () => {
     expect(await installPatchline({
       cwd: root,
       stateDirectory: root,
+      configDirectory: root,
       global: true,
       confirm: async () => false,
       hasCommand: async (command) => command !== "bun",
@@ -192,5 +194,16 @@ describe("Patchline installer", () => {
     expect(exitCode).toBe(0)
     expect(JSON.parse(await readFile(config, "utf8"))).toEqual({ plugin: ["other-plugin"] })
     expect(commands).toEqual([{ command: "npm", args: ["uninstall", "--save-dev", "typescript-language-server"] }])
+  })
+  it("deduplicates registrations after install and retains the existing options", async () => {
+    const root = await workspace("patchline-dedup-")
+    const config = path.join(root, "opencode.json")
+    const target = path.join(root, "opencode-patchline")
+    await writeFile(config, JSON.stringify({ plugin: ["other", [target, { mode: "precision", summary: true }], `${target}/`] }))
+    const code = await installPatchline({ cwd: root, packageName: target, stdout: () => undefined, stderr: () => undefined, hasCommand: async () => true,
+      runCommand: async () => { const data = JSON.parse(await readFile(config, "utf8")); data.plugin.push(target); await writeFile(config, JSON.stringify(data)); return 0 },
+    })
+    expect(code).toBe(0)
+    expect(JSON.parse(await readFile(config, "utf8")).plugin).toEqual(["other", [target, { mode: "precision", summary: true }]])
   })
 })

@@ -14,6 +14,66 @@ async function workspace() {
 }
 
 describe("installer lifecycle", () => {
+  it("forces replacement when installing over a pinned version", async () => {
+    const root = await workspace()
+    await writeFile(path.join(root, "opencode.json"), '{"plugin":["opencode-patchline@1.0.0","other"]}')
+    const commands: string[][] = []
+    expect(await installPatchline({
+      cwd: root, stdout: () => undefined, hasCommand: async () => true,
+      runCommand: async (command, args) => { commands.push([command, ...args]); return 0 },
+    })).toBe(0)
+    expect(commands[0]).toEqual(["opencode", "plugin", "opencode-patchline", "--force"])
+    expect(parse(await readFile(path.join(root, "opencode.json"), "utf8")).plugin).toEqual(["opencode-patchline", "other"])
+  })
+
+  it("removes the selected scope's direct Patchline package dependency", async () => {
+    const root = await workspace()
+    await mkdir(path.join(root, ".opencode"))
+    const directory = path.join(root, ".opencode")
+    await writeFile(path.join(directory, "package.json"), JSON.stringify({ dependencies: { "opencode-patchline": "1.0.0", other: "1.0.0" } }))
+    const commands: string[][] = []
+    expect(await uninstallPatchline({
+      cwd: root, yes: true, stdout: () => undefined,
+      runCommand: async (command, args) => { commands.push([command, ...args]); return 0 },
+    })).toBe(0)
+    expect(commands).toEqual([["npm", "uninstall", "--prefix", directory, "--ignore-scripts", "opencode-patchline"]])
+  })
+
+  it("rejects package changes during confirmation before invoking npm", async () => {
+    const root = await workspace()
+    const file = path.join(root, "package.json")
+    await writeFile(file, '{"dependencies":{"opencode-patchline":"1.0.0"}}')
+    let invoked = false
+    expect(await uninstallPatchline({
+      cwd: root, stdout: () => undefined, stderr: () => undefined,
+      confirm: async () => { await writeFile(file, '{"dependencies":{"other":"1.0.0"}}'); return true },
+      runCommand: async () => { invoked = true; return 0 },
+    })).toBe(1)
+    expect(invoked).toBe(false)
+  })
+
+  it("retains installer state when scoped package removal fails", async () => {
+    const root = await workspace()
+    await writeFile(path.join(root, "package.json"), '{"dependencies":{"opencode-patchline":"1.0.0"}}')
+    const state = path.join(root, ".opencode-patchline-state.json")
+    await writeFile(state, '{"scope":"project","language":"ru"}')
+    expect(await uninstallPatchline({
+      cwd: root, yes: true, stdout: () => undefined, stderr: () => undefined,
+      runCommand: async () => 7,
+    })).toBe(7)
+    expect(JSON.parse(await readFile(state, "utf8"))).toMatchObject({ scope: "project" })
+  })
+
+  it("previews scoped package cleanup without invoking npm", async () => {
+    const root = await workspace()
+    await writeFile(path.join(root, "package.json"), '{"devDependencies":{"opencode-patchline":"1.0.0"}}')
+    const lines: string[] = []
+    expect(await uninstallPatchline({
+      cwd: root, dryRun: true, stdout: (line) => lines.push(line),
+      runCommand: async () => { throw new Error("dry-run invoked npm") },
+    })).toBe(0)
+    expect(lines.join("\n")).toContain(path.join(root, "package.json"))
+  })
   it("restores previous configurations when OpenCode registration partially fails", async () => {
     const root = await workspace()
     await mkdir(path.join(root, ".opencode"))

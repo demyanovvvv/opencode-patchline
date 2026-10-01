@@ -20,7 +20,7 @@ describe("installer CLI", () => {
     const calls: string[][] = []
     expect(await runCli(["install", "--global", "--language", "ru", "--yes"], {
       stdout: (line) => output.push(line), stderr: () => undefined,
-      installer: { cwd: root, stateDirectory: root, hasCommand: async () => true, runCommand: async (_command, args) => { calls.push([...args]); return 0 } },
+      installer: { cwd: root, configDirectory: root, stateDirectory: root, hasCommand: async () => true, runCommand: async (_command, args) => { calls.push([...args]); return 0 } },
     })).toBe(0)
     expect(calls).toContainEqual(["plugin", "opencode-patchline", "--global"])
     expect(output.join("\n")).toContain("Установка")

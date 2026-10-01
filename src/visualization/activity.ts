@@ -162,7 +162,7 @@ export function patchlineActivity(calls: readonly ToolCall[]): ActivityView | un
     const label = kind === "mutation" ? stageLabels[stage] ?? "Processing changes" : activityLabel(call.tool, metadata, true)
     return { ...common, status: "running", label }
   }
-  if (call.state.status === "error" || metadata.validation === "failed") {
+  if (call.state.status === "error" || metadata.validation === "failed" || (kind === "diagnostics" && metadata.ok === false)) {
     const batch = call.tool === "patchline_edit_batch" || call.tool === "apply_patch"
     const rejected = writes === 0 && (metadata.stage === "permission" || metadata.stage === "preflight")
     return {

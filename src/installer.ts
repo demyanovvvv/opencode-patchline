@@ -1,8 +1,10 @@
 import { createInterface } from "node:readline/promises"
 import path from "node:path"
-import { applyEdits, createScanner, findNodeAtLocation, parse, parseTree, type ParseError } from "jsonc-parser"
+import { access, mkdir } from "node:fs/promises"
+import { fileURLToPath } from "node:url"
+import { applyEdits, createScanner, findNodeAtLocation, modify, parse, parseTree, type ParseError } from "jsonc-parser"
 import { executeCommand, type CommandResult } from "./installation/process.js"
-import { backup, commitConfigurations, configurationFiles, globalConfigDirectory, projectDirectory, readSnapshot, removeState, saveState } from "./installation/files.js"
+import { assertCurrent, backup, commitConfigurations, configurationFiles, globalConfigDirectory, installHostBinary, projectDirectory, readSnapshot, removeState, saveState } from "./installation/files.js"
 import { configureLsp, removeOwnedLsp, type OwnedLsp } from "./installation/lsp.js"
 
 // jsonc-parser declares SyntaxKind as an ambient const enum, incompatible with verbatimModuleSyntax.
@@ -202,7 +204,7 @@ async function confirmPrompt(message: string): Promise<boolean> {
 
 function isPatchlineValue(value: unknown, packageName: string): boolean {
   const specifier = Array.isArray(value) ? value[0] : value
-  return typeof specifier === "string" && (specifier === packageName || /^opencode-patchline(?:@[^/]+)?(?:\/(?:plugin|server|tui))?$/.test(specifier))
+  return typeof specifier === "string" && (specifier === packageName || /^opencode-patchline(?:@[^/]+)?(?:\/(?:plugin|server|tui))?$/.test(specifier) || /(?:^|[\\/])opencode-patchline(?:[\\/](?:dist[\\/])?(?:plugin|server|tui)(?:\.js)?)?[\\/]*$/.test(specifier))
 }
 
 export function removePatchlineEntries(source: string, packageName = PATCHLINE_PACKAGE): { text: string; removed: number } {
@@ -263,6 +265,7 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
 
   output(options, text.starting(packageName))
   output(options, text.scope(scope))
+  if (!options.runCommand) await ensureVisualHost(options)
   if (!options.runCommand || options.captureCommand) {
     const version = await capture(options, "opencode", ["--version"])
     if (version.code !== 0 || !/^1\.(?:18|19|[2-9]\d|\d{3,})\./.test(version.output)) {
@@ -276,6 +279,7 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
   }
   output(options, text.registering)
   const pluginArgs = ["plugin", packageName]
+  if (previousConfigs.some((file) => removePatchlineEntries(file.source, state.packageName ?? PATCHLINE_PACKAGE).removed > 0)) pluginArgs.push("--force")
   if (options.global) pluginArgs.push("--global")
   const pluginCode = await runCommand("opencode", pluginArgs)
   if (pluginCode !== 0) {
@@ -293,6 +297,24 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
     errorOutput(options, text.error(language === "ru" ? `Регистрация плагина завершилась с кодом ${pluginCode}.` : `OpenCode plugin registration failed with exit code ${pluginCode}.`))
     return pluginCode
   }
+  const deduplicated = (await configurationFiles(options)).flatMap((file) => {
+    const config = parse(file.source.replace(/^\uFEFF/, ""), [], { allowTrailingComma: true })
+    const plugins = config.plugin as unknown[] | undefined
+    if (!plugins?.some((entry) => isPatchlineValue(entry, packageName))) return []
+    const preferred = plugins.find((entry) => isPatchlineValue(entry, packageName) && Array.isArray(entry))
+    let kept = false
+    const entries = plugins.flatMap((entry) => {
+      if (!isPatchlineValue(entry, packageName)) return [entry]
+      if (kept) return []
+      kept = true
+      return [Array.isArray(preferred) ? [packageName, preferred[1]] : packageName]
+    })
+    const bom = file.source.startsWith("\uFEFF") ? "\uFEFF" : ""
+    const source = file.source.slice(bom.length)
+    const updated = bom + applyEdits(source, modify(source, ["plugin"], entries, { formattingOptions: { insertSpaces: true, tabSize: 2, eol: source.includes("\r\n") ? "\r\n" : "\n" } }))
+    return updated === file.source ? [] : [{ ...file, text: updated }]
+  })
+  await commitConfigurations(deduplicated, (file) => output(options, text.backup(file)))
   output(options, text.registered)
   const sameScope = state.scope === scope
   let lspConfig = state.lspConfig
@@ -377,6 +399,20 @@ export async function uninstallPatchline(rawOptions: InstallerOptions = {}): Pro
       const text = state.lspConfig?.file === file.path ? removeOwnedLsp(removed.text, state.lspConfig) : removed.text
       return { ...file, ...removed, text }
     }).filter((file) => file.text !== file.source)
+    const packageDirectories = new Set([configDirectoryOf(options)])
+    if (!options.global) packageDirectories.add(path.join(options.cwd!, ".opencode"))
+    const packageFiles = []
+    for (const directory of packageDirectories) {
+      const snapshot = await readSnapshot(path.join(directory, "package.json"))
+      if (!snapshot) continue
+      const manifest: unknown = JSON.parse(snapshot.source.replace(/^\uFEFF/, ""))
+      if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error(`Invalid package manifest: ${snapshot.path}`)
+      const record = manifest as Record<string, unknown>
+      if (["dependencies", "devDependencies", "optionalDependencies"].some((key) => {
+        const dependencies = record[key]
+        return dependencies && typeof dependencies === "object" && Object.hasOwn(dependencies, PATCHLINE_PACKAGE)
+      })) packageFiles.push(snapshot)
+    }
     const sameScope = state.scope === scopeOf(options)
     const ownedPackages = sameScope ? state.lspPackages ?? [] : []
     const ownedAddons = sameScope ? state.addonPackages ?? [] : []
@@ -384,16 +420,26 @@ export async function uninstallPatchline(rawOptions: InstallerOptions = {}): Pro
     for (const change of changes) output(options, `${text.dryRun}: ${change.path}`)
     if (ownedPackages.length) output(options, `${text.dryRun}: ${ownedPackages.join(", ")}`)
     if (ownedAddons.length) output(options, `${text.dryRun}: ${ownedAddons.join(", ")}`)
+    for (const file of packageFiles) output(options, `${text.dryRun}: ${file.path} (${PATCHLINE_PACKAGE})`)
     if (!ownedPackages.length && !ownedAddons.length) output(options, text.noDependencies)
     if (options.dryRun) return 0
-    if (changes.length || ownedPackages.length || ownedAddons.length) {
+    if (changes.length || ownedPackages.length || ownedAddons.length || packageFiles.length) {
       const prompt = language === "ru" ? "Удалить перечисленные компоненты Patchline?" : "Remove the listed Patchline components?"
       if (!options.yes && !await (options.confirm ?? confirmPrompt)(prompt)) {
         output(options, language === "ru" ? "Удаление отменено." : "Uninstallation cancelled.")
         return 0
       }
     }
+    for (const file of packageFiles) await assertCurrent(file)
     await commitConfigurations(changes, (file) => output(options, text.backup(file)))
+    for (const file of packageFiles) {
+      await assertCurrent(file)
+      const code = await run(options, "npm", ["uninstall", "--prefix", path.dirname(file.path), "--ignore-scripts", PATCHLINE_PACKAGE])
+      if (code !== 0) {
+        errorOutput(options, text.error(`npm uninstall ${PATCHLINE_PACKAGE}: ${code}`))
+        return code
+      }
+    }
     output(options, text.removed(changes.reduce((total, item) => total + item.removed, 0)))
     if (ownedPackages.length) {
       const args = ["uninstall", options.global ? "--global" : "--save-dev", ...ownedPackages]
@@ -419,4 +465,56 @@ export async function uninstallPatchline(rawOptions: InstallerOptions = {}): Pro
     errorOutput(rawOptions, messages[language].error(error instanceof Error ? error.message : String(error)))
     return 1
   }
+}
+
+async function ensureVisualHost(options: InstallerOptions): Promise<void> {
+  if (process.platform !== "win32" || process.arch !== "x64") throw new Error("Automatic conversation UI host installation currently requires Windows x64.")
+  const version = await executeCommand("opencode", ["--version"], options.cwd!)
+  if (version.code === 0 && version.output.includes("patchline-ui.1")) return
+  if (!options.yes && !await (options.confirm ?? confirmPrompt)("Install the Patchline-compatible OpenCode UI host and replace the opencode executable (with a backup)?")) throw new Error("Conversation UI host installation was declined; installation is incomplete.")
+  if ((await executeCommand("bun", ["--version"], options.cwd!).catch(() => ({ code: 1, output: "" }))).code !== 0) {
+    if ((await executeCommand("npm", ["install", "--global", "bun"], options.cwd!, true)).code !== 0) throw new Error("Bun is required to build the UI host.")
+  }
+  const packageRoot = fileURLToPath(new URL("..", import.meta.url))
+  let host = path.join(packageRoot, ".opencode-host")
+  try { await access(path.join(host, "packages", "tui", "src", "routes", "session", "index.tsx")) }
+  catch {
+    host = path.join(globalConfigDirectory(), "patchline-host-1.18.34")
+    await mkdir(path.dirname(host), { recursive: true })
+    try { await access(path.join(host, "package.json")) }
+    catch { if ((await executeCommand("git", ["clone", "--depth", "1", "--branch", "v1.18.34", "https://github.com/anomalyco/opencode.git", host], options.cwd!, true)).code !== 0) throw new Error("Could not prepare the OpenCode UI host.") }
+  }
+  const session = await readSnapshot(path.join(host, "packages", "tui", "src", "routes", "session", "index.tsx"))
+  if (!session) throw new Error("Missing OpenCode session renderer.")
+  if (!session.source.includes('name={`tool_${props.part.tool}`}')) {
+    const original = 'function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMessage }) {'
+    const start = session.source.indexOf(original)
+    const end = session.source.indexOf("type ToolProps =", start)
+    if (start < 0 || end < 0) throw new Error("Unsupported OpenCode tool renderer; UI host not changed.")
+    const block = session.source.slice(start, end)
+    const newline = session.source.includes("\r\n") ? "\r\n" : "\n"
+    const replaced = block.replace("  const ctx = use()", `  const ctx = use()${newline}  const pluginRuntime = usePluginRuntime()`)
+      .replace("      <Switch>", `      <pluginRuntime.Slot name={\`tool_\${props.part.tool}\`} mode="replace" part={props.part} message={props.message} last={props.last}>${newline}      <Switch>`)
+      .replace("      </Switch>", `      </Switch>${newline}      </pluginRuntime.Slot>`)
+    await commitConfigurations([{ ...session, text: session.source.slice(0, start) + replaced + session.source.slice(end) }], (file) => output(options, `Backup: ${file}`))
+  }
+  output(options, "Installing/updating the OpenCode conversation UI host (this may take several minutes).")
+  if ((await executeCommand("bun", ["install", "--ignore-scripts"], host, true)).code !== 0) throw new Error("UI host dependencies failed to install.")
+  const buildDirectory = path.join(host, "packages", "opencode")
+  if ((await executeCommand("bun", ["run", "script/build.ts", "--single", "--skip-install", "--skip-embed-web-ui"], buildDirectory, true, { OPENCODE_VERSION: "1.18.34-patchline-ui.1" })).code !== 0) throw new Error("UI host build failed.")
+  const binary = path.join(buildDirectory, "dist", "opencode-windows-x64", "bin", "opencode.exe")
+  const target = await resolveInstalledOpenCode()
+  const previous = await installHostBinary(binary, target)
+  output(options, `OpenCode UI host installed. Backup: ${previous}`)
+  const installed = await executeCommand("opencode", ["--version"], options.cwd!)
+  if (installed.code !== 0 || !installed.output.includes("patchline-ui.1")) throw new Error("The opencode command does not resolve to the installed UI host.")
+}
+
+async function resolveInstalledOpenCode(): Promise<string> {
+  for (const directory of (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
+    for (const target of [path.join(directory, "opencode.exe"), path.join(directory, "node_modules", "opencode-ai", "bin", "opencode.exe")]) {
+      try { await access(target); return target } catch { /* try the next launcher */ }
+    }
+  }
+  throw new Error("Could not locate the installed OpenCode binary.")
 }

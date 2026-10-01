@@ -71,3 +71,7 @@ describe("Patchline activity presentation", () => {
     expect(activity?.files).toMatchObject([{ path: "src/a.ts", additions: 1, deletions: 1, truncated: false, lines: [{ kind: "hunk", text: "@@ -1 +1 @@" }, { kind: "removed", text: "-before" }, { kind: "added", text: "+after" }] }])
   })
 })
+
+it("shows failed diagnostics as failure even when execution returns normally", () => {
+  expect(patchlineActivity([{ tool: "patchline_diagnostics", state: { status: "completed", metadata: { kind: "diagnostics", ok: false, exitCode: 1 } } }])).toMatchObject({ status: "failed" })
+})
