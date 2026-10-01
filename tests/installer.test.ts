@@ -14,9 +14,32 @@ import {
   installPatchline,
   removePatchlineEntries,
   uninstallPatchline,
+  protectVisualHostUpdates,
+  resolveInstalledOpenCode,
 } from "../src/installer.js"
 
 describe("Patchline installer", () => {
+  it("protects the custom UI host from automatic stock replacement without overwriting explicit preferences", async () => {
+    const root = await workspace("patchline-host-update-")
+    const file = path.join(root, "opencode.jsonc")
+    await writeFile(file, '{\n  // retain user configuration\n  "plugin": ["other"]\n}\n')
+    await protectVisualHostUpdates(file)
+    const updated = await readFile(file, "utf8")
+    expect(updated).toContain('// retain user configuration')
+    expect(updated).toContain('"autoupdate": "notify"')
+    expect(updated).toContain('"other"')
+    for (const value of [true, false, "notify"]) {
+      await writeFile(file, JSON.stringify({ autoupdate: value, plugin: ["other"] }))
+      await protectVisualHostUpdates(file)
+      expect(JSON.parse(await readFile(file, "utf8")).autoupdate).toBe(value === true ? "notify" : value)
+    }
+  })
+
+  it("resolves a canonical installed host path", async () => {
+    const root = await workspace("patchline-host-path-")
+    await writeFile(path.join(root, "opencode.exe"), "host")
+    expect(await resolveInstalledOpenCode(root)).toBe(path.join(root, "opencode.exe"))
+  })
   it("installs missing LSP dependencies only after confirmation and localizes installer output", async () => {
     const root = await workspace("patchline-installer-test-")
     const output: string[] = []

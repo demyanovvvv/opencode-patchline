@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline/promises"
 import path from "node:path"
-import { access, mkdir } from "node:fs/promises"
+import { access, mkdir, realpath } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { applyEdits, createScanner, findNodeAtLocation, modify, parse, parseTree, type ParseError } from "jsonc-parser"
 import { executeCommand, type CommandResult } from "./installation/process.js"
@@ -467,8 +467,26 @@ export async function uninstallPatchline(rawOptions: InstallerOptions = {}): Pro
   }
 }
 
+export async function protectVisualHostUpdates(file: string): Promise<void> {
+  const snapshot = await readSnapshot(file)
+  if (!snapshot) throw new Error(`OpenCode global configuration not found: ${file}`)
+  const bom = snapshot.source.startsWith("\uFEFF") ? "\uFEFF" : ""
+  const source = snapshot.source.slice(bom.length)
+  const errors: ParseError[] = []
+  const config: unknown = parse(source, errors, { allowTrailingComma: true })
+  if (errors.length || !config || typeof config !== "object" || Array.isArray(config)) throw new Error("Invalid OpenCode JSON/JSONC configuration.")
+  const preference = (config as Record<string, unknown>).autoupdate
+  if (preference === false || preference === "notify") return
+  const text = bom + applyEdits(source, modify(source, ["autoupdate"], "notify", { formattingOptions: { insertSpaces: true, tabSize: 2, eol: source.includes("\r\n") ? "\r\n" : "\n" } }))
+  await commitConfigurations([{ ...snapshot, text }], () => {})
+}
+
 async function ensureVisualHost(options: InstallerOptions): Promise<void> {
   if (process.platform !== "win32" || process.arch !== "x64") throw new Error("Automatic conversation UI host installation currently requires Windows x64.")
+  const globalFiles = await configurationFiles({ ...options, cwd: options.cwd!, global: true })
+  const serverConfig = globalFiles.find((file) => /^opencode\.jsonc?$/.test(path.basename(file.path)))
+  if (!serverConfig) throw new Error("An OpenCode global configuration is required to protect the custom UI host from automatic replacement.")
+  await protectVisualHostUpdates(serverConfig.path)
   const version = await executeCommand("opencode", ["--version"], options.cwd!)
   if (version.code === 0 && version.output.includes("patchline-ui.1")) return
   if (!options.yes && !await (options.confirm ?? confirmPrompt)("Install the Patchline-compatible OpenCode UI host and replace the opencode executable (with a backup)?")) throw new Error("Conversation UI host installation was declined; installation is incomplete.")
@@ -510,10 +528,10 @@ async function ensureVisualHost(options: InstallerOptions): Promise<void> {
   if (installed.code !== 0 || !installed.output.includes("patchline-ui.1")) throw new Error("The opencode command does not resolve to the installed UI host.")
 }
 
-async function resolveInstalledOpenCode(): Promise<string> {
-  for (const directory of (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
+export async function resolveInstalledOpenCode(searchPath = process.env.PATH ?? ""): Promise<string> {
+  for (const directory of searchPath.split(path.delimiter).filter(Boolean)) {
     for (const target of [path.join(directory, "opencode.exe"), path.join(directory, "node_modules", "opencode-ai", "bin", "opencode.exe")]) {
-      try { await access(target); return target } catch { /* try the next launcher */ }
+      try { await access(target); return await realpath(target) } catch { /* try the next launcher */ }
     }
   }
   throw new Error("Could not locate the installed OpenCode binary.")

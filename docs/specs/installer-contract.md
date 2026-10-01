@@ -29,6 +29,13 @@ argument and preserve the subprocess exit code and caller's working directory.
 They require Node.js and npx; npm's `--yes` only approves fetching the CLI, while
 installer confirmations require a separately forwarded `--yes`.
 
+When `install.ps1` is beside a Patchline source checkout (`src/cli.ts` and a
+`package.json` named `opencode-patchline`), it instead invokes the adjacent
+`dist/cli.js` using Node.js with `install --local`, forwarding all arguments and
+preserving the caller's working directory and exit code. A missing build fails
+with instructions to run `npm install` and `npm run build`, without registry
+lookup. Standalone downloaded wrappers retain the published-package behavior.
+
 On Windows x64, installation also provisions the conversation UI host based on
 OpenCode 1.18.34. It installs Bun when missing, prepares the pinned OpenCode
 checkout (Git is required when no local checkout exists), adds tool replacement
@@ -41,8 +48,14 @@ UI installation. Removing Patchline does not restore or delete the shared host.
 
 After registration, all recognized historical Patchline package/local paths are
 collapsed to one selected package entry per config, preserving tuple options.
-Similarly named third-party packages are retained. A stock OpenCode upgrade can
-replace the host; rerunning the installer restores UI support.
+Similarly named third-party packages are retained. Before provisioning (including
+the already-installed fast path), the installer changes global `autoupdate` from
+missing/true to `"notify"`, preserving false/notify and unrelated JSONC content,
+with guarded writes and backups. This prevents OpenCode's startup updater from
+replacing the custom version with stock; explicit upgrades can still replace it.
+The preference is retained on uninstall. Existing global configuration is
+required for provisioning. Executable discovery canonicalizes the located path
+(including NVM aliases) before regular-file, parent and identity checks.
 
 The scope-specific state records the registered package specifier, language and
 allowlisted installer-owned additions. Missing state never authorizes arbitrary

@@ -35,6 +35,11 @@ sh /path/to/uninstall.sh --dry-run --lang ru
 
 Add `--global` for global scope or `--yes` to accept installer prompts. The
 scripts fetch the latest published CLI using npx and preserve its exit code.
+When `install.ps1` is run from a Patchline source checkout, it uses the adjacent
+built CLI and registers that checkout with `--local` instead. Run `npm install`
+and `npm run build` in the checkout before using it; no published Patchline
+package is required for this path. The target scope still follows the caller's
+working directory (or `--global`).
 The existing automatic conversation UI host provisioning supports Windows x64;
 the shell wrappers do not extend that host's platform support.
 
