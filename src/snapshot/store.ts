@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import { xxh32 } from "@node-rs/xxhash"
+import { PatchlineError } from "../errors.js"
 import type { TextDocument } from "../preservation/text.js"
 import { normalizedIdentity } from "../workspace/paths.js"
 
@@ -29,6 +30,7 @@ export type FileSnapshot = SnapshotScope & {
 export type SnapshotStoreOptions = {
   ttlMs?: number
   maxSnapshots?: number
+  maxBytes?: number
   now?: () => number
 }
 
@@ -47,14 +49,38 @@ function scopeKey(scope: SnapshotScope, canonicalPath: string, tag: string): str
 
 export class ScopedSnapshotStore {
   readonly #snapshots = new Map<string, FileSnapshot>()
+  readonly #tags = new Map<string, Set<string>>()
+  readonly #ids = new Map<string, Set<string>>()
   readonly #ttlMs: number
   readonly #maxSnapshots: number
+  readonly #maxBytes: number
+  readonly #documents = new Map<string, { document: TextDocument; refs: number; bytes: number }>()
+  #bytes = 0
   readonly #now: () => number
 
   constructor(options: SnapshotStoreOptions = {}) {
     this.#ttlMs = options.ttlMs ?? 60 * 60 * 1_000
     this.#maxSnapshots = options.maxSnapshots ?? 512
+    this.#maxBytes = options.maxBytes ?? 128 * 1024 * 1024
     this.#now = options.now ?? Date.now
+  }
+
+  #remove(key: string): void {
+    const snapshot = this.#snapshots.get(key)
+    if (!snapshot) return
+    this.#snapshots.delete(key)
+    const pooled = this.#documents.get(snapshot.rawDigest)
+    if (pooled && --pooled.refs === 0) {
+      this.#bytes -= pooled.bytes
+      this.#documents.delete(snapshot.rawDigest)
+    }
+    const tagKey = scopeKey(snapshot, snapshot.canonicalPath, snapshot.tag)
+    const idKey = scopeKey(snapshot, snapshot.canonicalPath, snapshot.id)
+    for (const [index, indexKey] of [[this.#tags, tagKey], [this.#ids, idKey]] as const) {
+      const keys = index.get(indexKey)
+      keys?.delete(key)
+      if (keys?.size === 0) index.delete(indexKey)
+    }
   }
 
   record(
@@ -67,17 +93,26 @@ export class ScopedSnapshotStore {
   ): FileSnapshot {
     this.cleanup()
     const tag = hashlineTag(document.normalizedText)
-    const key = scopeKey(scope, canonicalPath, tag)
+    const rawDigest = digestBytes(document.bytes)
+    const key = `${scopeKey(scope, canonicalPath, tag)}\0${rawDigest}`
     const existing = this.#snapshots.get(key)
+    let pooled = this.#documents.get(rawDigest)
+    if (!pooled) {
+      pooled = { document, refs: 0, bytes: document.bytes.byteLength + 2 * document.text.length + (document.text === document.normalizedText ? 0 : 2 * document.normalizedText.length) }
+      this.#documents.set(rawDigest, pooled)
+      this.#bytes += pooled.bytes
+    }
+    if (!existing) pooled.refs++
+    document = pooled.document
     const combined = new Set(existing?.seenLines ?? [])
     for (const line of seenLines) combined.add(line)
     const snapshot: FileSnapshot = {
       ...scope,
-      id: `${tag}-${digestBytes(document.bytes).slice(0, 12)}`,
+      id: `${tag}-${rawDigest.slice(0, 12)}`,
       tag,
       canonicalPath,
       relativePath,
-      rawDigest: digestBytes(document.bytes),
+      rawDigest,
       text: document.normalizedText,
       seenLines: combined,
       document,
@@ -86,29 +121,36 @@ export class ScopedSnapshotStore {
     }
     this.#snapshots.delete(key)
     this.#snapshots.set(key, snapshot)
-    while (this.#snapshots.size > this.#maxSnapshots) {
+    const tagKey = scopeKey(scope, canonicalPath, tag)
+    const idKey = scopeKey(scope, canonicalPath, snapshot.id)
+    if (!this.#tags.has(tagKey)) this.#tags.set(tagKey, new Set())
+    if (!this.#ids.has(idKey)) this.#ids.set(idKey, new Set())
+    this.#tags.get(tagKey)!.add(key)
+    this.#ids.get(idKey)!.add(key)
+    while (this.#snapshots.size > this.#maxSnapshots || this.#bytes > this.#maxBytes) {
       const oldest = this.#snapshots.keys().next().value as string | undefined
       if (oldest === undefined) break
-      this.#snapshots.delete(oldest)
+      this.#remove(oldest)
     }
     return snapshot
   }
 
   get(scope: SnapshotScope, canonicalPath: string, idOrTag: string): FileSnapshot | undefined {
     this.cleanup()
-    for (const [key, snapshot] of this.#snapshots) {
-      if (
-        snapshot.sessionId === scope.sessionId &&
-        normalizedIdentity(snapshot.worktree) === normalizedIdentity(scope.worktree) &&
-        normalizedIdentity(snapshot.canonicalPath) === normalizedIdentity(canonicalPath) &&
-        (snapshot.id === idOrTag || snapshot.tag === idOrTag)
-      ) {
-        this.#snapshots.delete(key)
-        this.#snapshots.set(key, snapshot)
-        return snapshot
-      }
+    const candidates = this.#ids.get(scopeKey(scope, canonicalPath, idOrTag))
+      ?? this.#tags.get(scopeKey(scope, canonicalPath, idOrTag.toUpperCase()))
+    if (!candidates?.size) return undefined
+    if (candidates.size !== 1) {
+      throw new PatchlineError("INVALID_ANCHOR", `Hashline tag ${idOrTag} is ambiguous for this file. Re-read and use the full snapshot ID.`, {
+        snapshotId: idOrTag,
+        retryable: true,
+      })
     }
-    return undefined
+    const key = candidates.values().next().value!
+    const snapshot = this.#snapshots.get(key)!
+    this.#snapshots.delete(key)
+    this.#snapshots.set(key, snapshot)
+    return snapshot
   }
 
   invalidate(canonicalPath: string, scope?: SnapshotScope): void {
@@ -119,12 +161,16 @@ export class ScopedSnapshotStore {
           snapshot.sessionId === scope.sessionId &&
           normalizedIdentity(snapshot.worktree) === normalizedIdentity(scope.worktree)
         ))
-      ) this.#snapshots.delete(key)
+      ) this.#remove(key)
     }
   }
 
   clear(): void {
     this.#snapshots.clear()
+    this.#tags.clear()
+    this.#ids.clear()
+    this.#documents.clear()
+    this.#bytes = 0
   }
 
   cleanup(): number {
@@ -132,7 +178,7 @@ export class ScopedSnapshotStore {
     let removed = 0
     for (const [key, snapshot] of this.#snapshots) {
       if (snapshot.recordedAt < expiresBefore) {
-        this.#snapshots.delete(key)
+        this.#remove(key)
         removed++
       }
     }
@@ -141,5 +187,9 @@ export class ScopedSnapshotStore {
 
   get size(): number {
     return this.#snapshots.size
+  }
+
+  get bytes(): number {
+    return this.#bytes
   }
 }

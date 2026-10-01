@@ -4,7 +4,8 @@
 ast-grep, filesystem round trips, stale rejection prerequisites, CRLF, BOM,
 native LSP flags, and a TypeScript LSP setup check. On Node.js, the Bun-native
 upstream Hashline adapter is an optional capability; exact snapshot edits remain
-available. It does not modify OpenCode configuration.
+available. The check distinguishes the Node fallback from the full Bun/native
+Hashline runtime. It does not modify OpenCode configuration.
 
 Use `opencode-patchline doctor --lsp` or `opencode-patchline lsp check` for an
 interactive setup guide. Add `--json` to receive the guide and the suggested

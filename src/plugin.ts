@@ -1,14 +1,18 @@
 import path from "node:path"
+import { diffPreview, DIFF_PREVIEW_BUDGET } from "./visualization/diff-preview.js"
+import { diffStats } from "./editing/diff.js"
+import { editFiles } from "./visualization/edit-files.js"
 import type { Plugin, PluginModule, ToolContext } from "@opencode-ai/plugin"
 import { tool } from "@opencode-ai/plugin"
 import { parseConfig } from "./config.js"
 import { EditService, type EditRequest } from "./edit-service.js"
+import { parseHashlinePatch } from "./editing/hashline-adapter.js"
 import { errorMessage, PatchlineError } from "./errors.js"
 import { looksLikeDirectShellWrite } from "./guards/files.js"
 import { ReadService } from "./read-service.js"
 import { astSearchFile } from "./search/ast.js"
 import { grepWorkspace } from "./search/grep.js"
-import { runOpenCodeLspBridge } from "./search/lsp.js"
+import { runOpenCodeLspBridge, runOpenCodeLspClient } from "./search/lsp.js"
 import { routeSearch } from "./search/router.js"
 import { ScopedSnapshotStore } from "./snapshot/store.js"
 import { LocalMetrics } from "./telemetry/metrics.js"
@@ -20,11 +24,13 @@ import { resolveWorkspacePath } from "./workspace/paths.js"
 const MAX_SEARCH_OUTPUT_CHARS = 20_000
 const MAX_PATCH_INPUT_BYTES = 8 * 1024 * 1024
 
-function boundedSearchOutput(output: string): string {
-  if (output.length > MAX_SEARCH_OUTPUT_CHARS) {
-    throw new PatchlineError("INVALID_ARGUMENT", "Search output exceeds the 20,000-character limit.")
-  }
-  return output
+function boundedSearchOutput(output: string, notice = ""): string {
+  const complete = `${output}${notice}`
+  if (complete.length <= MAX_SEARCH_OUTPUT_CHARS) return complete
+  const suffix = `\nResults truncated. Narrow path, include, or maxResults.${notice}`
+  const limit = MAX_SEARCH_OUTPUT_CHARS - suffix.length
+  const end = output.lastIndexOf("\n", limit)
+  return `${end >= 0 ? output.slice(0, end) : ""}${suffix}`
 }
 
 function boundedMutationOutput(output: string): string {
@@ -38,11 +44,31 @@ const POLICY = `PATCHLINE EDITING POLICY
 - Locate before broad reads; use LSP for symbols, grep for text, and AST for structure.
 - Read the smallest useful source range.
 - Existing files require snapshot-anchored edit; never rewrite one for a local change.
+- Use Hashline sections: [PATH#TAG], PUT ranges or blocks, PUT gaps, CUT, registers, REM, and MV.
+- Line numbers refer to the original snapshot; every section requires the tag returned by read.
 - Preserve unrelated code and formatting. If a snapshot is stale, reread before retrying.
 - Run relevant diagnostics and proportional validation after edits.`
 
 function scope(context: ToolContext) {
   return { sessionId: context.sessionID, worktree: context.worktree }
+}
+
+function progress(context: ToolContext, stage: string, title: string, details: Record<string, unknown> = {}): void {
+  context.metadata({ title, metadata: { stage, status: "running", ...details } })
+}
+
+function failure(context: ToolContext, error: unknown, stage: string, filePath?: string, details: Record<string, unknown> = {}): void {
+  const issue = error instanceof PatchlineError ? error : undefined
+  context.metadata({
+    title: filePath ?? issue?.path ?? "Patchline",
+    metadata: {
+      status: "failed", stage, code: issue?.code ?? "UNEXPECTED_ERROR", path: issue?.path ?? filePath,
+      reason: issue?.message ?? errorMessage(error), recoveryAction: issue?.recoveryAction,
+      writes: stage === "permission" || stage === "preflight" ? 0 : issue && issue.writes > 0 ? issue.writes : undefined,
+      restored: issue?.details?.restored, conflicts: issue?.details?.conflicts, retryable: issue?.retryable,
+      ...details,
+    },
+  })
 }
 
 function toolError(error: unknown): Error {
@@ -65,16 +91,10 @@ function parseApplyPatchPaths(patchText: string): string[] {
   return paths
 }
 
-function splitHashlineSections(patchText: string): Array<{ path: string; tag: string; patch: string }> {
-  const headers = [...patchText.matchAll(/^\[([^\]\r\n]+)#([A-Fa-f0-9]{4})\]\s*$/gm)]
-  if (headers.length > 0 && patchText.slice(0, headers[0]!.index).trim()) {
-    throw new PatchlineError("INVALID_ARGUMENT", "Hashline patch must not contain content before its first section header.")
-  }
-  return headers.map((header, index) => ({
-    path: header[1]!,
-    tag: header[2]!,
-    patch: patchText.slice(header.index, headers[index + 1]?.index ?? patchText.length).trim(),
-  }))
+async function splitHashlineSections(patchText: string) {
+  if (!/^\[/m.test(patchText)) return []
+  if (patchText.trimStart()[0] !== "[") throw new PatchlineError("INVALID_ARGUMENT", "Hashline patch must not contain content before its first section header.")
+  return parseHashlinePatch(patchText)
 }
 
 function parseNewFilePatch(patchText: string): Array<{ path: string; content: string }> {
@@ -111,11 +131,24 @@ function parseNewFilePatch(patchText: string): Array<{ path: string; content: st
 export const PatchlinePlugin: Plugin = async (input, options) => {
   const config = parseConfig(options ?? {})
   if (config.mode === "disabled") return {}
-  const snapshots = new ScopedSnapshotStore({ ttlMs: config.snapshotTtlMs, maxSnapshots: config.maxSnapshots })
+  const snapshots = new ScopedSnapshotStore({ ttlMs: config.snapshotTtlMs, maxSnapshots: config.maxSnapshots, maxBytes: config.maxSnapshotBytes })
   const reads = new ReadService(snapshots, config.maxInitialReadLines)
-  const edits = new EditService(snapshots)
+  const edits = new EditService(snapshots, config)
   const writes = new WriteService(config)
   const metrics = new LocalMetrics({ enabled: config.telemetry })
+
+  async function validateMutation(context: ToolContext, paths: readonly string[]) {
+    const commands = [...new Set(paths.map((filePath) => validationCommand(filePath, config)).filter((command): command is string => command !== undefined))]
+    if (commands.length === 0) return { validation: "not_configured", diagnostics: undefined, reason: undefined }
+    let ok = true
+    const failures: string[] = []
+    for (const command of commands) {
+      await context.ask({ permission: "bash", patterns: [command], always: ["*"], metadata: { command, reason: "post-edit validation" } })
+      const diagnostic = await runDiagnosticCommand(command, context.worktree, 120_000, config.maxDiagnostics, context.abort)
+      if (!diagnostic.ok) { ok = false; failures.push(diagnostic.output) }
+    }
+    return { validation: ok ? "passed" : "failed", diagnostics: ok, reason: ok ? undefined : boundedMutationOutput(`Validation failed: ${failures.join("\n")}`) }
+  }
 
   const readTool = tool({
     description: "Read a minimal existing source range and create a Patchline snapshot with stable line anchors.",
@@ -176,31 +209,36 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
       const exact = args.hashlinePatch === undefined && args.oldString !== undefined && args.newString !== undefined
         ? { oldString: args.oldString, newString: args.newString, replaceAll: args.replaceAll }
         : undefined
+      let stage = "permission"
+      let applied: Record<string, unknown> = {}
       try {
+        progress(context, stage, args.filePath, { path: args.filePath })
         await context.ask({ permission: "edit", patterns: [args.filePath], always: ["*"] , metadata: { path: args.filePath } })
-        const result = await edits.edit({ ...scope(context), filePath: args.filePath, snapshot: args.snapshot, exact, hashlinePatch: args.hashlinePatch })
+        stage = "preflight"
+        progress(context, stage, args.filePath, { path: args.filePath })
+        const result = await edits.edit({ ...scope(context), filePath: args.filePath, snapshot: args.snapshot, exact, hashlinePatch: args.hashlinePatch }, (nextStage) => {
+          stage = nextStage
+          progress(context, stage, args.filePath, { path: args.filePath })
+        }, context.abort)
+        applied = { path: result.path, writes: 1, diff: result.diff, diffTruncated: result.diffTruncated, added: result.added, deleted: result.deleted, snapshot: result.snapshot, bytesWritten: result.bytesWritten }
+        stage = "validation"
+        progress(context, stage, result.path, applied)
         metrics.record({ name: "edit", path: result.path, added: result.added, deleted: result.deleted })
-             const command = validationCommand(result.path, config)
-             if (command) {
-               await context.ask({ permission: "bash", patterns: [command], always: ["*"], metadata: { command, reason: "post-edit validation" } })
-             }
-             const diagnostic = command ? await runDiagnosticCommand(command, context.worktree, 120_000, config.maxDiagnostics, context.abort) : undefined
+        const validation = await validateMutation(context, [result.path])
         return {
           title: result.path,
-          output: `${result.output}\nDiagnostics: ${diagnostic ? (diagnostic.ok ? "clean" : `failed\n${diagnostic.output}`) : "not configured; OpenCode native diagnostics may run"}`,
-           metadata: {
-             status: "applied",
-             recoveryAction: "Use the returned snapshot for the next edit.",
-             added: result.added,
-             deleted: result.deleted,
-             bytesWritten: result.bytesWritten,
-             snapshot: result.snapshot,
-             diagnostics: diagnostic?.ok,
-             validation: diagnostic === undefined ? "not_configured" : diagnostic.ok ? "passed" : "failed",
-           },
+          output: `${result.output}\nDiagnostics: ${validation.validation === "not_configured" ? "not configured; OpenCode native diagnostics may run" : validation.reason ?? "clean"}`,
+          metadata: {
+            ...applied,
+            status: "applied",
+            stage: "completed",
+            recoveryAction: "Use the returned snapshot for the next edit.",
+            ...validation,
+          },
         }
       } catch (error) {
         if (error instanceof PatchlineError && error.code === "STALE_SNAPSHOT") metrics.record({ name: "stale_conflict", path: error.path })
+        failure(context, error, stage, args.filePath, { ...applied, ...(stage === "validation" ? { validation: "failed", recoveryAction: "Changes were applied. Inspect diagnostics and re-read before retrying." } : {}) })
         return Promise.reject(toolError(error))
       }
     },
@@ -210,15 +248,23 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
     description: "Create a new file. Existing source files are protected and require Patchline edit.",
     args: { filePath: tool.schema.string(), content: tool.schema.string() },
     async execute(args, context) {
+      let stage = "permission"
       try {
+        progress(context, stage, args.filePath, { path: args.filePath })
         await context.ask({ permission: "edit", patterns: [args.filePath], always: ["*"] , metadata: { path: args.filePath } })
-        const result = await writes.write({ worktree: context.worktree, ...args })
-        metrics.record({ name: "write", path: result.path, bytes: args.content.length })
+        stage = "preflight"
+        progress(context, stage, args.filePath, { path: args.filePath })
+        const result = await writes.write({ worktree: context.worktree, ...args }, context.abort)
+        metrics.record({ name: "write", path: result.path, bytes: result.bytesWritten })
+        stage = "validation"
+        progress(context, stage, result.path, { writes: 1, path: result.path })
+        const validation = await validateMutation(context, [result.path])
         return {
           title: result.path,
-          output: result.output,
+          output: `${result.output}${validation.reason ? `\n${validation.reason}` : ""}`,
           metadata: {
-            status: "applied",
+            status: "applied", stage: "completed", writes: 1, path: result.path, paths: [result.path],
+            ...validation,
             recoveryAction: "Read the new file before editing it.",
             created: result.created,
             bytesWritten: result.bytesWritten,
@@ -226,6 +272,8 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         }
       } catch (error) {
         if (error instanceof PatchlineError && error.code === "WRITE_PROTECTED") metrics.record({ name: "write_prevented", path: error.path })
+        if (error instanceof PatchlineError && error.writes > 0) stage = "rollback"
+        failure(context, error, stage, args.filePath, { paths: [args.filePath], ...(stage === "validation" ? { writes: 1, status: "applied", validation: "failed", recoveryAction: "Changes were applied. Inspect diagnostics and re-read before retrying." } : {}) })
         return Promise.reject(toolError(error))
       }
     },
@@ -238,35 +286,67 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         edit: editTool,
         write: writeTool,
         apply_patch: tool({
-        description: "Apply one or more Hashline sections linked to snapshots returned by read. Existing files require [PATH#TAG] and PUT/CUT operations.",
+        description: "Apply one or more upstream Hashline sections linked to snapshots returned by read. Supports PUT ranges/gaps/structural blocks, CUT and named registers, same-path merges, REM, and MV. Existing files require [PATH#TAG]; line numbers refer to the original snapshot.",
         args: { patchText: tool.schema.string() },
         async execute(args, context) {
+          let stage = "preflight"
+          let paths: string[] = []
+          let applied: Record<string, unknown> = {}
+          const observe = (nextStage: string) => {
+            stage = nextStage
+            progress(context, stage, "Patchline · patch", { paths })
+          }
+          try {
+            progress(context, stage, "Patchline · patch")
           if (Buffer.byteLength(args.patchText, "utf8") > MAX_PATCH_INPUT_BYTES) {
             throw new PatchlineError("INVALID_ARGUMENT", "Patch input exceeds the 8 MiB limit.")
           }
-          const sections = splitHashlineSections(args.patchText)
+          const sections = await splitHashlineSections(args.patchText)
           if (sections.length === 0) {
             if (!config.applyPatchFallback) {
               throw new PatchlineError("FALLBACK_REJECTED", "Classic apply_patch fallback is disabled. Use a snapshot-tagged Hashline section for existing files or enable applyPatchFallback.")
             }
             metrics.record({ name: "fallback" })
             const files = parseNewFilePatch(args.patchText)
+            paths = files.map((file) => file.path)
             if (files.length === 0) throw new PatchlineError("INVALID_ARGUMENT", "Expected Hashline sections or classic new-file sections.")
+            stage = "permission"
+            progress(context, stage, `Patchline · ${files.length} new files`, { paths: files.map((file) => file.path) })
             await context.ask({ permission: "edit", patterns: files.map((file) => file.path), always: ["*"], metadata: { paths: files.map((file) => file.path) } })
-            const created = await writes.createBatch(files.map((file) => ({ worktree: context.worktree, filePath: file.path, content: file.content })))
+            stage = "preflight"
+            progress(context, stage, `Patchline · ${files.length} new files`, { paths: files.map((file) => file.path) })
+            let remaining = DIFF_PREVIEW_BUDGET
+            const previews = files.map((file) => {
+              const preview = remaining > 0 ? diffPreview("/dev/null", `b/${file.path}`, "", file.content, remaining) : { patch: "", truncated: true }
+              remaining -= preview.patch.length
+              return { type: "add", path: file.path, relativePath: file.path, filePath: path.resolve(context.worktree, file.path), patch: preview.patch, diffTruncated: preview.truncated, additions: diffStats("", file.content).added, deletions: 0 }
+            })
+            const created = await writes.createBatch(files.map((file) => ({ worktree: context.worktree, filePath: file.path, content: file.content })), observe, context.abort)
             for (const result of created) metrics.record({ name: "write", path: result.path })
-            return boundedMutationOutput(created.map((result) => result.output).join("\n"))
+            applied = { writes: created.length, files: previews, added: previews.reduce((sum, file) => sum + file.additions, 0), deleted: 0 }
+            stage = "validation"
+            progress(context, stage, "Patchline · validation", { paths, ...applied })
+            const validation = await validateMutation(context, paths)
+            return { title: `Patchline · ${created.length} created`, output: boundedMutationOutput(`${created.map((result) => result.output).join("\n")}${validation.reason ? `\n${validation.reason}` : ""}`), metadata: { status: "applied", stage: "completed", paths, ...applied, ...validation } }
           }
-          await context.ask({ permission: "edit", patterns: sections.map((section) => section.path), always: ["*"] , metadata: { paths: sections.map((section) => section.path) } })
-          const requests: EditRequest[] = sections.map((section) => ({
-            ...scope(context),
-            filePath: section.path,
-            snapshot: section.tag,
-            hashlinePatch: section.patch,
-          }))
-          const results = await edits.editBatch(requests)
+          paths = [...new Set(sections.flatMap((section) => [section.path, ...(section.fileOp?.kind === "move" ? [section.fileOp.dest] : [])]))]
+          stage = "permission"
+          progress(context, stage, `Patchline · ${sections.length} sections`, { paths })
+          await context.ask({ permission: "edit", patterns: paths, always: ["*"], metadata: { paths } })
+          stage = "preflight"
+          progress(context, stage, `Patchline · ${sections.length} sections`, { paths })
+          const results = await edits.applyHashline(scope(context), args.patchText, observe, context.abort)
           for (const result of results) metrics.record({ name: "edit", path: result.path, added: result.added, deleted: result.deleted })
-          return boundedMutationOutput(results.map((result) => result.output).join("\n\n"))
+          const files = editFiles(results, context.worktree, "patch")
+          applied = { writes: results.length, paths, files, added: results.reduce((sum, item) => sum + item.added, 0), deleted: results.reduce((sum, item) => sum + item.deleted, 0) }
+          stage = "validation"
+          progress(context, stage, "Patchline · validation", applied)
+          const validation = await validateMutation(context, paths)
+          return { title: `Patchline · ${results.length} patched`, output: boundedMutationOutput(`${results.map((result) => result.output).join("\n\n")}${validation.reason ? `\n${validation.reason}` : ""}`), metadata: { status: "applied", stage: "completed", ...applied, ...validation } }
+          } catch (error) {
+            failure(context, error, stage, undefined, { paths: [...new Set(paths)], ...applied, ...(stage === "validation" ? { status: "applied", validation: "failed", recoveryAction: "Changes were applied. Inspect diagnostics and re-read before retrying." } : {}) })
+            throw toolError(error)
+          }
         },
         }),
       } : {}),
@@ -282,9 +362,8 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
           await context.ask({ permission: "grep", patterns: [args.pattern], always: ["*"] , metadata: { pattern: args.pattern, path: args.path } })
           const result = await grepWorkspace({ worktree: context.worktree, pattern: args.pattern, path: args.path, include: args.include, maxResults: args.maxResults ?? config.maxSearchResults })
           metrics.record({ name: "grep", lines: result.matches.length })
-          return result.matches.length === 0
-            ? "No matches found."
-             : boundedSearchOutput(`${result.matches.map((match) => `${path.relative(context.worktree, match.path)}:${match.line}: ${match.text}`).join("\n")}${result.truncated ? "\nResults truncated." : ""}`)
+          const skipped = result.skippedCount > 0 ? `\nSkipped ${result.skippedCount} file(s): ${[...new Set(result.skipped.map((item) => item.reason))].join(", ")}.` : ""
+          return boundedSearchOutput(result.matches.length === 0 ? "No matches found." : `${result.matches.map((match) => `${path.relative(context.worktree, match.path)}:${match.line}: ${match.text}`).join("\n")}${result.truncated ? "\nResults truncated." : ""}`, skipped)
         },
       }),
       ast_search: tool({
@@ -320,6 +399,11 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         },
         async execute(args, context) {
           if (args.filePath) await context.ask({ permission: "read", patterns: [args.filePath], always: ["*"], metadata: { path: args.filePath } })
+          if (args.operation === "workspaceSymbol" && args.query !== undefined) {
+            try { return await runOpenCodeLspClient(input.client, { worktree: context.worktree, query: args.query }) } catch (error) {
+              if (!(error instanceof PatchlineError) || error.code !== "CAPABILITY_UNAVAILABLE") throw error
+            }
+          }
           return runOpenCodeLspBridge({ worktree: context.worktree, operation: args.operation, query: args.query, filePath: args.filePath, signal: context.abort })
         },
       }),
@@ -335,15 +419,34 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
           })).min(1).max(500),
         },
         async execute(args, context) {
-          await context.ask({ permission: "edit", patterns: args.edits.map((edit) => edit.filePath), always: ["*"] , metadata: { paths: args.edits.map((edit) => edit.filePath) } })
-          const requests: EditRequest[] = args.edits.map((edit) => ({
-            ...scope(context),
-            filePath: edit.filePath,
-            snapshot: edit.snapshot,
-            exact: { oldString: edit.oldString, newString: edit.newString, replaceAll: edit.replaceAll },
-          }))
-          const result = await edits.editBatch(requests)
-          return boundedMutationOutput(result.map((item) => item.output).join("\n\n"))
+          const paths = args.edits.map((edit) => edit.filePath)
+          let stage = "permission"
+          let applied: Record<string, unknown> = {}
+          try {
+            progress(context, stage, `Patchline · ${paths.length} files`, { paths, total: paths.length })
+            await context.ask({ permission: "edit", patterns: paths, always: ["*"], metadata: { paths } })
+            stage = "preflight"
+            progress(context, stage, `Patchline · ${paths.length} files`, { paths, total: paths.length })
+            const requests: EditRequest[] = args.edits.map((edit) => ({
+              ...scope(context),
+              filePath: edit.filePath,
+              snapshot: edit.snapshot,
+              exact: { oldString: edit.oldString, newString: edit.newString, replaceAll: edit.replaceAll },
+            }))
+            const result = await edits.editBatch(requests, (nextStage) => {
+              stage = nextStage
+              progress(context, stage, `Patchline · ${paths.length} files`, { paths, total: paths.length })
+            }, context.abort)
+            const files = editFiles(result, context.worktree, "diff")
+            applied = { writes: result.length, files, added: result.reduce((sum, item) => sum + item.added, 0), deleted: result.reduce((sum, item) => sum + item.deleted, 0) }
+            stage = "validation"
+            progress(context, stage, `Patchline · ${paths.length} files`, { paths, ...applied })
+            const validation = await validateMutation(context, paths)
+            return { title: `Patchline · ${result.length} files`, output: boundedMutationOutput(`${result.map((item) => item.output).join("\n\n")}${validation.reason ? `\n${validation.reason}` : ""}`), metadata: { status: "applied", stage: "completed", paths, ...applied, ...validation } }
+          } catch (error) {
+            failure(context, error, stage, paths.length === 1 ? paths[0] : undefined, { paths: [...new Set(paths)], ...applied, ...(stage === "validation" ? { status: "applied", validation: "failed", recoveryAction: "Changes were applied. Inspect diagnostics and re-read before retrying." } : {}) })
+            throw toolError(error)
+          }
         },
       }) } : {}),
       patchline_diagnostics: tool({

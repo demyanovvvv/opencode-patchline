@@ -14,6 +14,7 @@ Patchline is a precision editing engine for OpenCode.
 - [Editing rules](rules/editing-rules.md)
 - [Testing strategy](testing/test-strategy.md)
 - [Installation](operations/installation.md)
+- [Uninstallation](operations/uninstallation.md)
 - [Development progress](development-progress.md)
 - [Selected agent skills](skills/selected-skills.md)
 

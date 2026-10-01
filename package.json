@@ -29,6 +29,10 @@
     "./server": {
       "types": "./dist/plugin.d.ts",
       "import": "./dist/plugin.js"
+    },
+    "./tui": {
+      "types": "./dist/tui.d.ts",
+      "import": "./dist/tui.js"
     }
   },
   "bin": {
@@ -53,22 +57,34 @@
     "check:release": "node scripts/check-release.mjs",
     "bench": "tsx benchmarks/runner.ts",
     "smoke:plugin": "npm run build && node scripts/plugin-smoke.mjs",
+    "smoke:hashline": "npm run build && npm exec --yes --package=bun -- bun --conditions=browser scripts/hashline-smoke.mjs",
+    "smoke:hashline:differential": "npm run build && npm exec --yes --package=bun -- bun --conditions=browser scripts/hashline-differential.mjs",
     "smoke:package": "npm run build && node scripts/package-smoke.mjs",
+    "smoke:tui": "npm run build && npm exec --yes --package=bun -- bun --conditions=browser scripts/tui-smoke.mjs",
+    "smoke:install": "npm run build && node scripts/install-smoke.mjs",
+    "smoke:installer-lifecycle": "npm run build && node scripts/installer-lifecycle-smoke.mjs",
+    "smoke:installer-lsp": "npm run build && node scripts/installer-lsp-smoke.mjs",
     "prepack": "npm run build"
   },
   "dependencies": {
     "@ast-grep/napi": "^0.45.3",
     "@node-rs/xxhash": "^1.7.8",
-    "@oh-my-pi/hashline": "^18.1.5",
+    "@oh-my-pi/hashline": "18.1.5",
+    "@oh-my-pi/pi-natives": "18.1.5",
     "@opencode-ai/plugin": "1.18.30",
+    "@opentui/solid": "0.4.5",
     "diff": "^8.0.2",
+    "jsonc-parser": "^3.3.1",
+    "solid-js": "1.9.12",
     "zod": "^4.1.8"
   },
   "devDependencies": {
+    "@babel/core": "7.29.7",
     "@types/node": "^22.20.2",
     "@typescript-eslint/eslint-plugin": "^8.44.0",
     "@typescript-eslint/parser": "^8.44.0",
     "@vitest/coverage-v8": "^5.0.1",
+    "babel-preset-solid": "1.9.12",
     "eslint": "^9.36.0",
     "tsx": "^4.23.13",
     "typescript": "^5.9.2",

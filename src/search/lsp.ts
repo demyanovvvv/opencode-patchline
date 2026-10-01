@@ -7,9 +7,20 @@ import { resolveWorkspacePath } from "../workspace/paths.js"
 
 export type LspBridgeOperation = "workspaceSymbol" | "documentSymbol" | "diagnostics"
 
+export type LspBridgeClient = {
+  find?: { symbols(input: { query: { query: string; directory?: string } }): Promise<unknown> }
+  lsp?: { status(input?: { query?: { directory?: string } }): Promise<unknown> }
+}
+
+export async function runOpenCodeLspClient(client: LspBridgeClient, input: { worktree: string; query: string }): Promise<string> {
+  if (!client.find?.symbols) throw new PatchlineError("CAPABILITY_UNAVAILABLE", "The active OpenCode SDK does not expose workspace symbols; use the CLI bridge or ast_search.")
+  const result = await client.find.symbols({ query: { query: input.query, directory: input.worktree } })
+  return JSON.stringify(result)
+}
+
 const MAX_OUTPUT_CHARS = 200_000
 const MAX_ERROR_CHARS = 4_000
-const LSP_TIMEOUT_MS = 30_000
+const LSP_TIMEOUT_MS = 120_000
 const LSP_RECOVERY = "Enable OpenCode LSP and install a language server; use ast_search for structure or patchline_grep for literal text as fallback."
 
 function boundedErrorDetail(detail: string): string {
@@ -26,7 +37,11 @@ export function interpretLspOutput(operation: LspBridgeOperation, stdout: string
   if (/\b(?:all\s+)?LSPs?\s+are\s+disabled\b|no\s+LSP\s+(?:servers?|configur)/i.test(diagnostics)) {
     throw new PatchlineError("CAPABILITY_UNAVAILABLE", boundedErrorDetail(`OpenCode LSP is unavailable for ${operation}: ${diagnostics}\n${LSP_RECOVERY}`))
   }
-  return stdout.trim() || "[]"
+  const result = stdout.trim()
+  if ((result === "" || /^\[\s*\]$/.test(result)) && operation !== "diagnostics") {
+    throw new PatchlineError("CAPABILITY_UNAVAILABLE", `OpenCode CLI returned no ${operation === "documentSymbol" ? "document symbols" : "workspace symbols"}; its isolated process cannot confirm document/index initialization. Use native OpenCode LSP in the active session for semantic symbols, ast_search for structure, or patchline_grep for literal text.`, { details: { operation, indexing: "unverified" } })
+  }
+  return result || "[]"
 }
 
 export function buildLspArgs(operation: LspBridgeOperation, target: string): string[] {
@@ -42,6 +57,8 @@ async function resolveOpenCodeCommand(): Promise<string> {
     path.join(entry, "opencode.exe"),
     path.join(entry, "node_modules", "opencode-ai", "bin", "opencode.exe"),
   ])
+  if (path.basename(process.execPath).toLowerCase() === "opencode.exe") candidates.push(process.execPath)
+  candidates.push(path.join(path.dirname(process.execPath), "node_modules", "opencode-ai", "bin", "opencode.exe"))
   for (const candidate of candidates) {
     try {
       await access(candidate)

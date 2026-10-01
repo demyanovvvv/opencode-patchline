@@ -1,5 +1,6 @@
-import { opendir, open, stat } from "node:fs/promises"
+import { opendir, stat } from "node:fs/promises"
 import { PatchlineError } from "./errors.js"
+import { readBoundedUtf8Bytes } from "./io/bounded-file.js"
 import { decodeUtf8 } from "./preservation/text.js"
 import { ScopedSnapshotStore, type SnapshotScope } from "./snapshot/store.js"
 import { resolveWorkspacePath } from "./workspace/paths.js"
@@ -8,29 +9,6 @@ const MAX_READ_FILE_BYTES = 8 * 1024 * 1024
 const MAX_READ_LINE_CHARS = 20_000
 const MAX_READ_OUTPUT_CHARS = 20_000
 const MAX_DIRECTORY_ENTRIES = 4_096
-
-async function readBoundedFile(absolute: string, relative: string): Promise<Buffer> {
-  const handle = await open(absolute, "r")
-  try {
-    const info = await handle.stat()
-    if (info.size > BigInt(MAX_READ_FILE_BYTES)) {
-      throw new PatchlineError("INVALID_ARGUMENT", `File exceeds the 8 MiB read limit: ${relative}`, { path: relative })
-    }
-    const bytes = Buffer.allocUnsafe(MAX_READ_FILE_BYTES + 1)
-    let offset = 0
-    while (offset < bytes.length) {
-      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset)
-      if (bytesRead === 0) break
-      offset += bytesRead
-    }
-    if (offset > MAX_READ_FILE_BYTES) {
-      throw new PatchlineError("INVALID_ARGUMENT", `File exceeds the 8 MiB read limit: ${relative}`, { path: relative })
-    }
-    return bytes.subarray(0, offset)
-  } finally {
-    await handle.close()
-  }
-}
 
 export type ReadRequest = SnapshotScope & {
   filePath: string
@@ -135,7 +113,7 @@ export class ReadService {
       }
     }
 
-    const document = decodeUtf8(await readBoundedFile(resolved.absolute, resolved.relative), resolved.relative)
+    const document = decodeUtf8(await readBoundedUtf8Bytes(resolved.absolute, resolved.relative, MAX_READ_FILE_BYTES), resolved.relative)
     const lines = document.normalizedText.length === 0 ? [] : document.normalizedText.split("\n")
     if (document.normalizedText.endsWith("\n")) lines.pop()
     const totalLines = lines.length

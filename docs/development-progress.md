@@ -56,6 +56,14 @@ tree state before optimizing convenience or speed.
   cannot inherit a trusted next snapshot or rollback identity.
 - New-file creation rechecks canonical identity after parent creation before
   the exclusive `wx` open, including single writes and create batches.
+- Parent directories are created component-by-component with identity checks;
+  only operation-owned empty directories are eligible for cleanup.
+- Mutation cancellation is propagated through edit, Hashline, write, and create
+  batch services with guarded rollback metadata.
+- Hashline mutations are serialized per session/worktree so clipboard registers
+  cannot lose concurrent updates.
+- Snapshot memory uses a configurable byte quota and pools byte-identical
+  documents while preserving scope-specific observations.
 - Create-batch rollback requires the created file identity and digest to match;
   same-byte replacement files are preserved as conflicts.
 - Create tracking records bytes and identity from the exclusive `wx` file
@@ -67,7 +75,8 @@ tree state before optimizing convenience or speed.
 - Batch duplicate detection uses canonical platform-aware path identity before
   any commit, including case-only aliases on Windows.
 - Text and AST search services validate result bounds independently of plugin
-  schemas, preventing invalid direct API calls from bypassing search limits.
+  schemas, report skipped grep files, and truncate oversized formatted output
+  with an actionable narrowing hint, preventing invalid direct API calls from bypassing search limits.
 - Read service validates supplied `offset` and `limit` values independently of
   plugin schemas, preventing invalid direct calls from being silently clamped.
 - Directory reads reject out-of-range offsets consistently, including empty
@@ -179,7 +188,11 @@ npm run build
 npm run bench
 npm run doctor
 npm run smoke:plugin
+npm run smoke:hashline
+npm run smoke:hashline:differential
 npm run smoke:package
+npm run smoke:install
+npm run smoke:tui
 npm audit --audit-level=high
 npm pack --dry-run
 ```
@@ -187,9 +200,11 @@ npm pack --dry-run
 Latest test result:
 
 ```text
-12 test files passed
-101 tests passed
+21 test files passed
+170 tests passed
 ```
+
+Verification includes cancellation-safe mutation rollback, serialized Hashline clipboard state, component-wise parent creation guards, bounded snapshot bytes, bounded diff computation, skipped-file search reporting, unified validation metadata, and TUI history/output limits.
 
 Latest benchmark result:
 
@@ -201,12 +216,15 @@ staleOverwrites: 0
 ```
 
 The Vitest dependency chain was upgraded to Vitest 5.0.1. `npm audit` now
-reports no vulnerabilities.
+reports three low-severity upstream advisories in OpenTUI/Babel; the available
+fix is a breaking downgrade and is not applied.
 
 ## Known limitations
 
-- `@oh-my-pi/hashline@18.1.5` uses a Bun-native runtime loader. Under Node,
-  exact anchored edits remain active and doctor reports Hashline as optional.
+- `@oh-my-pi/hashline@18.1.5` uses a Bun-native runtime loader. OpenCode's Bun
+  plugin process is the supported full runtime; direct Node use retains the
+  guarded linear fallback. `hashlineRecovery` is opt-in and never applies to
+  `REM` or `MV`.
 - Native OpenCode LSP model-facing tooling is disabled unless the relevant
   experimental environment flag is enabled; Patchline uses the CLI bridge.
 - Linux and macOS validation is delegated to the GitHub Actions CI matrix;

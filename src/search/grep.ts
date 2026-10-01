@@ -1,7 +1,8 @@
-import { opendir, open, stat } from "node:fs/promises"
+import { opendir, stat } from "node:fs/promises"
 import path from "node:path"
 import { resolveWorkspacePath } from "../workspace/paths.js"
 import { PatchlineError } from "../errors.js"
+import { readBoundedUtf8Bytes } from "../io/bounded-file.js"
 import { decodeUtf8 } from "../preservation/text.js"
 
 export type GrepMatch = {
@@ -19,38 +20,21 @@ function matchPreview(line: string): string {
   return line.length <= MAX_MATCH_TEXT_CHARS ? line : `${line.slice(0, MAX_MATCH_TEXT_CHARS - suffix.length)}${suffix}`
 }
 
-async function readBoundedFile(absolute: string): Promise<Buffer | undefined> {
-  const handle = await open(absolute, "r")
-  try {
-    const info = await handle.stat()
-    if (info.size > MAX_SEARCH_FILE_BYTES) return undefined
-    const bytes = Buffer.allocUnsafe(MAX_SEARCH_FILE_BYTES + 1)
-    let offset = 0
-    while (offset < bytes.length) {
-      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset)
-      if (bytesRead === 0) break
-      offset += bytesRead
-    }
-    if (offset > MAX_SEARCH_FILE_BYTES) return undefined
-    return bytes.subarray(0, offset)
-  } finally {
-    await handle.close()
-  }
-}
-
 export async function grepWorkspace(input: {
   worktree: string
   pattern: string
   path?: string | undefined
   include?: string | undefined
   maxResults: number
-}): Promise<{ matches: GrepMatch[]; truncated: boolean }> {
+}): Promise<{ matches: GrepMatch[]; truncated: boolean; skipped: Array<{ path: string; reason: string }>; skippedCount: number }> {
   if (!input.pattern) throw new PatchlineError("INVALID_ARGUMENT", "Search pattern is required.")
   if (!Number.isInteger(input.maxResults) || input.maxResults < 1 || input.maxResults > 500) {
     throw new PatchlineError("INVALID_ARGUMENT", "Search result limit must be an integer between 1 and 500.")
   }
   const root = await resolveWorkspacePath(input.worktree, input.path ?? ".")
   const matches: GrepMatch[] = []
+  const skipped: Array<{ path: string; reason: string }> = []
+  let skippedCount = 0
   let truncated = false
   const include = input.include ? globExpression(input.include) : undefined
   const scanFile = async (absolute: string): Promise<void> => {
@@ -60,12 +44,13 @@ export async function grepWorkspace(input: {
     if (include && !include.test(relative) && !include.test(name)) return
     let content: string
     try {
-      const bytes = await readBoundedFile(absolute)
-      if (!bytes) return
+      const bytes = await readBoundedUtf8Bytes(absolute, relative, MAX_SEARCH_FILE_BYTES)
       const document = decodeUtf8(bytes, relative)
       if (document.text.includes("\0")) return
       content = document.text
-    } catch {
+    } catch (error) {
+      skippedCount++
+      if (skipped.length < 30) skipped.push({ path: path.relative(root.workspace, absolute).replaceAll("\\", "/"), reason: error instanceof PatchlineError ? error.code : "UNREADABLE" })
       return
     }
     const lines = content.split(/\r?\n/)
@@ -113,7 +98,7 @@ export async function grepWorkspace(input: {
   if (fileInfo.isDirectory()) await scan(root.absolute)
   else if (fileInfo.isFile()) await scanFile(root.absolute)
   else throw new PatchlineError("INVALID_ARGUMENT", `Search path must be a file or directory: ${root.relative}`)
-  return { matches, truncated }
+  return { matches, truncated, skipped, skippedCount }
 }
 
 function globExpression(glob: string): RegExp {

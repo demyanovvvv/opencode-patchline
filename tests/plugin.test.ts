@@ -41,8 +41,70 @@ describe("OpenCode plugin", () => {
       const snapshot = typeof read === "string" ? "" : String(read.metadata?.snapshot)
       const edit = await hooks.tool!.edit!.execute({ filePath: "a.ts", snapshot, oldString: "1", newString: "2" }, context)
       expect(typeof edit === "string" ? edit : edit.output).toContain("Diff: +1 -1")
-      expect(edit).toMatchObject({ metadata: { status: "applied", recoveryAction: "Use the returned snapshot for the next edit.", bytesWritten: Buffer.byteLength("const value = 2\n", "utf8") } })
+      expect(edit).toMatchObject({ metadata: { status: "applied", writes: 1, recoveryAction: "Use the returned snapshot for the next edit.", bytesWritten: Buffer.byteLength("const value = 2\n", "utf8") } })
+      expect(context.metadata).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ status: "running", stage: "committing", path: "a.ts" }) }))
+      expect(typeof edit === "string" ? "" : edit.metadata?.diff).toContain("-const value = 1")
+      expect(typeof edit === "string" ? "" : edit.metadata?.diff).toContain("+const value = 2")
+      expect(typeof edit === "string" ? "" : edit.metadata?.diff).toMatch(/^Index: a\.ts\n={5,}\n--- a\.ts\n\+\+\+ a\.ts\n@@/)
+      expect(context.metadata).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ stage: "preflight" }) }))
       expect(ask).toHaveBeenCalledTimes(2)
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("runs a guarded batch edit through the precision tool contract", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "first.ts"), "const first = 1\n")
+      await writeFile(path.join(workspace.path, "second.ts"), "const second = 2\n")
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const ask = vi.fn(async () => undefined)
+      const context = {
+        sessionID: "s",
+        messageID: "m",
+        agent: "build",
+        directory: workspace.path,
+        worktree: workspace.path,
+        abort: new AbortController().signal,
+        metadata: vi.fn(),
+        ask,
+      }
+      const firstRead = await hooks.tool!.read!.execute({ filePath: "first.ts" }, context)
+      const secondRead = await hooks.tool!.read!.execute({ filePath: "second.ts" }, context)
+      const firstSnapshot = typeof firstRead === "string" ? "" : String(firstRead.metadata?.snapshot)
+      const secondSnapshot = typeof secondRead === "string" ? "" : String(secondRead.metadata?.snapshot)
+      const result = await hooks.tool!.patchline_edit_batch!.execute({ edits: [
+        { filePath: "first.ts", snapshot: firstSnapshot, oldString: "1", newString: "10" },
+        { filePath: "second.ts", snapshot: secondSnapshot, oldString: "2", newString: "20" },
+      ] }, context)
+      expect(typeof result === "string" ? result : result.output).toContain("Diff: +1 -1")
+      expect(result).toMatchObject({ metadata: { status: "applied", files: [expect.objectContaining({ path: "first.ts", diff: expect.stringContaining("-const first = 1") }), expect.objectContaining({ path: "second.ts", diff: expect.stringContaining("+const second = 20") })] } })
+      expect(await readFile(path.join(workspace.path, "first.ts"), "utf8")).toBe("const first = 10\n")
+      expect(await readFile(path.join(workspace.path, "second.ts"), "utf8")).toBe("const second = 20\n")
+      expect(ask).toHaveBeenCalledTimes(3)
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("keeps failed batch edits as errors with visible preflight details and zero writes", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "duplicate.ts"), "const value = 1\n")
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = {
+        sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path,
+        abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined),
+      }
+      const read = await hooks.tool!.read!.execute({ filePath: "duplicate.ts" }, context)
+      const snapshot = typeof read === "string" ? "" : String(read.metadata?.snapshot)
+      await expect(hooks.tool!.patchline_edit_batch!.execute({ edits: [
+        { filePath: "duplicate.ts", snapshot, oldString: "1", newString: "2" },
+        { filePath: "duplicate.ts", snapshot, oldString: "1", newString: "3" },
+      ] }, context)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+      expect(context.metadata).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ status: "failed", stage: "preflight", writes: 0, code: "INVALID_ARGUMENT", paths: ["duplicate.ts"] }) }))
+      expect(await readFile(path.join(workspace.path, "duplicate.ts"), "utf8")).toBe("const value = 1\n")
     } finally {
       await workspace.cleanup()
     }
@@ -69,7 +131,7 @@ describe("OpenCode plugin", () => {
     }
   })
 
-  it("rejects a formatted grep response above the output budget", async () => {
+  it("truncates a formatted grep response above the output budget", async () => {
     const workspace = await temporaryWorkspace()
     try {
       await writeFile(path.join(workspace.path, "many.ts"), Array.from({ length: 30 }, (_, index) => `${index}:${"x".repeat(900)} NEEDLE`).join("\n"))
@@ -85,7 +147,10 @@ describe("OpenCode plugin", () => {
         ask: vi.fn(async () => undefined),
       }
 
-      await expect(hooks.tool!.patchline_grep!.execute({ pattern: "NEEDLE", path: "many.ts", maxResults: 30 }, context)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+      const result = await hooks.tool!.patchline_grep!.execute({ pattern: "NEEDLE", path: "many.ts", maxResults: 30 }, context)
+      const output = typeof result === "string" ? result : result.output
+      expect(output.length).toBeLessThanOrEqual(20_000)
+      expect(output).toContain("Results truncated")
     } finally {
       await workspace.cleanup()
     }
@@ -113,8 +178,8 @@ describe("OpenCode plugin", () => {
       }
 
       const output = await hooks.tool!.apply_patch!.execute({ patchText }, context)
-      expect(output).toHaveLength(20_000)
-      expect(output).toContain("Output truncated")
+      expect(typeof output === "string" ? output : output.output).toHaveLength(20_000)
+      expect(typeof output === "string" ? output : output.output).toContain("Output truncated")
       expect(await readFile(path.join(workspace.path, files.at(-1)!), "utf8")).toBe("")
     } finally {
       await workspace.cleanup()
@@ -144,6 +209,58 @@ describe("OpenCode plugin", () => {
     }
   })
 
+  it("reports writes and paths for single-file creation and pre-write failures", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const result = await hooks.tool!.write!.execute({ filePath: "new.ts", content: "new\n" }, context)
+      expect(result).toMatchObject({ metadata: { writes: 1, path: "new.ts", paths: ["new.ts"], stage: "completed", bytesWritten: 4 } })
+      await expect(hooks.tool!.write!.execute({ filePath: "new.ts", content: "overwrite\n" }, context)).rejects.toMatchObject({ code: "WRITE_PROTECTED" })
+      expect(context.metadata).toHaveBeenLastCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ status: "failed", stage: "preflight", writes: 0, path: "new.ts", paths: ["new.ts"] }) }))
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("caps aggregate batch previews while retaining exact per-file totals", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const edits = []
+      for (const filePath of ["first.ts", "second.ts", "third.ts"]) {
+        await writeFile(path.join(workspace.path, filePath), "old\n")
+        const observed = await hooks.tool!.read!.execute({ filePath }, context)
+        edits.push({ filePath, snapshot: String(typeof observed === "string" ? "" : observed.metadata?.snapshot), oldString: "old", newString: "x".repeat(12_000) })
+      }
+      const result = await hooks.tool!.patchline_edit_batch!.execute({ edits }, context)
+      if (typeof result === "string") throw new Error("Expected metadata")
+      const files = result.metadata!.files as Array<{ diff: string; patch?: string; diffTruncated: boolean }>
+      expect(files.reduce((size, file) => size + file.diff.length + (file.patch?.length ?? 0), 0)).toBeLessThanOrEqual(20_000)
+      expect(files[1]).toMatchObject({ diff: "", diffTruncated: true })
+      expect(result.metadata).toMatchObject({ writes: 3, added: 3, deleted: 3 })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("counts blank added lines and marks omitted oversized diff hunks", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const created = await hooks.tool!.apply_patch!.execute({ patchText: "*** Begin Patch\n*** Add File: blank.ts\n+first\n+\n+last\n*** End Patch" }, context)
+      expect(created).toMatchObject({ metadata: { writes: 1, files: [{ additions: 3, deletions: 0 }] } })
+      const observed = await hooks.tool!.read!.execute({ filePath: "blank.ts" }, context)
+      const edited = await hooks.tool!.edit!.execute({ filePath: "blank.ts", snapshot: String(typeof observed === "string" ? "" : observed.metadata?.snapshot), oldString: "first", newString: "x".repeat(25_000) }, context)
+      expect(edited).toMatchObject({ metadata: { diff: "", diffTruncated: true, added: 1, deleted: 1 } })
+      expect(await readFile(path.join(workspace.path, "blank.ts"), "utf8")).toContain("x".repeat(25_000))
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
   it("allows apply_patch to create new files only", async () => {
     const workspace = await temporaryWorkspace()
     try {
@@ -160,7 +277,9 @@ describe("OpenCode plugin", () => {
       }
       const result = await hooks.tool!.apply_patch!.execute({ patchText: "*** Begin Patch\n*** Add File: created.ts\n+export {}\n*** End Patch" }, context)
       expect(typeof result === "string" ? result : result.output).toContain("Created: created.ts")
+      expect(result).toMatchObject({ metadata: { files: [expect.objectContaining({ type: "add", relativePath: "created.ts", patch: expect.stringContaining("+export {}") })] } })
       await expect(hooks.tool!.apply_patch!.execute({ patchText: "*** Begin Patch\n*** Update File: created.ts\n-old\n+new\n*** End Patch" }, context)).rejects.toMatchObject({ code: "FALLBACK_REJECTED" })
+      expect(context.metadata).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ status: "failed", code: "FALLBACK_REJECTED", stage: "preflight" }) }))
     } finally {
       await workspace.cleanup()
     }
@@ -239,6 +358,7 @@ describe("OpenCode plugin", () => {
         writes: 0,
         recoveryAction: "Re-read the affected range and retry the edit.",
       })
+      expect(context.metadata).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ status: "failed", stage: "preflight", path: "stale.ts", writes: 0, code: "STALE_SNAPSHOT" }) }))
       expect(await readFile(file, "utf8")).toBe("const value = external()\n")
     } finally {
       await workspace.cleanup()
@@ -295,7 +415,23 @@ describe("OpenCode plugin", () => {
 
       await expect(hooks.tool!.edit!.execute({ filePath: "validated.ts", snapshot, oldString: "1", newString: "2" }, context)).rejects.toThrow("validation permission denied")
       expect(ask).toHaveBeenNthCalledWith(3, { permission: "bash", patterns: [command], always: ["*"], metadata: { command, reason: "post-edit validation" } })
+      expect(context.metadata).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ status: "failed", stage: "validation", path: "validated.ts", writes: 1 }) }))
       expect(await readFile(path.join(workspace.path, "validated.ts"), "utf8")).toBe("const value = 2\n")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("keeps an applied diff visible when validation exits unsuccessfully", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "failed.ts"), "const value = 1\n")
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { validationCommands: { default: `"${process.execPath}" -e "process.exit(1)"` } })
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const observed = await hooks.tool!.read!.execute({ filePath: "failed.ts" }, context)
+      const result = await hooks.tool!.edit!.execute({ filePath: "failed.ts", snapshot: String(typeof observed === "string" ? "" : observed.metadata?.snapshot), oldString: "1", newString: "2" }, context)
+      expect(result).toMatchObject({ metadata: { status: "applied", writes: 1, validation: "failed", reason: expect.stringContaining("Validation failed"), diff: expect.stringContaining("+const value = 2") } })
+      expect(await readFile(path.join(workspace.path, "failed.ts"), "utf8")).toBe("const value = 2\n")
     } finally {
       await workspace.cleanup()
     }
@@ -359,6 +495,44 @@ describe("OpenCode plugin", () => {
     } finally {
       await workspace.cleanup()
     }
+  })
+
+  it.each(["write", "classic", "hashline", "batch"])("runs configured validation after %s mutations", async (kind) => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { validationCommands: { default: `"${process.execPath}" -e "process.exit(1)"` } })
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      let result
+      if (kind === "write") result = await hooks.tool!.write!.execute({ filePath: "a.ts", content: "before\n" }, context)
+      else if (kind === "classic") result = await hooks.tool!.apply_patch!.execute({ patchText: "*** Begin Patch\n*** Add File: a.ts\n+before\n*** End Patch" }, context)
+      else {
+        await writeFile(path.join(workspace.path, "a.ts"), "before\n")
+        const read = await hooks.tool!.read!.execute({ filePath: "a.ts" }, context)
+        const snapshot = typeof read === "string" ? "" : String(read.metadata?.snapshot)
+        const tag = typeof read === "string" ? "" : String(read.metadata?.tag)
+        result = kind === "hashline"
+          ? await hooks.tool!.apply_patch!.execute({ patchText: `[a.ts#${tag}]\nPUT 1.=1:\n+after` }, context)
+          : await hooks.tool!.patchline_edit_batch!.execute({ edits: [{ filePath: "a.ts", snapshot, oldString: "before", newString: "after" }] }, context)
+      }
+      expect(result).toMatchObject({ metadata: { status: "applied", writes: 1, validation: "failed" } })
+      expect(context.ask).toHaveBeenCalledWith(expect.objectContaining({ permission: "bash" }))
+    } finally { await workspace.cleanup() }
+  })
+
+  it("returns complete bounded search rows and reports skipped files", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "many.ts"), `${"needle".padEnd(1_000, "x")}\n`.repeat(100))
+      await writeFile(path.join(workspace.path, "invalid.ts"), Buffer.from([0xff]))
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const result = await hooks.tool!.patchline_grep!.execute({ pattern: "needle", maxResults: 100 }, context)
+      const output = typeof result === "string" ? result : result.output
+      expect(output.length).toBeLessThanOrEqual(20_000)
+      expect(output).toContain("Results truncated")
+      expect(output).toContain("Skipped 1 file")
+      expect(output).toContain("ENCODING_UNSUPPORTED")
+    } finally { await workspace.cleanup() }
   })
 
   it("does not register the summary tool when summary output is disabled", async () => {

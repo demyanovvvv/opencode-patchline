@@ -166,6 +166,7 @@ describe("write guard", () => {
         { worktree: workspace.path, filePath: "second.ts", content: "second\n" },
       ])).rejects.toMatchObject({
         code: "TRANSACTION_FAILED",
+        writes: 1,
         details: { restored: [], conflicts: ["first.ts"] },
       })
       expect(await readFile(first, "utf8")).toBe("external\n")
@@ -197,6 +198,32 @@ describe("write guard", () => {
       })
       await expect(readFile(path.join(workspace.path, "first.ts"), "utf8")).rejects.toMatchObject({ code: "ENOENT" })
       await expect(readFile(path.join(workspace.path, "second.ts"), "utf8")).rejects.toMatchObject({ code: "ENOENT" })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("rolls back a file created before the create operation returns", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      class FailingCreateService extends WriteService {
+        override async writeCreatedFile(
+          item: Parameters<WriteService["writeCreatedFile"]>[0],
+          onCreated?: Parameters<WriteService["writeCreatedFile"]>[1],
+        ): Promise<Awaited<ReturnType<WriteService["writeCreatedFile"]>>> {
+          const result = await super.writeCreatedFile(item, onCreated)
+          throw new PatchlineError("TRANSACTION_FAILED", "forced post-create failure", { cause: result })
+        }
+      }
+
+      await expect(new FailingCreateService(DEFAULT_CONFIG).createBatch([
+        { worktree: workspace.path, filePath: "partial.ts", content: "partial\n" },
+      ])).rejects.toMatchObject({
+        code: "TRANSACTION_FAILED",
+        writes: 1,
+        details: { restored: ["partial.ts"], conflicts: [] },
+      })
+      await expect(readFile(path.join(workspace.path, "partial.ts"), "utf8")).rejects.toMatchObject({ code: "ENOENT" })
     } finally {
       await workspace.cleanup()
     }
@@ -267,6 +294,24 @@ describe("write guard", () => {
     } finally {
       await workspace.cleanup()
     }
+  })
+
+  it("rejects an escaped ancestor before creating missing nested directories", async () => {
+    const workspace = await temporaryWorkspace()
+    const outside = await temporaryWorkspace()
+    try {
+      const parent = path.join(workspace.path, "new")
+      await mkdir(parent)
+      class SwappedParent extends WriteService {
+        override async writeCreatedFile(item: Parameters<WriteService["writeCreatedFile"]>[0]) {
+          await rename(parent, `${parent}-original`)
+          await symlink(outside.path, parent, "junction")
+          return super.writeCreatedFile(item)
+        }
+      }
+      await expect(new SwappedParent(DEFAULT_CONFIG).write({ worktree: workspace.path, filePath: "new/deep/file.ts", content: "inside\n" })).rejects.toMatchObject({ code: "SYMLINK_ESCAPE" })
+      await expect(new WriteService(DEFAULT_CONFIG).write({ worktree: outside.path, filePath: "deep", content: "marker" })).resolves.toMatchObject({ created: true })
+    } finally { await workspace.cleanup(); await outside.cleanup() }
   })
 
   it("rejects a new target whose parent is swapped to a symlink after preflight", async () => {

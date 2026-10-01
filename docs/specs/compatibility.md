@@ -10,5 +10,6 @@ compatibility failure for precision mode.
 
 Current verified dependencies are `@opencode-ai/plugin@1.18.30` and
 `@oh-my-pi/hashline@18.1.5`. Hashline is loaded lazily because its published
-runtime targets Bun; Node-only installations retain exact anchored edits and
-report Hashline availability through doctor.
+runtime targets Bun. Node installations retain exact edits and linear PUT/CUT
+Hashline edits through the guarded fallback; structural blocks, registers, and
+file operations remain capability-gated and report through doctor.

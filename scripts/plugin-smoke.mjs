@@ -5,11 +5,13 @@ import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { execFile, spawn } from "node:child_process"
 import { promisify } from "node:util"
+import { createSmokeEnvironment } from "./smoke-environment.mjs"
 
 const pluginPath = path.resolve(fileURLToPath(new URL("../dist/plugin.js", import.meta.url)))
 const worktree = await mkdtemp(path.join(os.tmpdir(), "patchline-plugin-smoke-"))
 const execute = promisify(execFile)
-const required = ["patchline_grep", "ast_search", "patchline_edit_batch", "patchline_diagnostics", "patchline_summary"]
+const required = ["read", "edit", "write", "apply_patch", "patchline_grep", "ast_search", "patchline_edit_batch", "patchline_diagnostics", "patchline_summary"]
+const hashlineRequired = ["read", "edit", "write", "apply_patch"]
 
 async function freePort() {
   const server = createServer()
@@ -33,9 +35,11 @@ async function waitForTools(url, child, logs) {
       if (response.ok) {
         const toolIds = await response.json()
         if (!Array.isArray(toolIds)) throw new Error("OpenCode returned a non-array tool registry")
-        return toolIds
+        if (required.every((toolId) => toolIds.includes(toolId))) return toolIds
+        lastFailure = `Only ${toolIds.length} tools registered so far: ${toolIds.join(", ")}`
+      } else {
+        lastFailure = `HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`
       }
-      lastFailure = `HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`
     } catch (error) {
       lastFailure = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
       // The server may still be bootstrapping.
@@ -118,7 +122,7 @@ const command = await resolveOpenCodeCommand()
 const child = spawn(command, ["serve", "--hostname", "127.0.0.1", "--port", String(port), "--log-level", "INFO", "--print-logs"], {
   cwd: worktree,
   env: {
-    ...process.env,
+    ...createSmokeEnvironment(worktree),
     OPENCODE_CONFIG_CONTENT: JSON.stringify({
       plugin: [[pluginPath, { mode: "precision", telemetry: false, summary: true }]],
     }),
@@ -134,7 +138,7 @@ const logs = () => output.trim()
 try {
   const toolIds = await waitForTools(`http://127.0.0.1:${port}/experimental/tool/ids`, child, logs)
   const missing = required.filter((toolId) => !toolIds.includes(toolId))
-  if (missing.length > 0) throw new Error(`OpenCode plugin loaded without required tools: ${missing.join(", ")}`)
+  if (missing.length > 0) throw new Error(`OpenCode plugin loaded without required tools: ${missing.join(", ")}. Registered tools: ${toolIds.join(", ")}. Server logs:\n${logs()}`)
   console.log(`OpenCode plugin smoke passed (${required.length} Patchline tools registered)`)
 } finally {
   await stopProcess(child)

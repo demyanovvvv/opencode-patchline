@@ -8,18 +8,21 @@ Patchline - готовый к использованию плагин OpenCode �
 а контроль корректности выполняется детерминированными инструментами, а не
 только инструкциями для модели.
 
-**Текущий релиз: `1.0.0`**
+**Версия пакета: `1.1.0`** (неопубликованные изменения — в `CHANGELOG.md`)
 
 ## Возможности
 
 - `read` создаёт снимок файла, ограничивает объём вывода и возвращает якоря строк.
-- `edit` выполняет точную или якорную замену, связанную с прочитанным снимком.
+- `edit` выполняет точную или актуальную Hashline-замену, связанную с прочитанным снимком.
 - Перед записью проверяется устаревшее состояние; при ошибке записывается 0 байт.
 - `write` защищает существующие файлы. Для них используется `edit`.
 - Проверяются рабочая область, пути, симлинки, `.git`, кодировка, BOM и окончания строк.
-- Многофайловые операции проходят предварительную проверку и защищённый rollback.
+- Многофайловые операции проходят предварительную проверку и защищённый rollback, включая отмену во время commit.
+- Коллизии коротких Hashline-тегов обрабатываются безопасно; память snapshot ограничена byte quota, в Node доступен линейный PUT/CUT fallback.
 - Есть буквальный текстовый поиск, структурный AST-поиск и мост к OpenCode LSP.
 - Диагностика и post-edit validation запрашивают разрешение OpenCode.
+- Правки показывают ограниченный по вычислениям и размеру unified diff в нативном интерфейсе OpenCode.
+- В том же пакете есть TUI-панель прогресса, числа записей, validation, скрытых файлов и ошибок в цветах активной темы.
 - Доступны режимы `precision`, `compatibility` и `disabled`.
 - Есть команды doctor, benchmark, package smoke и OpenCode plugin smoke.
 
@@ -29,10 +32,12 @@ Patchline - готовый к использованию плагин OpenCode �
 - OpenCode 1.18.x.
 - Проект, открытый в OpenCode как worktree.
 
-Плагин проверен с OpenCode `1.18.30` и `@opencode-ai/plugin@1.18.30`.
-Windows, Linux и macOS входят в CI-матрицу Node.js 20 и 22; на Windows
-используется direct plugin smoke, поскольку bootstrap HTTP-сервера OpenCode на
-hosted runner зависает независимо от Patchline.
+Локальные проверки выполняются с OpenCode `1.18.33` и `@opencode-ai/plugin@1.18.30`.
+OpenCode загружает плагины через Bun, поэтому полный upstream Hashline доступен
+при успешной загрузке native adapter. Прямой запуск через Node сохраняет
+ограниченный PUT/CUT fallback. Опция `hashlineRecovery` разрешает только
+доказанное upstream-восстановление якорей; `REM` и `MV` остаются строгими.
+TUI entrypoint устанавливается отдельно в TUI-конфигурацию OpenCode.
 
 ## Установка
 
@@ -61,13 +66,52 @@ npx opencode-patchline config show
 npx opencode-patchline explain STALE_SNAPSHOT
 ```
 
-Также доступен установщик, который передаёт изменение конфигурации штатной
-команде OpenCode:
+Установщик подключает серверную и TUI-части штатной командой OpenCode и
+спрашивает подтверждение перед установкой недостающих зависимостей TypeScript LSP:
 
 ```bash
-npx opencode-patchline install
-npx opencode-patchline install --global
+npx opencode-patchline install --lang ru
+npx opencode-patchline install --global --lang ru
 ```
+
+`--lang ru|en` (синоним `--language`) меняет язык установщика и деинсталлятора;
+выбор сохраняется для этой области установки. `--yes` подтверждает действия
+для автоматизации. В проекте LSP-пакеты добавляются как devDependencies, при
+`--global` — глобально. Уже существующие зависимости TypeScript и настройки
+LSP сохраняются.
+
+Удаление с предварительным просмотром или подтверждением:
+
+```bash
+npx opencode-patchline uninstall --dry-run
+npx opencode-patchline uninstall
+npx opencode-patchline uninstall --global --yes
+```
+
+Удаляются записи Patchline и добавленные установщиком LSP-компоненты.
+Остальные плагины сохраняются. Резервные копии конфигурации остаются рядом
+с исходными файлами. Подробнее: [установка и удаление](docs/operations/installation.md).
+
+Для новой TUI-панели используйте этот установщик с пакетом, содержащим экспорты
+`./server` и `./tui`: OpenCode обнаружит обе части и обновит серверную и TUI
+конфигурации. Одна серверная запись в `opencode.json` подключает инструменты и
+нативные diff-карточки; для sidebar нужна также TUI-часть. После установки
+перезапустите OpenCode и откройте боковую панель. TUI-изменения в этой рабочей
+копии ещё не опубликованы; старый npm-пакет их не содержит.
+
+Для локальной рабочей копии сначала соберите пакет и установите его каталог
+штатной командой OpenCode:
+
+```bash
+npm install
+npm run build
+opencode plugin /absolute/path/to/opencode-patchline
+```
+
+Компактная панель показывает до четырёх файлов и двенадцати строк diff на файл,
+явно отмечает сокращённое превью и результаты validation/rollback. Нативные
+карточки `edit` / `apply_patch` доступны в истории диалога.
+Для mounted UI-проверки установите Bun и выполните `npm run smoke:tui`.
 
 ## Режимы работы
 
@@ -91,6 +135,7 @@ OpenCode без изменений, добавляя инструменты по
     "maxSearchResults": 30,
     "maxDiagnostics": 30,
     "applyPatchFallback": true,
+    "hashlineRecovery": false,
     "telemetry": false,
     "summary": true
   }]]
@@ -137,13 +182,14 @@ OpenCode `bash` для конкретной команды. При отказе 
 Результаты поиска ограничены. Файлы с некорректным UTF-8 и NUL-байтами
 пропускаются буквальным поиском. AST-провайдер подключается только при наличии
 возможности. Hashline загружается лениво, потому что его upstream runtime
-ориентирован на Bun; в Node.js точные snapshot-редакции остаются доступными, а
-`doctor` показывает Hashline как необязательную возможность. Нативный LSP
-OpenCode используется только при включённой экспериментальной возможности;
-иначе Patchline использует CLI-мост.
-Если OpenCode сообщает, что LSP отключён или не настроен, `patchline_lsp`
-возвращает явную ошибку недоступности возможности, а не маскирует её под пустой
-результат.
+ориентирован на Bun. Bun поддерживает целые patches, clipboard между файлами,
+structural blocks, объединение same-path секций и защищённые `REM`/`MV`. В Node
+остаются точные snapshot-редакции и линейный `PUT`/`CUT` fallback. Именованные
+registers ограничены сессией/worktree и публикуются после успешного commit.
+Нативный LSP OpenCode доступен при включённой экспериментальной возможности;
+иначе Patchline использует CLI-мост. Отключённый LSP и пустые symbol results
+возвращают явную ошибку недоступности: изолированный CLI-процесс не подтверждает
+инициализацию индекса. Для семантики используйте native LSP, для поиска — AST/grep.
 
 Для интерактивной диагностики используйте:
 
@@ -167,12 +213,19 @@ npm run build
 npm run bench
 npm run doctor
 npm run smoke:plugin
+npm run smoke:hashline
+npm run smoke:hashline:differential
+npm run smoke:tui
+npm run smoke:package
+npm run smoke:install
+npm run smoke:installer-lifecycle
+npm run smoke:installer-lsp
 npm pack --dry-run
 ```
 
-Текущий релизный gate включает 12 файлов тестов и 107 тестов. Последний локальный
-benchmark: `functionalSuccess: true`, diff `+1 / -1`, 0 полных перезаписей и
-0 устаревших перезаписей.
+Релизный gate включает полный Vitest, Bun Hashline differential, mounted TUI,
+package-install и изолированный OpenCode installer smoke. Benchmark:
+`functionalSuccess: true`, diff `+1 / -1`, 0 полных и 0 устаревших перезаписей.
 
 ## Документация
 

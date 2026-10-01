@@ -140,6 +140,28 @@ describe("stale-state protection", () => {
     }
   })
 
+  it("rolls back a landed write when snapshot bookkeeping fails", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "landed.ts"), "value = 1\n")
+      class FailingStore extends ScopedSnapshotStore {
+        fail = false
+        override record(...args: Parameters<ScopedSnapshotStore["record"]>) {
+          if (this.fail) throw new Error("snapshot bookkeeping failed")
+          return super.record(...args)
+        }
+      }
+      const snapshots = new FailingStore()
+      const observed = await new ReadService(snapshots).read({ sessionId: "s", worktree: workspace.path, filePath: "landed.ts" })
+      if (!isFileReadResult(observed)) throw new Error("Expected file read")
+      snapshots.fail = true
+      await expect(new EditService(snapshots).editBatch([{ sessionId: "s", worktree: workspace.path, filePath: "landed.ts", snapshot: observed.snapshot, exact: { oldString: "1", newString: "2" } }])).rejects.toMatchObject({ code: "TRANSACTION_FAILED", writes: 1, details: { restored: ["landed.ts"], conflicts: [] } })
+      expect(await readFile(path.join(workspace.path, "landed.ts"), "utf8")).toBe("value = 1\n")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
   it("does not roll back over an external change made after an earlier commit", async () => {
     const workspace = await temporaryWorkspace()
     try {

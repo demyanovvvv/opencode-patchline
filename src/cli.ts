@@ -2,7 +2,7 @@
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { inspectCapabilities } from "./compatibility.js"
-import { spawn } from "node:child_process"
+import { installPatchline, uninstallPatchline, type InstallerLanguage, type InstallerOptions } from "./installer.js"
 import { DEFAULT_CONFIG, parseConfig } from "./config.js"
 import { lspGuide, renderLspGuide } from "./lsp-guide.js"
 import type { PatchlineErrorCode } from "./errors.js"
@@ -13,6 +13,7 @@ type CliOptions = {
   stdout?: Output
   stderr?: Output
   inspect?: typeof inspectCapabilities
+  installer?: InstallerOptions
 }
 
 const errorExplanations: Record<PatchlineErrorCode, { summary: string; action: string }> = {
@@ -62,7 +63,7 @@ export async function runCli(args: readonly string[], options: CliOptions = {}):
       else for (const line of renderLspGuide(guide)) stdout(line)
       return guide.status === "ready" ? 0 : 1
     }
-    const required = checks.filter((check) => check.name !== "Native LSP tool flag" && check.name !== "Hashline runtime" && check.name !== "LSP setup")
+    const required = checks.filter((check) => check.severity !== "optional")
     const mode = required.every((check) => check.ok) ? "PRECISION" : "DEGRADED"
     if (args.includes("--json")) {
       writeJson(stdout, { checks, mode })
@@ -113,21 +114,39 @@ export async function runCli(args: readonly string[], options: CliOptions = {}):
     return 0
   }
 
-  if (command === "install") {
-    const global = args.includes("--global")
-    stdout(`Delegating installation to OpenCode${global ? " global configuration" : " project configuration"}.`)
-    const child = spawn("opencode", ["plugin", "opencode-patchline", ...(global ? ["--global"] : [])], {
-      stdio: "inherit",
-      windowsHide: true,
-      shell: process.platform === "win32",
-    })
-    return await new Promise<number>((resolve) => {
-      child.on("error", () => resolve(1))
-      child.on("close", (code) => resolve(code ?? 1))
-    })
+  if (command === "install" || command === "uninstall") {
+    const languageFlag = args.findIndex((arg) => arg === "--lang" || arg === "--language")
+    const languageValue = languageFlag >= 0 ? args[languageFlag + 1] : undefined
+    if (languageValue !== undefined && languageValue !== "ru" && languageValue !== "en") {
+      stderr("Unsupported installer language. Use --lang ru or --lang en.")
+      return 1
+    }
+    if (languageFlag >= 0 && languageValue === undefined) {
+      stderr("Missing value for --lang. Use --lang ru or --lang en.")
+      return 1
+    }
+    const flags = new Set(["--global", "-g", "--yes", "-y", "--lang", "--language", ...(command === "install" ? ["--local"] : ["--dry-run"])])
+    const unknown = args.slice(1).find((arg, index) => index + 1 !== languageFlag + 1 && !flags.has(arg))
+    if (unknown) {
+      stderr(languageValue === "ru" ? `Неизвестный параметр: ${unknown}` : `Unknown installer option: ${unknown}`)
+      return 1
+    }
+    const installerOptions: InstallerOptions = {
+      ...options.installer,
+      stdout,
+      stderr,
+      global: args.includes("--global") || args.includes("-g"),
+      yes: args.includes("--yes") || args.includes("-y"),
+      dryRun: args.includes("--dry-run"),
+      ...(args.includes("--local") ? { packageName: fileURLToPath(new URL("..", import.meta.url)) } : {}),
+      ...(languageValue !== undefined ? { language: languageValue as InstallerLanguage } : {}),
+    }
+    return command === "install"
+      ? await installPatchline(installerOptions)
+      : await uninstallPatchline(installerOptions)
   }
 
-  stderr(`Unknown command: ${command}\nUsage: opencode-patchline <doctor [--lsp]|lsp check|config|explain|install> [--global]`)
+  stderr(`Unknown command: ${command}\nUsage: opencode-patchline <doctor [--lsp]|lsp check|config|explain|install|uninstall> [--global] [--lang ru|en] [--yes] [--dry-run]`)
   return 1
 }
 

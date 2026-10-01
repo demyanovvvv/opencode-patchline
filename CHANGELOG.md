@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+- Added server/TUI entrypoints in one package, native diff metadata and a themed,
+  reactive sidebar with animated progress, validation failures and rollback details.
+- Compiled TUI JSX using Solid's universal transform; added a mounted Bun/OpenTUI
+  smoke covering reactive state changes, diff display and cleanup.
+- Verified one-package installation through OpenCode with isolated server/TUI
+  configuration; refreshed compatible brace-expansion versions to remove its
+  high-severity development dependency advisory.
+- Bounded display diffs to complete hunks and an aggregate character budget,
+  preserving exact statistics (including blank added lines).
+- Tracked landed writes before snapshot bookkeeping and retained applied changes
+  when subsequent validation fails; separated preflight, commit and rollback stages.
+- Tracked exclusive file creation before I/O completes, including partial writes,
+  verification and close failures; preserved unverified or externally changed files
+  as rollback conflicts with accurate write counts.
+- Applied whole-patch upstream Hashline semantics under Bun: cross-file and scoped
+  persistent registers, structural blocks, same-path merges and guarded REM/MV.
+  Added an upstream differential corpus and file-operation rollback regressions.
+- Added direct `@oh-my-pi/pi-natives` dependency and runtime capability reporting;
+  OpenCode/Bun uses the full upstream adapter while Node fallback fails closed on
+  live drift. Added opt-in upstream-proven Hashline recovery for ordinary edits,
+  active OpenCode SDK workspace-symbol routing, and expanded Hashline smoke coverage.
+- Isolated hosted plugin smoke home/config/data/cache and cleared inherited OpenCode
+  overrides. Empty CLI symbol results now report unverified indexing as a capability
+  error with native LSP/AST/grep recovery guidance.
+- Hardened atomic replacement cleanup after landed rename, propagated mutation
+  cancellation through guarded rollback, serialized Hashline clipboard updates,
+  and added component-wise parent directory guards.
+- Added bounded snapshot byte quotas with content pooling, lazy aggregate diff
+  materialization, skipped-file search reporting, and unified validation metadata
+  for write, Hashline, classic patch, and batch mutations.
+- Improved TUI mutation summaries with writes, validation status and hidden-file
+  counts.
+
 ## 1.1.0 - 2026-09-27
 
 - Added `opencode-patchline doctor --lsp` and `opencode-patchline lsp check`

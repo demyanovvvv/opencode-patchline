@@ -10,6 +10,7 @@ Plugin options are passed through the OpenCode plugin tuple:
     "maxSearchResults": 30,
     "maxDiagnostics": 30,
     "applyPatchFallback": true,
+    "hashlineRecovery": false,
     "telemetry": false,
     "summary": true
   }]]
@@ -18,7 +19,9 @@ Plugin options are passed through the OpenCode plugin tuple:
 
 Options may set read/search/diagnostic limits, snapshot TTL, generated-file
 patterns, explicit full-replacement allowlists, local summary output, and
-validation commands. Invalid options fail during plugin load.
+validation commands. `hashlineRecovery` defaults to `false`; when enabled, only
+upstream-proven ordinary Hashline anchor recovery is allowed. `REM` and `MV`
+remain strict stale-safe operations. Invalid options fail during plugin load.
 
 `maxInitialReadLines` is a hard per-call bound for both file lines and
 directory entries. An explicit `read.limit` above this value is clamped rather

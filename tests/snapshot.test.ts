@@ -3,6 +3,33 @@ import { encodeUtf8, decodeUtf8 } from "../src/preservation/text.js"
 import { ScopedSnapshotStore } from "../src/snapshot/store.js"
 
 describe("ScopedSnapshotStore", () => {
+  it("evicts least-recently-used snapshots within a byte quota", () => {
+    const store = new ScopedSnapshotStore({ maxBytes: 30 })
+    const scope = { sessionId: "s", worktree: "/w" }
+    const first = store.record(scope, "/w/a.ts", "a.ts", decodeUtf8(Buffer.from("aaaa")), [])
+    store.record(scope, "/w/b.ts", "b.ts", decodeUtf8(Buffer.from("bbbb")), [])
+    store.get(scope, "/w/a.ts", first.id)
+    store.record(scope, "/w/c.ts", "c.ts", decodeUtf8(Buffer.from("cccc")), [])
+    expect(store.size).toBe(2)
+    expect(store.bytes).toBeLessThanOrEqual(30)
+    expect(store.get(scope, "/w/a.ts", first.id)).toBeDefined()
+    store.clear()
+    expect(store.bytes).toBe(0)
+  })
+
+  it("shares identical documents across snapshots without merging observation scopes", () => {
+    const store = new ScopedSnapshotStore({ maxBytes: 30 })
+    const scope = { sessionId: "s", worktree: "/w" }
+    const first = store.record(scope, "/w/a.ts", "a.ts", decodeUtf8(Buffer.from("same")), [1])
+    const second = store.record({ ...scope, sessionId: "other" }, "/w/b.ts", "b.ts", decodeUtf8(Buffer.from("same")), [])
+    expect(second.document).toBe(first.document)
+    expect(second.seenLines.size).toBe(0)
+    expect(store.bytes).toBe(12)
+    store.invalidate("/w/a.ts")
+    expect(store.bytes).toBe(12)
+    store.invalidate("/w/b.ts")
+    expect(store.bytes).toBe(0)
+  })
   it("isolates snapshots by session and worktree", () => {
     const store = new ScopedSnapshotStore()
     const document = decodeUtf8(encodeUtf8("const value = 1\n", false))
@@ -21,6 +48,35 @@ describe("ScopedSnapshotStore", () => {
     store.record(scope, "/w/a.ts", "a.ts", document, [1])
     const snapshot = store.record(scope, "/w/a.ts", "a.ts", document, [2])
     expect([...snapshot.seenLines]).toEqual([1, 2])
+  })
+
+  it("keeps colliding hashline tags distinct and refuses ambiguous tag-only lookups", () => {
+    const store = new ScopedSnapshotStore()
+    const scope = { sessionId: "s", worktree: "/w" }
+    const seen = new Map<string, { text: string; document: ReturnType<typeof decodeUtf8> }>()
+    let collision: { text: string; document: ReturnType<typeof decodeUtf8> } | undefined
+    let original: { text: string; document: ReturnType<typeof decodeUtf8> } | undefined
+    for (let index = 0; index < 2_000; index++) {
+      const text = `const value = ${index}\n`
+      const document = decodeUtf8(encodeUtf8(text, false))
+      const tag = store.record(scope, "/w/a.ts", "a.ts", document, [1]).tag
+      const previous = seen.get(tag)
+      if (previous && previous.text !== text) {
+        original = previous
+        collision = { text, document }
+        break
+      }
+      seen.set(tag, { text, document })
+    }
+    expect(original).toBeDefined()
+    expect(collision).toBeDefined()
+    const first = store.record(scope, "/w/a.ts", "a.ts", original!.document, [1])
+    const second = store.record(scope, "/w/a.ts", "a.ts", collision!.document, [1])
+    expect(first.tag).toBe(second.tag)
+    expect(first.id).not.toBe(second.id)
+    expect(store.get(scope, "/w/a.ts", first.id)?.text).toBe(original!.text)
+    expect(store.get(scope, "/w/a.ts", second.id)?.text).toBe(collision!.text)
+    expect(() => store.get(scope, "/w/a.ts", first.tag)).toThrowError(expect.objectContaining({ code: "INVALID_ANCHOR" }))
   })
 
   it("expires old snapshots", () => {

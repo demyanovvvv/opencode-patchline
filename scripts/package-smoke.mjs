@@ -28,6 +28,7 @@ try {
     "await check('opencode-patchline', required.main)",
     "await check('opencode-patchline/plugin', required.plugin)",
     "await check('opencode-patchline/server', required.server)",
+    "await check('opencode-patchline/tui', { PatchlineTui: 'function', default: 'object' })",
   ].join("\n")
   await execute(process.execPath, ["--input-type=module", "--eval", probe], { cwd: workspace })
   const cli = process.platform === "win32" ? path.join(workspace, "node_modules", ".bin", "opencode-patchline.cmd") : path.join(workspace, "node_modules", ".bin", "opencode-patchline")

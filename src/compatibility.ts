@@ -13,6 +13,7 @@ export type CapabilityCheck = {
   name: string
   ok: boolean
   detail: string
+  severity?: "required" | "optional" | undefined
 }
 
 async function commandVersion(command: string, args: string[]): Promise<string | undefined> {
@@ -50,11 +51,15 @@ async function canImport(specifier: string): Promise<{ ok: boolean; detail: stri
 
 async function hashlineCheck(): Promise<CapabilityCheck> {
   const result = await canImport("@oh-my-pi/hashline")
-  if (result.ok) return { name: "Hashline runtime", ...result }
-  if (process.versions.bun === undefined) {
-    return { name: "Hashline runtime", ok: true, detail: "optional Bun-native adapter unavailable under Node; exact edit remains active" }
+  if (!result.ok && process.versions.bun === undefined) {
+    return { name: "Hashline runtime", ok: true, detail: "Node linear fallback active; full upstream Hashline requires Bun" }
   }
-  return { name: "Hashline runtime", ...result }
+  if (!result.ok) return { name: "Hashline runtime", ...result }
+  if (process.versions.bun === undefined) return { name: "Hashline runtime", ok: true, detail: "Node can load parser only; full structural/native adapter requires Bun" }
+  const native = await canImport("@oh-my-pi/pi-natives")
+  return native.ok
+    ? { name: "Hashline runtime", ok: true, detail: "full Bun Hashline and native structural adapter available" }
+    : { name: "Hashline runtime", ok: false, detail: `Hashline loaded but native structural adapter failed: ${native.detail}` }
 }
 
 async function preservationCheck(): Promise<CapabilityCheck> {
@@ -112,19 +117,20 @@ export async function inspectCapabilities(): Promise<CapabilityCheck[]> {
   const ast = await canImport("@ast-grep/napi")
   await access(process.cwd())
   return [
-    { name: "Node.js", ok: Number(process.versions.node.split(".")[0]) >= 20, detail: process.versions.node },
-    { name: "OpenCode", ok: opencode !== undefined, detail: opencode ?? "not found" },
-    { name: "OpenCode plugin SDK", ...plugin },
-    await hashlineCheck(),
-    { name: "AST search", ...ast },
-    { name: "Text search", ok: true, detail: "built-in bounded fallback" },
+    { name: "Node.js", severity: "required", ok: Number(process.versions.node.split(".")[0]) >= 20, detail: process.versions.node },
+    { name: "OpenCode", severity: "required", ok: opencode !== undefined, detail: opencode ?? "not found" },
+    { name: "OpenCode plugin SDK", severity: "required", ...plugin },
+    { ...(await hashlineCheck()), severity: "optional" },
+    { name: "AST search", severity: "optional", ...ast },
+    { name: "Text search", severity: "required", ok: true, detail: "built-in bounded fallback" },
     {
       name: "Native LSP tool flag",
+      severity: "optional",
       ok: process.env.OPENCODE_EXPERIMENTAL_LSP_TOOL === "true" || process.env.OPENCODE_EXPERIMENTAL === "true",
       detail: process.env.OPENCODE_EXPERIMENTAL_LSP_TOOL === "true" || process.env.OPENCODE_EXPERIMENTAL === "true" ? "enabled" : "optional, disabled",
     },
-    await lspSetupCheck(),
-    await preservationCheck(),
-    await safetyCheck(),
+    { ...(await lspSetupCheck()), severity: "optional" },
+    { ...(await preservationCheck()), severity: "required" },
+    { ...(await safetyCheck()), severity: "required" },
   ]
 }

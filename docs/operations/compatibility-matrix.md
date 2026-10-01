@@ -4,7 +4,7 @@
 |---|---|---|
 | OpenCode | 1.18.30 | verified source and installed CLI |
 | `@opencode-ai/plugin` | 1.18.30 | verified |
-| `@oh-my-pi/hashline` | 18.1.5 | API verified; Bun-oriented runtime is optional under Node |
+| `@oh-my-pi/hashline` | 18.1.5 | Full upstream runtime verified under OpenCode/Bun; Node keeps guarded linear fallback |
 | Node.js | 20.x and 22.x | CI matrix; local development uses 22.22.2 |
 | Windows | current development host | tested |
 | Windows CI | Windows Server 2022, Node.js 20 and 22 | direct plugin registration smoke passes; OpenCode HTTP bootstrap blocked |

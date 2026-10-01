@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rm, stat } from "node:fs/promises"
+import { open, readFile, rm, stat } from "node:fs/promises"
 import path from "node:path"
 import type { PatchlineConfig } from "./config.js"
 import { PatchlineError } from "./errors.js"
@@ -6,6 +6,8 @@ import { isGeneratedFile, matchesAllowedPath } from "./guards/files.js"
 import { atomicReplace, readFileIdentity } from "./writing/atomic.js"
 import { normalizedIdentity, resolveWorkspacePath } from "./workspace/paths.js"
 import { digestBytes, type FileIdentity } from "./snapshot/store.js"
+import { reportMutationStage, type MutationObserver } from "./writing/progress.js"
+import { cleanupParents, ensureParents, type CreatedDirectory } from "./writing/parents.js"
 
 const MAX_WRITE_CONTENT_BYTES = 8 * 1024 * 1024
 const MAX_BATCH_ITEMS = 500
@@ -26,16 +28,15 @@ export type PreparedWrite = WriteRequest & {
   absolutePath: string
   canonicalPath: string
   relativePath: string
+  signal?: AbortSignal | undefined
+  directories?: CreatedDirectory[]
 }
 
-type CreatedWrite = PreparedWrite & {
-  bytes: Uint8Array
-  identity: FileIdentity
-}
+type CreatedWrite = PreparedWrite & CreatedFile
 
 type CreatedFile = {
   bytes: Uint8Array
-  identity: FileIdentity
+  identity?: FileIdentity | undefined
 }
 
 export class WriteService {
@@ -50,8 +51,9 @@ export class WriteService {
     await atomicReplace(filePath, Buffer.from(content, "utf8"), { expectedParent, expectedTarget })
   }
 
-  protected async writeCreatedFile(item: PreparedWrite): Promise<CreatedFile> {
-    await mkdir(path.dirname(item.absolutePath), { recursive: true })
+  protected async writeCreatedFile(item: PreparedWrite, onCreated?: (file: CreatedFile) => void): Promise<CreatedFile> {
+    item.signal?.throwIfAborted()
+    item.directories = await ensureParents(item.worktree, item.filePath, item.signal)
     const currentPath = await resolveWorkspacePath(item.worktree, item.filePath)
     if (currentPath.exists || normalizedIdentity(currentPath.canonical) !== normalizedIdentity(item.canonicalPath)) {
       throw new PatchlineError("STALE_SNAPSHOT", `Create target changed after preflight: ${item.relativePath}.`, {
@@ -59,24 +61,45 @@ export class WriteService {
         retryable: true,
       })
     }
+    item.signal?.throwIfAborted()
     const handle = await open(item.absolutePath, "wx+")
+    const created: CreatedFile = { bytes: Buffer.alloc(0) }
     try {
-      await handle.writeFile(item.content, "utf8")
-      const bytes = Buffer.alloc(Buffer.byteLength(item.content, "utf8"))
+      onCreated?.(created)
+      const identity = await handle.stat({ bigint: true })
+      created.identity = { device: identity.dev, inode: identity.ino }
+      onCreated?.(created)
+      const expected = Buffer.from(item.content, "utf8")
       let offset = 0
+      while (offset < expected.length) {
+        item.signal?.throwIfAborted()
+        const result = await handle.write(expected, offset, expected.length - offset, offset)
+        if (result.bytesWritten === 0) throw new PatchlineError("TRANSACTION_FAILED", `Could not write created file: ${item.relativePath}.`)
+        offset += result.bytesWritten
+        created.bytes = expected.subarray(0, offset)
+        onCreated?.(created)
+      }
+      const bytes = Buffer.alloc(expected.length)
+      offset = 0
       while (offset < bytes.length) {
         const result = await handle.read(bytes, offset, bytes.length - offset, offset)
         if (result.bytesRead === 0) throw new PatchlineError("TRANSACTION_FAILED", `Could not verify created file: ${item.relativePath}.`)
         offset += result.bytesRead
       }
-      const identity = await handle.stat({ bigint: true })
-      return { bytes, identity: { device: identity.dev, inode: identity.ino } }
+      const final = await handle.stat({ bigint: true })
+      if (final.size !== BigInt(expected.length) || digestBytes(bytes) !== digestBytes(expected)) {
+        throw new PatchlineError("STALE_SNAPSHOT", `Created file changed during verification: ${item.relativePath}.`, { path: item.relativePath, retryable: true })
+      }
+      created.bytes = bytes
+      onCreated?.(created)
+      return created
     } finally {
       await handle.close()
     }
   }
 
   protected async removeCreatedFile(item: CreatedWrite): Promise<void> {
+    if (!item.identity) throw new PatchlineError("STALE_SNAPSHOT", `Create rollback identity is unavailable: ${item.relativePath}.`, { path: item.relativePath, retryable: true })
     const currentPath = await resolveWorkspacePath(item.worktree, item.filePath)
     if (!currentPath.exists || normalizedIdentity(currentPath.canonical) !== normalizedIdentity(item.canonicalPath)) {
       throw new PatchlineError("STALE_SNAPSHOT", `Create rollback target changed: ${item.relativePath}.`, {
@@ -99,9 +122,11 @@ export class WriteService {
       })
     }
     await rm(currentPath.absolute, { force: true })
+    await cleanupParents(item.worktree, item.directories ?? [])
   }
 
-  async write(request: WriteRequest): Promise<{ path: string; created: boolean; bytesWritten: number; output: string }> {
+  async write(request: WriteRequest, signal?: AbortSignal): Promise<{ path: string; created: boolean; bytesWritten: number; output: string }> {
+    signal?.throwIfAborted()
     assertWriteSize(request.content, request.filePath)
     const resolved = await resolveWorkspacePath(request.worktree, request.filePath)
     if (resolved.exists && this.config.protectExistingWrites) {
@@ -122,14 +147,28 @@ export class WriteService {
     if (resolved.exists) {
       const targetIdentity = await readFileIdentity(resolved.absolute)
       const parentIdentity = await readFileIdentity(path.dirname(resolved.absolute))
+      signal?.throwIfAborted()
       await this.replaceExistingFile(resolved.absolute, request.content, targetIdentity, parentIdentity)
     } else {
-      await this.writeCreatedFile({
-        ...request,
-        absolutePath: resolved.absolute,
-        canonicalPath: resolved.canonical,
-        relativePath: resolved.relative,
-      })
+      const item: PreparedWrite = { ...request, absolutePath: resolved.absolute, canonicalPath: resolved.canonical, relativePath: resolved.relative, signal }
+      let created: CreatedWrite | undefined
+      try {
+        await this.writeCreatedFile(item, (file) => { created = { ...item, ...file } })
+        signal?.throwIfAborted()
+      } catch (cause) {
+        if (!created) { await cleanupParents(item.worktree, item.directories ?? []); throw cause }
+        const restored: string[] = []
+        const conflicts: string[] = []
+        try {
+          await this.removeCreatedFile(created)
+          restored.push(item.relativePath)
+        } catch {
+          conflicts.push(item.relativePath)
+        }
+        throw new PatchlineError("TRANSACTION_FAILED", `Create failed; removed ${restored.length} of 1 partially created files.`, {
+          path: item.relativePath, cause, writes: 1, details: { restored, conflicts, ...(signal?.aborted ? { cancelled: true } : {}) },
+        })
+      }
     }
     return {
       path: resolved.relative,
@@ -139,13 +178,15 @@ export class WriteService {
     }
   }
 
-  async createBatch(requests: readonly WriteRequest[]): Promise<Array<{ path: string; created: true; output: string }>> {
+  async createBatch(requests: readonly WriteRequest[], observer?: MutationObserver, signal?: AbortSignal): Promise<Array<{ path: string; created: true; output: string }>> {
+    signal?.throwIfAborted()
     if (requests.length === 0) throw new PatchlineError("INVALID_ARGUMENT", "Create batch must contain at least one file.")
     if (requests.length > MAX_BATCH_ITEMS) throw new PatchlineError("INVALID_ARGUMENT", `Create batch must contain at most ${MAX_BATCH_ITEMS} files.`)
     const prepared: PreparedWrite[] = []
     const paths = new Set<string>()
     let totalBytes = 0
     for (const request of requests) {
+      signal?.throwIfAborted()
       const bytes = Buffer.byteLength(request.content, "utf8")
       assertWriteSize(request.content, request.filePath)
       totalBytes += bytes
@@ -166,19 +207,24 @@ export class WriteService {
       const canonicalIdentity = normalizedIdentity(resolved.canonical)
       if (paths.has(canonicalIdentity)) throw new PatchlineError("INVALID_ARGUMENT", `Create batch contains duplicate target: ${resolved.relative}`)
       paths.add(canonicalIdentity)
-       prepared.push({ ...request, absolutePath: resolved.absolute, canonicalPath: resolved.canonical, relativePath: resolved.relative })
+       prepared.push({ ...request, absolutePath: resolved.absolute, canonicalPath: resolved.canonical, relativePath: resolved.relative, signal })
     }
-    const created: CreatedWrite[] = []
+    const created = new Map<string, CreatedWrite>()
+    reportMutationStage(observer, "committing")
     try {
       for (const item of prepared) {
-        const result = await this.writeCreatedFile(item)
-        created.push({ ...item, ...result })
+        signal?.throwIfAborted()
+        const track = (file: CreatedFile) => { created.set(item.relativePath, { ...item, ...file }) }
+        const result = await this.writeCreatedFile(item, track)
+        track(result)
+        signal?.throwIfAborted()
       }
-      return created.map((item) => ({ path: item.relativePath, created: true, output: `Created: ${item.relativePath}` }))
+      return Array.from(created.values(), (item) => ({ path: item.relativePath, created: true, output: `Created: ${item.relativePath}` }))
     } catch (cause) {
+      reportMutationStage(observer, "rollback")
       const conflicts: string[] = []
       const restored: string[] = []
-      for (const item of created.reverse()) {
+      for (const item of Array.from(created.values()).reverse()) {
         try {
           await this.removeCreatedFile(item)
           restored.push(item.relativePath)
@@ -186,11 +232,12 @@ export class WriteService {
           conflicts.push(item.relativePath)
         }
       }
+      for (const item of [...prepared].reverse()) await cleanupParents(item.worktree, item.directories ?? [])
       const conflictMessage = conflicts.length > 0 ? ` Preserved external changes in: ${conflicts.join(", ")}.` : ""
-      throw new PatchlineError("TRANSACTION_FAILED", `Create batch failed; removed ${restored.length} of ${created.length} partially created files.${conflictMessage}`, {
+      throw new PatchlineError("TRANSACTION_FAILED", `Create batch failed; removed ${restored.length} of ${created.size} partially created files.${conflictMessage}`, {
         cause,
-        writes: restored.length,
-        details: { restored, conflicts },
+        writes: created.size,
+        details: { restored, conflicts, ...(signal?.aborted ? { cancelled: true } : {}) },
       })
     }
   }

@@ -5,9 +5,141 @@ import { EditService } from "../src/edit-service.js"
 import { encodeUtf8 } from "../src/preservation/text.js"
 import { isFileReadResult, ReadService } from "../src/read-service.js"
 import { ScopedSnapshotStore } from "../src/snapshot/store.js"
+import { parseConfig } from "../src/config.js"
 import { temporaryWorkspace } from "./helpers/workspace.js"
 
 describe("read and exact edit", () => {
+  it("applies the current oh-my-pi PUT format through the snapshot contract", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const file = path.join(workspace.path, "hashline.ts")
+      await writeFile(file, "const first = 1\nconst second = 2\n")
+      const snapshots = new ScopedSnapshotStore()
+      const observed = await new ReadService(snapshots).read({ sessionId: "s", worktree: workspace.path, filePath: "hashline.ts" })
+      if (!isFileReadResult(observed)) throw new Error("Expected file read")
+
+      const result = await new EditService(snapshots).edit({
+        sessionId: "s",
+        worktree: workspace.path,
+        filePath: "hashline.ts",
+        snapshot: observed.snapshot,
+        hashlinePatch: `[hashline.ts#${observed.tag}]\nPUT 2.=2:\n+const second = 20`,
+      })
+
+      expect(result.path).toBe("hashline.ts")
+      expect(await readFile(file, "utf8")).toBe("const first = 1\nconst second = 20\n")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("rejects changed live content when the upstream Hashline runtime is unavailable", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const file = path.join(workspace.path, "recovery.ts")
+      await writeFile(file, "const outside = 1\nconst target = 2\nconst tail = 3\n")
+      const snapshots = new ScopedSnapshotStore()
+      const observed = await new ReadService(snapshots).read({ sessionId: "s", worktree: workspace.path, filePath: "recovery.ts" })
+      if (!isFileReadResult(observed)) throw new Error("Expected file read")
+      await writeFile(file, "const outside = 10\nconst target = 2\nconst tail = 3\n")
+
+      await expect(new EditService(snapshots, parseConfig({ hashlineRecovery: true })).edit({
+        sessionId: "s",
+        worktree: workspace.path,
+        filePath: "recovery.ts",
+        snapshot: observed.snapshot,
+        hashlinePatch: `[recovery.ts#${observed.tag}]\nPUT 2.=2:\n+const target = 20`,
+      })).rejects.toMatchObject({ code: "STALE_SNAPSHOT", writes: 0 })
+      expect(await readFile(file, "utf8")).toBe("const outside = 10\nconst target = 2\nconst tail = 3\n")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("preserves absent final newline when inserting after a Hashline anchor", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const file = path.join(workspace.path, "no-newline.ts")
+      await writeFile(file, "first\nsecond")
+      const snapshots = new ScopedSnapshotStore()
+      const observed = await new ReadService(snapshots).read({ sessionId: "s", worktree: workspace.path, filePath: "no-newline.ts" })
+      if (!isFileReadResult(observed)) throw new Error("Expected file read")
+      await new EditService(snapshots).edit({ sessionId: "s", worktree: workspace.path, filePath: "no-newline.ts", snapshot: observed.snapshot,
+        hashlinePatch: `[no-newline.ts#${observed.tag}]\nPUT >$:\n+third` })
+      expect(await readFile(file, "utf8")).toBe("first\nsecond\nthird")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("inserts into an empty file without an extra newline", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const file = path.join(workspace.path, "empty-hashline.ts")
+      await writeFile(file, "")
+      const snapshots = new ScopedSnapshotStore()
+      const observed = await new ReadService(snapshots).read({ sessionId: "s", worktree: workspace.path, filePath: "empty-hashline.ts" })
+      if (!isFileReadResult(observed)) throw new Error("Expected file read")
+      await new EditService(snapshots).edit({ sessionId: "s", worktree: workspace.path, filePath: "empty-hashline.ts", snapshot: observed.snapshot,
+        hashlinePatch: `[empty-hashline.ts#${observed.tag}]\nPUT >$:\n+first` })
+      expect(await readFile(file, "utf8")).toBe("first")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("rejects overlapping Hashline ranges before writing", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const file = path.join(workspace.path, "overlap.ts")
+      await writeFile(file, "first\nsecond\n")
+      const snapshots = new ScopedSnapshotStore()
+      const observed = await new ReadService(snapshots).read({ sessionId: "s", worktree: workspace.path, filePath: "overlap.ts" })
+      if (!isFileReadResult(observed)) throw new Error("Expected file read")
+      await expect(new EditService(snapshots).edit({ sessionId: "s", worktree: workspace.path, filePath: "overlap.ts", snapshot: observed.snapshot,
+        hashlinePatch: `[overlap.ts#${observed.tag}]\nPUT 1.=2:\n+changed\nPUT 2.=2:\n+other` })).rejects.toMatchObject({ code: "PATCH_PREFLIGHT_FAILED", writes: 0 })
+      expect(await readFile(file, "utf8")).toBe("first\nsecond\n")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("rejects malformed and unseen Hashline anchors before writing", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const file = path.join(workspace.path, "anchors.ts")
+      await writeFile(file, "one\ntwo\nthree\n")
+      const snapshots = new ScopedSnapshotStore()
+      const observed = await new ReadService(snapshots).read({ sessionId: "s", worktree: workspace.path, filePath: "anchors.ts", limit: 1 })
+      if (!isFileReadResult(observed)) throw new Error("Expected file read")
+      const edit = (patch: string) => new EditService(snapshots).edit({ sessionId: "s", worktree: workspace.path, filePath: "anchors.ts", snapshot: observed.snapshot, hashlinePatch: `[anchors.ts#${observed.tag}]\n${patch}` })
+      await expect(edit("PUT 2.=2:\n+changed")).rejects.toMatchObject({ code: "INVALID_ANCHOR", writes: 0 })
+      await expect(edit("PUT 1.=1:\n+changed\n[other.ts#ABCD]\nCUT 1.=1")).rejects.toMatchObject({ code: "PATCH_PREFLIGHT_FAILED", writes: 0 })
+      await expect(edit("CUT 1.=1:\n+unexpected")).rejects.toMatchObject({ code: "PATCH_PREFLIGHT_FAILED", writes: 0 })
+      expect(await readFile(file, "utf8")).toBe("one\ntwo\nthree\n")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("rejects malformed CUT bodies and empty or repeated Hashline sections", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const file = path.join(workspace.path, "strict.ts")
+      await writeFile(file, "one\ntwo\n")
+      const snapshots = new ScopedSnapshotStore()
+      const observed = await new ReadService(snapshots).read({ sessionId: "s", worktree: workspace.path, filePath: "strict.ts" })
+      if (!isFileReadResult(observed)) throw new Error("Expected file read")
+      const edit = (patch: string) => new EditService(snapshots).edit({ sessionId: "s", worktree: workspace.path, filePath: "strict.ts", snapshot: observed.snapshot, hashlinePatch: `[strict.ts#${observed.tag}]\n${patch}` })
+      for (const patch of ["CUT 1.=1:\n+injected", "PUT 1.=1:", "PUT 1.=1:\n+first\n[strict.ts#0000]\nCUT 2.=2", "", "PUT 1.=1:\n+first\nPUT 1.=1:\n+again"]) {
+        await expect(edit(patch)).rejects.toMatchObject({ code: "PATCH_PREFLIGHT_FAILED", writes: 0 })
+      }
+      expect(await readFile(file, "utf8")).toBe("one\ntwo\n")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
   it("rejects oversized files before recording a snapshot", async () => {
     const workspace = await temporaryWorkspace()
     try {

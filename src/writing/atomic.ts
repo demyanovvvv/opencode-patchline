@@ -28,6 +28,8 @@ export async function atomicReplace(
   const mode = (await stat(filePath)).mode & 0o7777
   const temporaryDirectory = await mkdtemp(path.join(directory, ".patchline-tmp-"))
   const temporaryPath = path.join(temporaryDirectory, path.basename(filePath))
+  let renamed = false
+  let primaryError: unknown
   try {
     await assertIdentity(directory, options.expectedParent, "parent directory")
     if (options.expectedTarget) await assertIdentity(filePath, options.expectedTarget, "target")
@@ -37,8 +39,18 @@ export async function atomicReplace(
     await assertIdentity(directory, options.expectedParent, "parent directory")
     if (options.expectedTarget) await assertIdentity(filePath, options.expectedTarget, "target")
     await rename(temporaryPath, filePath)
+    renamed = true
     return replacementIdentity
+  } catch (cause) {
+    primaryError = cause
+    throw cause
   } finally {
-    await rm(temporaryDirectory, { recursive: true, force: true })
+    try {
+      await rm(temporaryDirectory, { recursive: true, force: true })
+    } catch (cleanupError) {
+      // A landed replacement must retain its identity even if cleanup fails.
+      // Preserve an earlier write/preflight failure instead of masking it.
+      if (!renamed && primaryError === undefined) throw cleanupError
+    }
   }
 }

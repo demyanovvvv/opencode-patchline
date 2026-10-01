@@ -20,7 +20,10 @@ metadata where the OpenCode adapter supports it: `status` (`observed` or
 `applied`), `recoveryAction`, and operation-specific fields such as `snapshot`,
 `bytesWritten` (actual UTF-8 bytes committed), `bytesRendered`, `added`, `deleted`, `created`, and `validation`. The existing
 human-readable output remains available, but consumers should use metadata for
-recovery decisions.
+recovery decisions. Mutation tools expose the same validation states:
+`not_configured`, `passed`, or `failed`; validation failure does not change an
+already-applied mutation into a zero-write result. Mutation cancellation is
+propagated from OpenCode and partial cancellation reports rollback details.
 
 File reads reject files larger than 8 MiB before loading them and reject a
 requested range containing a line longer than 20,000 characters before creating
@@ -59,8 +62,10 @@ loaded, including files that grow past the limit while being read. Each returned
 matching-line preview is capped at 2,000 characters. Each enumerated directory is
 bounded to 4,096 entries before literal search continues. Directory entries are
 sorted by name before traversal so match order is deterministic and independent
-of filesystem readdir order. Formatted grep and AST responses are rejected above
-20,000 characters.
+of filesystem readdir order. Formatted grep and AST responses remain bounded at 20,000 characters and are
+truncated with an actionable narrowing hint. Grep results report skipped-file
+counts and bounded reasons for unreadable, unsupported-encoding, binary, or
+oversized files.
 
 `apply_patch` accepts snapshot-tagged Hashline sections for existing files. It
 rejects non-whitespace content before the first Hashline section before asking
