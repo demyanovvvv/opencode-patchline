@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 1.2.0 - 2026-10-01
+
+- Added themed conversation cards for all eleven Patchline tools, status-colored
+  borders, animated progress, English footer disclosure, progressive text output
+  and independently expandable native diff hunks.
+- Added Windows x64 conversation-host provisioning through the existing `opencode`
+  command. Integrated versions derive from upstream and package versions, such as
+  `1.18.34+patchline.1.2.0`; upstream selection supports `--opencode-version`.
+- Routed integrated host upgrades through the installer, protected startup update
+  handling and canonicalized NVM executable paths without weakening file guards.
+- Made byte-identical host installation a no-op and rotated one previous host
+  backup. Historical backups remain retained pending ownership-aware migration.
+- Added source-checkout install wrappers, registration deduplication, package
+  cleanup and installer/UI regression coverage. Full artifact delivery and
+  cross-component update recovery remain follow-up work.
+
 - Added server/TUI entrypoints in one package, native diff metadata and a themed,
   reactive sidebar with animated progress, validation failures and rollback details.
 - Compiled TUI JSX using Solid's universal transform; added a mounted Bun/OpenTUI
