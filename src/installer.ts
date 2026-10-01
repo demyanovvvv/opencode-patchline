@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline/promises"
 import path from "node:path"
-import { access, mkdir, realpath } from "node:fs/promises"
+import { access, mkdir, realpath, readFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { applyEdits, createScanner, findNodeAtLocation, modify, parse, parseTree, type ParseError } from "jsonc-parser"
 import { executeCommand, type CommandResult } from "./installation/process.js"
@@ -26,6 +26,7 @@ export type InstallerOptions = {
   stateDirectory?: string
   stateFile?: string
   packageName?: string
+  opencodeVersion?: string
   yes?: boolean
   dryRun?: boolean
   stdout?: Output
@@ -481,6 +482,32 @@ export async function protectVisualHostUpdates(file: string): Promise<void> {
   await commitConfigurations([{ ...snapshot, text }], () => {})
 }
 
+export function integratedHostVersion(upstream: string, plugin: string): string {
+  const stable = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+  const packageVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
+  if (!stable.test(upstream) || !packageVersion.test(plugin)) throw new Error("Invalid upstream or Patchline version.")
+  return `${upstream}+patchline.${plugin}`
+}
+
+export function patchHostUpdates(source: string, cli: string): string {
+  const marker = "// Patchline coordinated upgrade"
+  if (source.includes(marker)) {
+    return source.includes('if (InstallationVersion.includes("+patchline."))') ? source : source.replace(`${marker}${source.includes("\r\n") ? "\r\n" : "\n"}`, `${marker}${source.includes("\r\n") ? "\r\n" : "\n"}        if (InstallationVersion.includes("+patchline.")) {${source.includes("\r\n") ? "\r\n" : "\n"}`).replace(/        return\r?\n(?=        let upgradeResult)/, `        return${source.includes("\r\n") ? "\r\n" : "\n"}        }${source.includes("\r\n") ? "\r\n" : "\n"}`)
+  }
+  const anchor = 'upgrade: Effect.fn("Installation.upgrade")(function* (m: Method, target: string) {'
+  if (!source.includes(anchor)) throw new Error("Unsupported OpenCode upgrade API.")
+  const newline = source.includes("\r\n") ? "\r\n" : "\n"
+  const block = [
+    `        ${marker}`,
+    '        if (InstallationVersion.includes("+patchline.")) {',
+    `        const coordinated = yield* run(["node", ${JSON.stringify(cli)}, "install", "--local", "--global", "--yes", "--opencode-version", target])`,
+    '        if (coordinated.code !== 0) return yield* Effect.fail(new UpgradeFailedError({ stderr: coordinated.stderr || coordinated.stdout }))',
+    '        return',
+    '        }',
+  ].join(newline)
+  return source.replace(anchor, `${anchor}${newline}${block}`)
+}
+
 async function ensureVisualHost(options: InstallerOptions): Promise<void> {
   if (process.platform !== "win32" || process.arch !== "x64") throw new Error("Automatic conversation UI host installation currently requires Windows x64.")
   const globalFiles = await configurationFiles({ ...options, cwd: options.cwd!, global: true })
@@ -488,19 +515,28 @@ async function ensureVisualHost(options: InstallerOptions): Promise<void> {
   if (!serverConfig) throw new Error("An OpenCode global configuration is required to protect the custom UI host from automatic replacement.")
   await protectVisualHostUpdates(serverConfig.path)
   const version = await executeCommand("opencode", ["--version"], options.cwd!)
-  if (version.code === 0 && version.output.includes("patchline-ui.1")) return
+  const packageRoot = fileURLToPath(new URL("..", import.meta.url))
+  const manifest = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8")) as { version: string }
+  const latest = options.opencodeVersion ? undefined : await executeCommand("npm", ["view", "opencode-ai", "version"], options.cwd!)
+  if (latest && latest.code !== 0) throw new Error("Could not resolve the upstream OpenCode version; existing host retained.")
+  const upstream = options.opencodeVersion ?? latest!.output.trim()
+  const desiredVersion = integratedHostVersion(upstream, manifest.version)
+  if (version.code === 0 && version.output.trim() === desiredVersion) return
   if (!options.yes && !await (options.confirm ?? confirmPrompt)("Install the Patchline-compatible OpenCode UI host and replace the opencode executable (with a backup)?")) throw new Error("Conversation UI host installation was declined; installation is incomplete.")
   if ((await executeCommand("bun", ["--version"], options.cwd!).catch(() => ({ code: 1, output: "" }))).code !== 0) {
     if ((await executeCommand("npm", ["install", "--global", "bun"], options.cwd!, true)).code !== 0) throw new Error("Bun is required to build the UI host.")
   }
-  const packageRoot = fileURLToPath(new URL("..", import.meta.url))
   let host = path.join(packageRoot, ".opencode-host")
-  try { await access(path.join(host, "packages", "tui", "src", "routes", "session", "index.tsx")) }
+  try {
+    await access(path.join(host, "packages", "tui", "src", "routes", "session", "index.tsx"))
+    const tag = await executeCommand("git", ["describe", "--tags", "--exact-match", "HEAD"], host)
+    if (tag.code !== 0 || tag.output.trim() !== `v${upstream}`) throw new Error("Host checkout version mismatch.")
+  }
   catch {
-    host = path.join(globalConfigDirectory(), "patchline-host-1.18.34")
+    host = path.join(globalConfigDirectory(), `patchline-host-source-${upstream}`)
     await mkdir(path.dirname(host), { recursive: true })
     try { await access(path.join(host, "package.json")) }
-    catch { if ((await executeCommand("git", ["clone", "--depth", "1", "--branch", "v1.18.34", "https://github.com/anomalyco/opencode.git", host], options.cwd!, true)).code !== 0) throw new Error("Could not prepare the OpenCode UI host.") }
+    catch { if ((await executeCommand("git", ["clone", "--depth", "1", "--branch", `v${upstream}`, "https://github.com/anomalyco/opencode.git", host], options.cwd!, true)).code !== 0) throw new Error("Could not prepare the OpenCode UI host.") }
   }
   const session = await readSnapshot(path.join(host, "packages", "tui", "src", "routes", "session", "index.tsx"))
   if (!session) throw new Error("Missing OpenCode session renderer.")
@@ -517,15 +553,23 @@ async function ensureVisualHost(options: InstallerOptions): Promise<void> {
     await commitConfigurations([{ ...session, text: session.source.slice(0, start) + replaced + session.source.slice(end) }], (file) => output(options, `Backup: ${file}`))
   }
   output(options, "Installing/updating the OpenCode conversation UI host (this may take several minutes).")
+  const upgradeFile = await readSnapshot(path.join(host, "packages", "opencode", "src", "installation", "index.ts"))
+  if (!upgradeFile) throw new Error("Missing OpenCode upgrade adapter.")
+  const upgradeText = patchHostUpdates(upgradeFile.source, path.join(packageRoot, "dist", "cli.js"))
+  if (upgradeText !== upgradeFile.source) await commitConfigurations([{ ...upgradeFile, text: upgradeText }], () => {})
+  const startupFile = await readSnapshot(path.join(host, "packages", "opencode", "src", "cli", "upgrade.ts"))
+  if (!startupFile) throw new Error("Missing OpenCode startup update policy.")
+  const policyText = startupFile.source.replace('if (InstallationVersion === latest) return', 'if (InstallationVersion.split("+")[0] === latest) return')
+  if (policyText !== startupFile.source) await commitConfigurations([{ ...startupFile, text: policyText }], () => {})
   if ((await executeCommand("bun", ["install", "--ignore-scripts"], host, true)).code !== 0) throw new Error("UI host dependencies failed to install.")
   const buildDirectory = path.join(host, "packages", "opencode")
-  if ((await executeCommand("bun", ["run", "script/build.ts", "--single", "--skip-install", "--skip-embed-web-ui"], buildDirectory, true, { OPENCODE_VERSION: "1.18.34-patchline-ui.1" })).code !== 0) throw new Error("UI host build failed.")
+  if ((await executeCommand("bun", ["run", "script/build.ts", "--single", "--skip-install", "--skip-embed-web-ui"], buildDirectory, true, { OPENCODE_VERSION: desiredVersion })).code !== 0) throw new Error("UI host build failed.")
   const binary = path.join(buildDirectory, "dist", "opencode-windows-x64", "bin", "opencode.exe")
   const target = await resolveInstalledOpenCode()
   const previous = await installHostBinary(binary, target)
   output(options, `OpenCode UI host installed. Backup: ${previous}`)
   const installed = await executeCommand("opencode", ["--version"], options.cwd!)
-  if (installed.code !== 0 || !installed.output.includes("patchline-ui.1")) throw new Error("The opencode command does not resolve to the installed UI host.")
+  if (installed.code !== 0 || installed.output.trim() !== desiredVersion) throw new Error("The opencode command does not resolve to the installed UI host.")
 }
 
 export async function resolveInstalledOpenCode(searchPath = process.env.PATH ?? ""): Promise<string> {

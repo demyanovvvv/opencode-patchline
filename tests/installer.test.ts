@@ -16,9 +16,28 @@ import {
   uninstallPatchline,
   protectVisualHostUpdates,
   resolveInstalledOpenCode,
+  integratedHostVersion,
+  patchHostUpdates,
 } from "../src/installer.js"
 
 describe("Patchline installer", () => {
+  it("derives integrated versions independently from upstream and plugin versions", () => {
+    expect(integratedHostVersion("1.18.34", "1.1.0")).toBe("1.18.34+patchline.1.1.0")
+    expect(integratedHostVersion("1.18.35", "1.1.0")).toBe("1.18.35+patchline.1.1.0")
+    expect(integratedHostVersion("1.18.35", "1.1.1-beta.1")).toBe("1.18.35+patchline.1.1.1-beta.1")
+    expect(() => integratedHostVersion("latest", "1.1.0")).toThrow()
+    expect(() => integratedHostVersion("1.18.34", "broken")).toThrow()
+  })
+
+  it("routes integrated host upgrades through the installer instead of stock npm replacement", () => {
+    const original = 'upgrade: Effect.fn("Installation.upgrade")(function* (m: Method, target: string) {\n        let upgradeResult: { code: number; stdout: string; stderr: string } | undefined\n        switch (m) {'
+    const updated = patchHostUpdates(original, "D:/plugin/dist/cli.js")
+    expect(updated).toContain('"--opencode-version", target')
+    expect(updated).toContain('"D:/plugin/dist/cli.js"')
+    expect(updated).toContain('switch (m)')
+    expect(patchHostUpdates(updated, "D:/plugin/dist/cli.js")).toBe(updated)
+    expect(() => patchHostUpdates("unsupported", "cli.js")).toThrow()
+  })
   it("protects the custom UI host from automatic stock replacement without overwriting explicit preferences", async () => {
     const root = await workspace("patchline-host-update-")
     const file = path.join(root, "opencode.jsonc")

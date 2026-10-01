@@ -125,8 +125,14 @@ export async function runCli(args: readonly string[], options: CliOptions = {}):
       stderr("Missing value for --lang. Use --lang ru or --lang en.")
       return 1
     }
-    const flags = new Set(["--global", "-g", "--yes", "-y", "--lang", "--language", ...(command === "install" ? ["--local"] : ["--dry-run"])])
-    const unknown = args.slice(1).find((arg, index) => index + 1 !== languageFlag + 1 && !flags.has(arg))
+    const upstreamFlag = args.indexOf("--opencode-version")
+    const upstream = upstreamFlag >= 0 ? args[upstreamFlag + 1] : undefined
+    if (upstreamFlag >= 0 && (command !== "install" || !upstream || !/^1\.\d+\.\d+$/.test(upstream))) {
+      stderr("--opencode-version requires a stable OpenCode 1.x version.")
+      return 1
+    }
+    const flags = new Set(["--global", "-g", "--yes", "-y", "--lang", "--language", ...(command === "install" ? ["--local", "--opencode-version"] : ["--dry-run"])])
+    const unknown = args.slice(1).find((arg, index) => index + 1 !== languageFlag + 1 && index + 1 !== upstreamFlag + 1 && !flags.has(arg))
     if (unknown) {
       stderr(languageValue === "ru" ? `Неизвестный параметр: ${unknown}` : `Unknown installer option: ${unknown}`)
       return 1
@@ -139,6 +145,7 @@ export async function runCli(args: readonly string[], options: CliOptions = {}):
       yes: args.includes("--yes") || args.includes("-y"),
       dryRun: args.includes("--dry-run"),
       ...(args.includes("--local") ? { packageName: fileURLToPath(new URL("..", import.meta.url)) } : {}),
+      ...(upstream !== undefined ? { opencodeVersion: upstream } : {}),
       ...(languageValue !== undefined ? { language: languageValue as InstallerLanguage } : {}),
     }
     return command === "install"

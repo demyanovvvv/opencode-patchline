@@ -36,15 +36,21 @@ preserving the caller's working directory and exit code. A missing build fails
 with instructions to run `npm install` and `npm run build`, without registry
 lookup. Standalone downloaded wrappers retain the published-package behavior.
 
-On Windows x64, installation also provisions the conversation UI host based on
-OpenCode 1.18.34. It installs Bun when missing, prepares the pinned OpenCode
-checkout (Git is required when no local checkout exists), adds tool replacement
-slots, installs build dependencies and builds the CLI without embedded web UI.
-Replacement requires confirmation unless `--yes` is supplied. The previous
-executable is retained beside the target with a unique backup name. Installation
-verifies `opencode --version` reports `1.18.34-patchline-ui.1`; repeat installation
-skips rebuilding this host. Unsupported platforms fail instead of claiming full
-UI installation. Removing Patchline does not restore or delete the shared host.
+On Windows x64, installation provisions a conversation UI host from the latest
+stable `opencode-ai` upstream version, or `--opencode-version <1.x.y>`. Patchline
+version comes from the installer's package manifest. The executable version is
+`<upstream>+patchline.<plugin>` (for example `1.18.34+patchline.1.1.0`). Exact
+matching installed pairs skip rebuilding. Upstream and plugin changes therefore
+update their respective components independently. Invalid versions fail closed.
+It installs Bun when missing, prepares a matching tagged checkout, adds tool
+replacement slots and a coordinated update adapter, and builds without embedded
+web UI. Unsupported upstream source APIs fail before replacing the executable.
+Replacement requires confirmation unless `--yes` is supplied. One fixed
+`.patchline-previous` backup is rotated; byte-identical installs do not rotate it.
+Command `opencode` is retained. Unsupported platforms fail instead of claiming
+full UI installation. Removing Patchline does not yet restore the shared host.
+Legacy UUID backups and source caches are retained until ownership-aware cleanup
+is implemented; they must not be deleted merely by matching a filename.
 
 After registration, all recognized historical Patchline package/local paths are
 collapsed to one selected package entry per config, preserving tuple options.
@@ -52,7 +58,11 @@ Similarly named third-party packages are retained. Before provisioning (includin
 the already-installed fast path), the installer changes global `autoupdate` from
 missing/true to `"notify"`, preserving false/notify and unrelated JSONC content,
 with guarded writes and backups. This prevents OpenCode's startup updater from
-replacing the custom version with stock; explicit upgrades can still replace it.
+replacing the custom version with stock. Integrated `opencode upgrade` delegates
+to the same local installer with the requested upstream version. Startup update
+comparison ignores integration build metadata to avoid repeated same-version
+notifications. Published artifact delivery, plugin-update coordination outside
+the installer, global transaction journaling and managed cleanup remain pending.
 The preference is retained on uninstall. Existing global configuration is
 required for provisioning. Executable discovery canonicalizes the located path
 (including NVM aliases) before regular-file, parent and identity checks.

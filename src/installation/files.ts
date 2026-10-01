@@ -140,15 +140,25 @@ export async function installHostBinary(source: string, target: string): Promise
   const identity = await readFileIdentity(target)
   const parentIdentity = await readFileIdentity(parent)
   const temporary = path.join(parent, `.patchline-host-${randomUUID()}`)
-  const previous = `${target}.patchline-backup-${randomUUID()}`
+  const previous = `${target}.patchline-previous`
+  const previousSnapshot = await readSnapshot(previous)
+  if ((await readFile(source)).equals(before)) return previous
+  const retired = `${temporary}-previous`
   await copyFile(source, temporary, constants.COPYFILE_EXCL)
   try {
     const current = await readFileIdentity(target)
     const directory = await readFileIdentity(parent)
     if (current.device !== identity.device || current.inode !== identity.inode || directory.device !== parentIdentity.device || directory.inode !== parentIdentity.inode || !(await readFile(target)).equals(before)) throw new Error("Host binary changed during installation.")
-    await rename(target, previous)
-    try { await rename(temporary, target) }
-    catch (error) { await rename(previous, target); throw error }
+    if (previousSnapshot) { await assertCurrent(previousSnapshot); await rename(previous, retired) }
+    try {
+      await rename(target, previous)
+      try { await rename(temporary, target) }
+      catch (error) { await rename(previous, target); throw error }
+    } catch (error) {
+      if (previousSnapshot) await rename(retired, previous)
+      throw error
+    }
+    if (previousSnapshot) await rm(retired)
     return previous
   } finally { await rm(temporary, { force: true }) }
 }
