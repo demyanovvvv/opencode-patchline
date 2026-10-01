@@ -30,14 +30,26 @@ error metadata. Hashline batch metadata includes all source and move paths;
 `REM`/`MV` failures expose the same landed-write and rollback conflict fields.
 Both are shown as applied changes with failed validation.
 
-The sidebar uses the active OpenCode theme and shows only mutation tools
-(`edit`, `write`, `apply_patch`, `patchline_edit_batch`), prioritizing a running operation. It reports writes, validation status, and the number of files hidden by the bounded preview.
+The sidebar uses the active OpenCode theme for every Patchline tool. Mutation
+operations (`edit`, `write`, `apply_patch`, `patchline_edit_batch`) show writes,
+validation, additions, deletions and bounded file previews. Read, search, route,
+LSP, diagnostics and summary tools expose the same activity card with a
+structured operation-specific summary.
+
+Completed mutation cards are collapsed by default. Clicking the card header
+expands all changed files; clicking a file header expands only that file. The
+expanded view uses OpenTUI's native `diff` renderer in unified mode with
+monospace code, syntax highlighting when the file type is known, line numbers,
+hunk headers, and the current theme's added/removed/context backgrounds and
+sign colors. Errors keep their file previews visible and show recovery details.
+
 Its animated indicator runs only during an operation and stops on completion or
-unmount. TUI JSX is compiled with Solid's universal transform so theme and tool
-state remain reactive. `smoke:tui` requires Bun and mounts the compiled entrypoint
-in the native OpenTUI test renderer; it checks transitions, animation, diff,
+unmount. TUI JSX is compiled with Solid's universal transform so theme, tool
+state and expanded state remain reactive. `smoke:tui` requires Bun and mounts
+the compiled entrypoint in the native OpenTUI test renderer; it checks
+transitions, animation, interactive expansion, native diff rendering,
 validation failures, rollback details and disposal.
 
-The TUI view is bounded to four files and twelve preview rows per file. It
-reads only existing tool-part metadata; it does not poll the filesystem or
-keep a second copy of snapshots.
+The TUI view is bounded to four files and the existing aggregate diff preview
+budget. It reads only existing tool-part metadata; it does not poll the
+filesystem or keep a second copy of snapshots. Preview text is display-only.

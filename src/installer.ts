@@ -38,11 +38,13 @@ type InstallerState = {
   language?: InstallerLanguage
   scope?: "global" | "project"
   lspPackages?: string[]
+  addonPackages?: string[]
   packageName?: string
   lspConfig?: OwnedLsp
 }
 
 const LSP_PACKAGES = ["typescript", "typescript-language-server"] as const
+const ADDON_PACKAGES = ["bun"] as const
 const PATCHLINE_PACKAGE = "opencode-patchline"
 
 const messages = {
@@ -56,13 +58,19 @@ const messages = {
     lspDeclined: "LSP dependencies were not installed.",
     lspInstalled: "LSP dependencies installed.",
     lspFailed: (code: number) => `LSP dependency installation failed with exit code ${code}.`,
+    runtimeMissing: "Bun is not available for the full native Hashline runtime.",
+    runtimePrompt: "Install Bun for the full native Hashline runtime?",
+    runtimeDeclined: "Bun was not installed; Patchline will use the supported fallback where needed.",
+    runtimeInstalled: "Bun runtime installed.",
+    runtimeFailed: (code: number) => `Bun installation failed with exit code ${code}.`,
     complete: "Installation complete. Restart OpenCode to load the changes.",
     noConfig: "No OpenCode configuration containing Patchline was found.",
     removing: "Removing Patchline entries from OpenCode configuration.",
     dryRun: "Would remove",
     removed: (count: number) => `Removed ${count} Patchline configuration entr${count === 1 ? "y" : "ies"}.`,
     dependenciesRemoved: "Owned LSP dependencies removed.",
-    noDependencies: "No LSP dependencies owned by Patchline were found.",
+    addonsRemoved: "Owned runtime add-ons removed.",
+    noDependencies: "No installer-owned dependencies or runtime add-ons were found.",
     completeUninstall: "Uninstallation complete. Restart OpenCode to apply the changes.",
     backup: (file: string) => `Backup created: ${file}`,
     error: (reason: string) => `Installer error: ${reason}`,
@@ -78,13 +86,19 @@ const messages = {
     lspDeclined: "Зависимости LSP не установлены.",
     lspInstalled: "Зависимости LSP установлены.",
     lspFailed: (code: number) => `Установка зависимостей LSP завершилась с кодом ${code}.`,
+    runtimeMissing: "Bun не найден; без него недоступен полный native Hashline runtime.",
+    runtimePrompt: "Установить Bun для полного native Hashline runtime?",
+    runtimeDeclined: "Bun не установлен; Patchline продолжит использовать поддерживаемый fallback, где это необходимо.",
+    runtimeInstalled: "Среда Bun установлена.",
+    runtimeFailed: (code: number) => `Установка Bun завершилась с кодом ${code}.`,
     complete: "Установка завершена. Перезапустите OpenCode для применения изменений.",
     noConfig: "Конфигурация OpenCode с Patchline не найдена.",
     removing: "Удаление записей Patchline из конфигурации OpenCode.",
     dryRun: "Будет удалено",
     removed: (count: number) => `Удалено записей конфигурации Patchline: ${count}.`,
     dependenciesRemoved: "Зависимости LSP, установленные Patchline, удалены.",
-    noDependencies: "Зависимости LSP, принадлежащие Patchline, не найдены.",
+    addonsRemoved: "Дополнения среды, установленные Patchline, удалены.",
+    noDependencies: "Зависимости и дополнения, установленные Patchline, не найдены.",
     completeUninstall: "Удаление завершено. Перезапустите OpenCode для применения изменений.",
     backup: (file: string) => `Создана резервная копия: ${file}`,
     error: (reason: string) => `Ошибка установщика: ${reason}`,
@@ -123,10 +137,12 @@ async function readState(filePath: string): Promise<InstallerState> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid installer state.")
   const state = value as Record<string, unknown>
   if (state.lspPackages !== undefined && (!Array.isArray(state.lspPackages) || state.lspPackages.some((item) => !LSP_PACKAGES.includes(item)))) throw new Error("Invalid installer dependency ownership.")
+  if (state.addonPackages !== undefined && (!Array.isArray(state.addonPackages) || state.addonPackages.some((item) => !ADDON_PACKAGES.includes(item)))) throw new Error("Invalid installer add-on ownership.")
   const result: InstallerState = {}
   if (state.language === "ru" || state.language === "en") result.language = state.language
   if (state.scope === "global" || state.scope === "project") result.scope = state.scope
   if (Array.isArray(state.lspPackages)) result.lspPackages = state.lspPackages as string[]
+  if (Array.isArray(state.addonPackages)) result.addonPackages = state.addonPackages as string[]
   if (typeof state.packageName === "string") result.packageName = state.packageName
   if (state.lspConfig && typeof state.lspConfig === "object") {
     const config = state.lspConfig as Partial<OwnedLsp>
@@ -231,8 +247,8 @@ async function normalizeOptions(options: InstallerOptions): Promise<InstallerOpt
   return { ...options, cwd: options.global ? options.cwd ?? process.cwd() : await projectDirectory(options.cwd ?? process.cwd()) }
 }
 
-async function saveInstallationState(options: InstallerOptions, language: InstallerLanguage, lspPackages: string[], lspConfig?: OwnedLsp): Promise<void> {
-  await saveState(stateFileOf(options), { language, scope: scopeOf(options), lspPackages, packageName: options.packageName ?? PATCHLINE_PACKAGE, ...(lspConfig ? { lspConfig } : {}) })
+async function saveInstallationState(options: InstallerOptions, language: InstallerLanguage, lspPackages: string[], addonPackages: string[], lspConfig?: OwnedLsp): Promise<void> {
+  await saveState(stateFileOf(options), { language, scope: scopeOf(options), lspPackages, addonPackages, packageName: options.packageName ?? PATCHLINE_PACKAGE, ...(lspConfig ? { lspConfig } : {}) })
 }
 
 async function performInstall(rawOptions: InstallerOptions = {}): Promise<number> {
@@ -278,11 +294,13 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
     return pluginCode
   }
   output(options, text.registered)
-  await saveInstallationState(options, language, state.scope === scope ? state.lspPackages ?? [] : [], state.lspConfig)
+  const sameScope = state.scope === scope
+  let lspConfig = state.lspConfig
+  let ownedPackages = sameScope ? [...(state.lspPackages ?? [])] : []
+  let ownedAddons = sameScope ? [...(state.addonPackages ?? [])] : []
+  await saveInstallationState(options, language, ownedPackages, ownedAddons, lspConfig)
 
   const lspAvailable = await hasCommand("typescript-language-server")
-  let lspConfig = state.lspConfig
-  let ownedPackages = state.scope === scope ? [...(state.lspPackages ?? [])] : []
   if (!lspAvailable) {
     output(options, text.lspMissing)
     const confirmed = options.yes === true || await (options.confirm ?? confirmPrompt)(text.lspPrompt)
@@ -301,16 +319,41 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
         return dependencyCode
       }
       ownedPackages = [...new Set([...ownedPackages, ...missingPackages])]
-      await saveInstallationState(options, language, ownedPackages, lspConfig)
+      await saveInstallationState(options, language, ownedPackages, ownedAddons, lspConfig)
       lspConfig = await configureLsp(options, lspConfig, (file) => output(options, text.backup(file)))
       output(options, text.lspInstalled)
     }
   }
 
-  await saveInstallationState(options, language, ownedPackages, lspConfig)
+  if (!(await hasCommand("bun"))) {
+    output(options, text.runtimeMissing)
+    const confirmed = options.yes === true || await (options.confirm ?? confirmPrompt)(text.runtimePrompt)
+    if (!confirmed) {
+      if (options.yes !== true && !process.stdin.isTTY && !options.confirm) output(options, text.nonInteractive)
+      output(options, text.runtimeDeclined)
+    } else {
+      const existingPackages = await presentPackages({ ...options, global: true })
+      const missingAddons = ADDON_PACKAGES.filter((item) => !existingPackages.has(item))
+      if (missingAddons.length === 0) {
+        output(options, text.runtimeInstalled)
+      } else {
+        const addonCode = await runCommand("npm", ["install", "--global", ...missingAddons])
+        if (addonCode !== 0) {
+          errorOutput(options, text.error(text.runtimeFailed(addonCode)))
+          return addonCode
+        }
+        ownedAddons = [...new Set([...ownedAddons, ...missingAddons])]
+        await saveInstallationState(options, language, ownedPackages, ownedAddons, lspConfig)
+        output(options, text.runtimeInstalled)
+      }
+    }
+  }
+
+  await saveInstallationState(options, language, ownedPackages, ownedAddons, lspConfig)
   output(options, text.complete)
   return 0
 }
+
 
 export async function installPatchline(rawOptions: InstallerOptions = {}): Promise<number> {
   try { return await performInstall(rawOptions) }
@@ -334,13 +377,16 @@ export async function uninstallPatchline(rawOptions: InstallerOptions = {}): Pro
       const text = state.lspConfig?.file === file.path ? removeOwnedLsp(removed.text, state.lspConfig) : removed.text
       return { ...file, ...removed, text }
     }).filter((file) => file.text !== file.source)
-    const ownedPackages = state.scope === scopeOf(options) ? state.lspPackages ?? [] : []
+    const sameScope = state.scope === scopeOf(options)
+    const ownedPackages = sameScope ? state.lspPackages ?? [] : []
+    const ownedAddons = sameScope ? state.addonPackages ?? [] : []
     if (!changes.length) output(options, text.noConfig)
     for (const change of changes) output(options, `${text.dryRun}: ${change.path}`)
     if (ownedPackages.length) output(options, `${text.dryRun}: ${ownedPackages.join(", ")}`)
-    else output(options, text.noDependencies)
+    if (ownedAddons.length) output(options, `${text.dryRun}: ${ownedAddons.join(", ")}`)
+    if (!ownedPackages.length && !ownedAddons.length) output(options, text.noDependencies)
     if (options.dryRun) return 0
-    if (changes.length || ownedPackages.length) {
+    if (changes.length || ownedPackages.length || ownedAddons.length) {
       const prompt = language === "ru" ? "Удалить перечисленные компоненты Patchline?" : "Remove the listed Patchline components?"
       if (!options.yes && !await (options.confirm ?? confirmPrompt)(prompt)) {
         output(options, language === "ru" ? "Удаление отменено." : "Uninstallation cancelled.")
@@ -357,6 +403,14 @@ export async function uninstallPatchline(rawOptions: InstallerOptions = {}): Pro
         return code
       }
       output(options, text.dependenciesRemoved)
+    }
+    if (ownedAddons.length) {
+      const code = await run(options, "npm", ["uninstall", "--global", ...ownedAddons])
+      if (code !== 0) {
+        errorOutput(options, text.error(language === "ru" ? `Удаление дополнений среды завершилось с кодом ${code}.` : `Runtime add-on removal failed with exit code ${code}.`))
+        return code
+      }
+      output(options, text.addonsRemoved)
     }
     await removeState(stateFileOf(options))
     output(options, text.completeUninstall)

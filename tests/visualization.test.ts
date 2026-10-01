@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest"
 import { patchlineActivity } from "../src/visualization/activity.js"
 
 describe("Patchline activity presentation", () => {
-  it("ignores read-only tools and prioritizes an active mutation", () => {
-    expect(patchlineActivity([{ tool: "patchline_lsp", state: { status: "completed" } }])).toBeUndefined()
+  it("renders read-only activities and prioritizes an active mutation", () => {
+    expect(patchlineActivity([{ tool: "patchline_lsp", state: { status: "completed", metadata: { operation: "workspaceSymbol", query: "Patchline" } } }])).toMatchObject({ kind: "lsp", label: "Workspace symbols" })
     const view = patchlineActivity([
       { tool: "edit", input: { filePath: "active.ts" }, state: { status: "running", metadata: { stage: "committing" } } },
       { tool: "edit", input: { filePath: "done.ts" }, state: { status: "completed" } },
@@ -17,9 +17,20 @@ describe("Patchline activity presentation", () => {
     const view = patchlineActivity([{ tool: "apply_patch", state: { status: "completed", metadata: { files, added: 10_000 } } }])
     expect(view?.files).toHaveLength(4)
     expect(view?.files?.[0]?.lines).toHaveLength(12)
+    expect(view?.files?.[0]?.diff).toContain("@@ -0,0 +1,100 @")
+    expect(view?.files?.[0]?.filetype).toBe("typescript")
     expect(view?.files?.[0]).toHaveProperty("truncated", true)
     expect(view?.additions).toBe(10_000)
     expect(view).toMatchObject({ totalFiles: 100, hiddenFiles: 96 })
+  })
+
+  it("normalizes every Patchline tool into a themed activity kind", () => {
+    expect(patchlineActivity([{ tool: "read", state: { status: "completed", metadata: { path: "src/a.ts", lines: 12, bytesRendered: 240, snapshot: "snap-1" } } }])).toMatchObject({ kind: "read", label: "Snapshot created", paths: ["src/a.ts"], lines: 12, snapshot: "snap-1" })
+    expect(patchlineActivity([{ tool: "patchline_grep", state: { status: "completed", metadata: { pattern: "needle", resultCount: 4, truncated: true } } }])).toMatchObject({ kind: "search", label: "Literal search", matchCount: 4, truncated: true })
+    expect(patchlineActivity([{ tool: "ast_search", state: { status: "completed", metadata: { pattern: "call($X)", language: "typescript", resultCount: 2 } } }])).toMatchObject({ kind: "search", label: "Structural search", matchCount: 2 })
+    expect(patchlineActivity([{ tool: "patchline_route_search", state: { status: "completed", metadata: { mechanism: "lsp" } } }])).toMatchObject({ kind: "route", label: "Search route", mechanism: "lsp" })
+    expect(patchlineActivity([{ tool: "patchline_diagnostics", state: { status: "completed", metadata: { exitCode: 0, outputLines: 3 } } }])).toMatchObject({ kind: "diagnostics", label: "Diagnostics clean", exitCode: 0 })
+    expect(patchlineActivity([{ tool: "patchline_summary", state: { status: "completed", metadata: { summary: { reads: 2, edits: 1 } } } }])).toMatchObject({ kind: "summary", label: "Session summary", summary: { reads: 2, edits: 1 } })
   })
 
   it("shows an active batch stage and path without exposing file content", () => {
@@ -57,6 +68,6 @@ describe("Patchline activity presentation", () => {
 
   it("groups additions and deletions from completed unified patches", () => {
     const activity = patchlineActivity([{ tool: "patchline_edit_batch", state: { status: "completed", metadata: { files: [{ path: "src/a.ts", additions: 1, deletions: 1, diff: "@@ -1 +1 @@\n-before\n+after" }] } } }])
-    expect(activity?.files).toEqual([{ path: "src/a.ts", additions: 1, deletions: 1, truncated: false, lines: [{ kind: "hunk", text: "@@ -1 +1 @@" }, { kind: "removed", text: "-before" }, { kind: "added", text: "+after" }] }])
+    expect(activity?.files).toMatchObject([{ path: "src/a.ts", additions: 1, deletions: 1, truncated: false, lines: [{ kind: "hunk", text: "@@ -1 +1 @@" }, { kind: "removed", text: "-before" }, { kind: "added", text: "+after" }] }])
   })
 })

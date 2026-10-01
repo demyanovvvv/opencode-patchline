@@ -10,7 +10,7 @@ try {
   await mkdir(path.join(root, ".opencode"))
   await writeFile(path.join(root, "package.json"), '{"name":"patchline-lsp-smoke","private":true}\n')
   const installed = await installPatchline({
-    cwd: root, yes: true, language: "ru", hasCommand: async () => false,
+    cwd: root, yes: true, language: "ru", hasCommand: async (command) => command === "bun",
     runCommand: async (command, args) => {
       if (command === "opencode") {
         await writeFile(path.join(root, ".opencode", "opencode.json"), '{"plugin":["opencode-patchline"]}\n')

@@ -8,8 +8,10 @@ flags and `--dry-run`. Invalid flags must fail before changing configurations.
 
 Installation delegates server/TUI registration and plugin dependency resolution
 to the installed OpenCode 1.x plugin command. Missing TypeScript LSP packages
-require confirmation unless `--yes` is supplied. Existing packages are not
-claimed by the installer. User-disabled and custom LSP settings are preserved.
+and the Bun runtime add-on require confirmation unless `--yes` is supplied.
+The installer checks each add-on independently, installs only missing packages,
+and records only packages it installed. Existing packages are not claimed by the
+installer. User-disabled and custom LSP settings are preserved.
 Installer language preferences affect installer/uninstaller messages only.
 
 The scope-specific state records the registered package specifier, language and

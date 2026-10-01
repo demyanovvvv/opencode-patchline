@@ -19,12 +19,14 @@ and TUI exports. Project configuration is discovered at the Git root (or current
 directory outside Git), including `.opencode/`. Global configuration follows
 OpenCode's XDG directory, overridden by `OPENCODE_CONFIG_DIR`.
 
-The installer checks for `typescript-language-server`. If missing, it asks before
-running `npm install --save-dev` (project) or `npm install --global` for missing
-`typescript` and `typescript-language-server` packages. Existing direct package
-dependencies are not claimed or removed. Without an interactive terminal,
-dependency installation is skipped unless `--yes` is supplied. User-disabled or
-custom TypeScript LSP configuration is preserved.
+The installer checks the supported add-ons independently. If
+`typescript-language-server` is missing, it asks before running `npm install
+--save-dev` (project) or `npm install --global` for missing `typescript` and
+`typescript-language-server` packages. If `bun` is missing, it separately asks
+before installing the global `bun` package for the full native Hashline runtime.
+Existing direct package dependencies are not claimed or removed. Without an
+interactive terminal, each dependency installation is skipped unless `--yes` is
+supplied. User-disabled or custom TypeScript LSP configuration is preserved.
 
 `--lang en|ru` / `--language en|ru` localizes only installer and uninstaller
 messages. Language and dependency ownership are stored in

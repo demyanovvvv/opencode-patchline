@@ -66,7 +66,8 @@ npx opencode-patchline explain STALE_SNAPSHOT
 ```
 
 The installer registers the server and TUI entrypoints through OpenCode and
-asks before installing missing TypeScript LSP dependencies:
+asks independently before installing missing TypeScript LSP dependencies and
+the optional Bun runtime add-on for full native Hashline support:
 
 ```bash
 npx opencode-patchline install
@@ -76,8 +77,9 @@ npx opencode-patchline install --global --lang ru
 `--lang en|ru` (alias `--language`) selects installer/uninstaller messages and
 is remembered for that scope. Other Patchline commands keep their existing
 language. `--yes` accepts prompts for automation. Project dependencies use
-`--save-dev`; global installations use npm's `--global` scope. Existing
-TypeScript dependencies and user LSP settings are preserved.
+`--save-dev`; global installations use npm's `--global` scope. Bun is installed
+globally as a runtime add-on. Existing TypeScript dependencies and user LSP
+settings are preserved.
 
 Uninstall with a preview or an interactive confirmation:
 
@@ -87,7 +89,7 @@ npx opencode-patchline uninstall
 npx opencode-patchline uninstall --global --yes
 ```
 
-Removal affects Patchline registrations and installer-owned LSP additions.
+Removal affects Patchline registrations and installer-owned LSP/runtime additions.
 Other plugins are retained; configuration backups are kept next to the original
 files. See [installation and removal](docs/operations/installation.md).
 

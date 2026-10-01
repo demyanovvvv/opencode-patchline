@@ -29,7 +29,7 @@ describe("Patchline installer", () => {
       stdout: (line) => output.push(line),
       stderr: (line) => output.push(line),
       confirm: async () => true,
-      hasCommand: async () => false,
+      hasCommand: async (command) => command === "bun" || command === "opencode",
       runCommand: async (command, args) => {
         commands.push({ command, args: [...args] })
         return 0
@@ -43,6 +43,70 @@ describe("Patchline installer", () => {
     ])
     expect(output.join("\n")).toContain("Установка opencode-patchline")
     expect(output.join("\n")).toContain("Зависимости LSP установлены")
+  })
+
+  it("offers Bun separately when native Hashline runtime is missing", async () => {
+    const root = await workspace("patchline-installer-runtime-test-")
+    const output: string[] = []
+    const commands: Array<{ command: string; args: string[] }> = []
+
+    const exitCode = await installPatchline({
+      cwd: root,
+      stateDirectory: root,
+      global: true,
+      stdout: (line) => output.push(line),
+      stderr: (line) => output.push(line),
+      confirm: async () => true,
+      hasCommand: async (command) => command !== "bun",
+      runCommand: async (command, args) => {
+        commands.push({ command, args: [...args] })
+        return 0
+      },
+    })
+
+    expect(exitCode).toBe(0)
+    expect(commands).toEqual([
+      { command: "opencode", args: ["plugin", "opencode-patchline", "--global"] },
+      { command: "npm", args: ["install", "--global", "bun"] },
+    ])
+    expect(output.join("\n")).toContain("Bun")
+    expect(JSON.parse(await readFile(path.join(root, ".opencode-patchline-state.json"), "utf8")).addonPackages).toEqual(["bun"])
+  })
+
+  it("does not install Bun when its separate confirmation is declined", async () => {
+    const root = await workspace("patchline-installer-runtime-test-")
+    const commands: string[][] = []
+
+    expect(await installPatchline({
+      cwd: root,
+      stateDirectory: root,
+      global: true,
+      confirm: async () => false,
+      hasCommand: async (command) => command !== "bun",
+      stdout: () => undefined,
+      runCommand: async (command, args) => { commands.push([command, ...args]); return 0 },
+    })).toBe(0)
+    expect(commands).toEqual([["opencode", "plugin", "opencode-patchline", "--global"]])
+  })
+
+  it("removes installer-owned Bun together with the plugin", async () => {
+    const root = await workspace("patchline-uninstaller-runtime-test-")
+    const config = path.join(root, "opencode.json")
+    await writeFile(config, JSON.stringify({ plugin: ["opencode-patchline"] }) + "\n")
+    await writeFile(path.join(root, ".opencode-patchline-state.json"), JSON.stringify({ scope: "project", addonPackages: ["bun"] }))
+    const commands: string[][] = []
+
+    expect(await uninstallPatchline({
+      cwd: root,
+      configDirectory: root,
+      stateDirectory: root,
+      yes: true,
+      stdout: () => undefined,
+      runCommand: async (_command, args) => { commands.push([...args]); return 0 },
+      hasCommand: async () => true,
+    })).toBe(0)
+    expect(commands).toEqual([["uninstall", "--global", "bun"]])
+    await expect(readFile(path.join(root, ".opencode-patchline-state.json"), "utf8")).rejects.toThrow()
   })
 
   it("does not install LSP dependencies when confirmation is declined", async () => {

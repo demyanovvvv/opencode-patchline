@@ -497,6 +497,40 @@ describe("OpenCode plugin", () => {
     }
   })
 
+  it("reports structured search, route, LSP, diagnostics and summary results", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "a.ts"), "const needle = 1\n")
+      const client = { find: { symbols: vi.fn(async () => ({ data: [{ name: "needle" }] })) } }
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path, client } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      expect(await hooks.tool!.patchline_grep!.execute({ pattern: "needle", path: "a.ts" }, context)).toMatchObject({ metadata: { kind: "search", resultCount: 1, truncated: false } })
+      expect(await hooks.tool!.patchline_route_search!.execute({ query: "find symbols" }, context)).toMatchObject({ output: "lsp", metadata: { kind: "route", mechanism: "lsp" } })
+      expect(await hooks.tool!.patchline_lsp!.execute({ operation: "workspaceSymbol", query: "needle" }, context)).toMatchObject({ metadata: { kind: "lsp", operation: "workspaceSymbol" } })
+      expect(await hooks.tool!.patchline_diagnostics!.execute({ command: `"${process.execPath}" -e "process.exit(0)"` }, context)).toMatchObject({ metadata: { kind: "diagnostics", exitCode: 0 } })
+      expect(await hooks.tool!.patchline_summary!.execute({}, context)).toMatchObject({ metadata: { kind: "summary", summary: { reads: 0, searches: 1, diagnostics: 1 } } })
+      expect(context.metadata).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ stage: "searching" }) }))
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("does not let a presentation callback failure prevent reading or writing", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "a.ts"), "const value = 1\n")
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(() => { throw new Error("renderer unavailable") }), ask: vi.fn(async () => undefined) }
+      const read = await hooks.tool!.read!.execute({ filePath: "a.ts" }, context)
+      expect(read).toMatchObject({ metadata: { kind: "read", path: "a.ts", lines: 1 } })
+      const snapshot = typeof read === "string" ? "" : String(read.metadata?.snapshot)
+      await hooks.tool!.edit!.execute({ filePath: "a.ts", snapshot, oldString: "1", newString: "2" }, context)
+      expect(await readFile(path.join(workspace.path, "a.ts"), "utf8")).toBe("const value = 2\n")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
   it.each(["write", "classic", "hashline", "batch"])("runs configured validation after %s mutations", async (kind) => {
     const workspace = await temporaryWorkspace()
     try {

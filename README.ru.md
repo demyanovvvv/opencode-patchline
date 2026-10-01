@@ -67,7 +67,8 @@ npx opencode-patchline explain STALE_SNAPSHOT
 ```
 
 Установщик подключает серверную и TUI-части штатной командой OpenCode и
-спрашивает подтверждение перед установкой недостающих зависимостей TypeScript LSP:
+отдельно спрашивает подтверждение перед установкой недостающих компонентов
+TypeScript LSP и дополнительной runtime-среды Bun для полного native Hashline:
 
 ```bash
 npx opencode-patchline install --lang ru
@@ -77,8 +78,8 @@ npx opencode-patchline install --global --lang ru
 `--lang ru|en` (синоним `--language`) меняет язык установщика и деинсталлятора;
 выбор сохраняется для этой области установки. `--yes` подтверждает действия
 для автоматизации. В проекте LSP-пакеты добавляются как devDependencies, при
-`--global` — глобально. Уже существующие зависимости TypeScript и настройки
-LSP сохраняются.
+`--global` — глобально. Bun устанавливается глобально как runtime-дополнение.
+Уже существующие зависимости TypeScript и настройки LSP сохраняются.
 
 Удаление с предварительным просмотром или подтверждением:
 
@@ -88,7 +89,7 @@ npx opencode-patchline uninstall
 npx opencode-patchline uninstall --global --yes
 ```
 
-Удаляются записи Patchline и добавленные установщиком LSP-компоненты.
+Удаляются записи Patchline и добавленные установщиком LSP/runtime-компоненты.
 Остальные плагины сохраняются. Резервные копии конфигурации остаются рядом
 с исходными файлами. Подробнее: [установка и удаление](docs/operations/installation.md).
 

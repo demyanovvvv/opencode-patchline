@@ -81,7 +81,7 @@ describe("installer safety", () => {
     const commands: string[][] = []
     expect(await installPatchline({
       cwd: root, yes: true, stdout: () => undefined, stderr: () => undefined,
-      hasCommand: async () => false,
+      hasCommand: async (command) => command === "bun",
       runCommand: async (_command, args) => { commands.push([...args]); return 0 },
     })).toBe(0)
     const state = JSON.parse(await readFile(path.join(root, ".opencode-patchline-state.json"), "utf8"))

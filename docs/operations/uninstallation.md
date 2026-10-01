@@ -11,8 +11,10 @@ Use the same scope as installation. Normal removal asks for confirmation;
 accepts the confirmation for automation.
 
 Patchline registrations are removed from server and TUI JSON/JSONC configuration.
-Unchanged installer-owned LSP settings and recorded LSP packages are removed;
-other plugins and previously present dependencies are preserved. Unique
+Unchanged installer-owned LSP settings, recorded LSP packages and runtime add-ons
+are removed. Only installer-owned `bun` is removed globally; existing Bun
+installations remain. Other plugins and previously present dependencies are
+preserved. Unique
 `.patchline-backup-<id>` files remain beside changed configurations. Successful
 removal deletes installer state. The shared OpenCode package cache is retained.
 

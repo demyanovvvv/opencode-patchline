@@ -53,13 +53,21 @@ function scope(context: ToolContext) {
   return { sessionId: context.sessionID, worktree: context.worktree }
 }
 
+function publishMetadata(context: ToolContext, update: Parameters<ToolContext["metadata"]>[0]): void {
+  try {
+    context.metadata(update)
+  } catch {
+    // Presentation must never change a tool's outcome.
+  }
+}
+
 function progress(context: ToolContext, stage: string, title: string, details: Record<string, unknown> = {}): void {
-  context.metadata({ title, metadata: { stage, status: "running", ...details } })
+  publishMetadata(context, { title, metadata: { stage, status: "running", ...details } })
 }
 
 function failure(context: ToolContext, error: unknown, stage: string, filePath?: string, details: Record<string, unknown> = {}): void {
   const issue = error instanceof PatchlineError ? error : undefined
-  context.metadata({
+  publishMetadata(context, {
     title: filePath ?? issue?.path ?? "Patchline",
     metadata: {
       status: "failed", stage, code: issue?.code ?? "UNEXPECTED_ERROR", path: issue?.path ?? filePath,
@@ -160,15 +168,18 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
     async execute(args, context) {
       const started = Date.now()
       try {
+            progress(context, "permission", args.filePath, { kind: "read", path: args.filePath })
             await context.ask({ permission: "read", patterns: [args.filePath], always: ["*"] , metadata: { path: args.filePath } })
+            progress(context, "reading", args.filePath, { kind: "read", path: args.filePath })
             const result = await reads.read({ ...scope(context), ...args })
-            const lines = result.kind === "file" ? result.endLine - result.offset + 1 : 0
+            const lines = result.kind === "file" ? Math.max(0, result.endLine - result.offset + 1) : 0
             metrics.record({ name: "read", path: result.path, lines, bytes: result.output.length, durationMs: Date.now() - started })
             return result.kind === "file"
               ? {
                   title: result.path,
                   output: result.output,
                   metadata: {
+                    kind: "read", stage: "completed", path: result.path, offset: result.kind === "file" ? result.offset : undefined,
                     status: "observed",
                     recoveryAction: "Use the returned snapshot for an edit.",
                     snapshot: result.snapshot,
@@ -181,6 +192,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
                   title: result.path,
                   output: result.output,
                   metadata: {
+                    kind: "read", stage: "completed", path: result.path,
                     status: "observed",
                     recoveryAction: "Read a file entry to create a snapshot before editing.",
                     directory: true,
@@ -190,6 +202,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
                   },
                 }
       } catch (error) {
+        failure(context, error, "reading", args.filePath, { kind: "read", writes: 0 })
         return Promise.reject(toolError(error))
       }
     },
@@ -359,11 +372,19 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
           maxResults: tool.schema.number().int().min(1).max(500).optional(),
         },
         async execute(args, context) {
-          await context.ask({ permission: "grep", patterns: [args.pattern], always: ["*"] , metadata: { pattern: args.pattern, path: args.path } })
-          const result = await grepWorkspace({ worktree: context.worktree, pattern: args.pattern, path: args.path, include: args.include, maxResults: args.maxResults ?? config.maxSearchResults })
-          metrics.record({ name: "grep", lines: result.matches.length })
-          const skipped = result.skippedCount > 0 ? `\nSkipped ${result.skippedCount} file(s): ${[...new Set(result.skipped.map((item) => item.reason))].join(", ")}.` : ""
-          return boundedSearchOutput(result.matches.length === 0 ? "No matches found." : `${result.matches.map((match) => `${path.relative(context.worktree, match.path)}:${match.line}: ${match.text}`).join("\n")}${result.truncated ? "\nResults truncated." : ""}`, skipped)
+          try {
+            progress(context, "permission", "Patchline · literal search", { kind: "search", pattern: args.pattern, path: args.path })
+            await context.ask({ permission: "grep", patterns: [args.pattern], always: ["*"] , metadata: { pattern: args.pattern, path: args.path } })
+            progress(context, "searching", "Patchline · literal search", { kind: "search", pattern: args.pattern, path: args.path })
+            const result = await grepWorkspace({ worktree: context.worktree, pattern: args.pattern, path: args.path, include: args.include, maxResults: args.maxResults ?? config.maxSearchResults })
+            metrics.record({ name: "grep", lines: result.matches.length })
+            const skipped = result.skippedCount > 0 ? `\nSkipped ${result.skippedCount} file(s): ${[...new Set(result.skipped.map((item) => item.reason))].join(", ")}.` : ""
+            const output = boundedSearchOutput(result.matches.length === 0 ? "No matches found." : `${result.matches.map((match) => `${path.relative(context.worktree, match.path)}:${match.line}: ${match.text}`).join("\n")}${result.truncated ? "\nResults truncated." : ""}`, skipped)
+            return { title: `Patchline · ${result.matches.length} matches`, output, metadata: { kind: "search", status: "observed", stage: "completed", pattern: args.pattern, path: args.path, resultCount: result.matches.length, skippedCount: result.skippedCount, truncated: result.truncated || output.includes("Results truncated") } }
+          } catch (error) {
+            failure(context, error, "searching", args.path, { kind: "search", writes: 0 })
+            throw toolError(error)
+          }
         },
       }),
       ast_search: tool({
@@ -375,19 +396,26 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
           maxResults: tool.schema.number().int().min(1).max(500).optional(),
         },
         async execute(args, context) {
-          await context.ask({ permission: "read", patterns: [args.filePath], always: ["*"] , metadata: { path: args.filePath } })
-          const result = await astSearchFile({ worktree: context.worktree, filePath: args.filePath, pattern: args.pattern, language: args.language, maxResults: args.maxResults ?? config.maxSearchResults })
-          metrics.record({ name: "ast_search", lines: result.matches.length })
-          return result.matches.length === 0
-            ? "No structural matches found."
-             : boundedSearchOutput(`${result.matches.map((match) => `${match.path}:${match.startLine}-${match.endLine}: ${match.text}`).join("\n")}${result.truncated ? "\nResults truncated." : ""}`)
+          try {
+            progress(context, "permission", "Patchline · structural search", { kind: "search", pattern: args.pattern, path: args.filePath })
+            await context.ask({ permission: "read", patterns: [args.filePath], always: ["*"] , metadata: { path: args.filePath } })
+            progress(context, "searching", "Patchline · structural search", { kind: "search", pattern: args.pattern, path: args.filePath })
+            const result = await astSearchFile({ worktree: context.worktree, filePath: args.filePath, pattern: args.pattern, language: args.language, maxResults: args.maxResults ?? config.maxSearchResults })
+            metrics.record({ name: "ast_search", lines: result.matches.length })
+            const output = result.matches.length === 0 ? "No structural matches found." : boundedSearchOutput(`${result.matches.map((match) => `${match.path}:${match.startLine}-${match.endLine}: ${match.text}`).join("\n")}${result.truncated ? "\nResults truncated." : ""}`)
+            return { title: `Patchline · ${result.matches.length} structural matches`, output, metadata: { kind: "search", status: "observed", stage: "completed", path: args.filePath, pattern: args.pattern, language: args.language, resultCount: result.matches.length, truncated: result.truncated || output.includes("Results truncated") } }
+          } catch (error) {
+            failure(context, error, "searching", args.filePath, { kind: "search", writes: 0 })
+            throw toolError(error)
+          }
         },
       }),
       patchline_route_search: tool({
         description: "Choose the cheapest reliable search mechanism for a discovery request.",
         args: { query: tool.schema.string() },
         async execute(args) {
-          return routeSearch(args.query)
+          const mechanism = routeSearch(args.query)
+          return { title: `Patchline · ${mechanism.toUpperCase()}`, output: mechanism, metadata: { kind: "route", status: "observed", stage: "completed", mechanism, query: args.query } }
         },
       }),
       patchline_lsp: tool({
@@ -398,13 +426,23 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
           filePath: tool.schema.string().optional(),
         },
         async execute(args, context) {
-          if (args.filePath) await context.ask({ permission: "read", patterns: [args.filePath], always: ["*"], metadata: { path: args.filePath } })
-          if (args.operation === "workspaceSymbol" && args.query !== undefined) {
-            try { return await runOpenCodeLspClient(input.client, { worktree: context.worktree, query: args.query }) } catch (error) {
-              if (!(error instanceof PatchlineError) || error.code !== "CAPABILITY_UNAVAILABLE") throw error
+          const details = { kind: "lsp", operation: args.operation, query: args.query, path: args.filePath }
+          try {
+            progress(context, "permission", "Patchline · LSP", details)
+            if (args.filePath) await context.ask({ permission: "read", patterns: [args.filePath], always: ["*"], metadata: { path: args.filePath } })
+            progress(context, "searching", "Patchline · LSP", details)
+            let output: string | undefined
+            if (args.operation === "workspaceSymbol" && args.query !== undefined) {
+              try { output = await runOpenCodeLspClient(input.client, { worktree: context.worktree, query: args.query }) } catch (error) {
+                if (!(error instanceof PatchlineError) || error.code !== "CAPABILITY_UNAVAILABLE") throw error
+              }
             }
+            output ??= await runOpenCodeLspBridge({ worktree: context.worktree, operation: args.operation, query: args.query, filePath: args.filePath, signal: context.abort })
+            return { title: `Patchline · ${args.operation}`, output, metadata: { ...details, status: "observed", stage: "completed" } }
+          } catch (error) {
+            failure(context, error, "searching", args.filePath, { ...details, writes: 0 })
+            throw toolError(error)
           }
-          return runOpenCodeLspBridge({ worktree: context.worktree, operation: args.operation, query: args.query, filePath: args.filePath, signal: context.abort })
         },
       }),
       ...(config.mode === "precision" ? { patchline_edit_batch: tool({
@@ -453,10 +491,17 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         description: "Run a configured targeted diagnostic command inside the worktree.",
         args: { command: tool.schema.string() },
         async execute(args, context) {
-          await context.ask({ permission: "bash", patterns: [args.command], always: ["*"], metadata: { command: args.command, reason: "diagnostics" } })
-          const result = await runDiagnosticCommand(args.command, context.worktree, 120_000, config.maxDiagnostics, context.abort)
-          metrics.record({ name: "diagnostics", details: { ok: result.ok } })
-          return `${result.ok ? "Diagnostics clean." : `Diagnostics failed (${result.exitCode}).`}\n${result.output}`.trim()
+          try {
+            progress(context, "permission", "Patchline · diagnostics", { kind: "diagnostics", command: args.command })
+            await context.ask({ permission: "bash", patterns: [args.command], always: ["*"], metadata: { command: args.command, reason: "diagnostics" } })
+            progress(context, "diagnostics", "Patchline · diagnostics", { kind: "diagnostics", command: args.command })
+            const result = await runDiagnosticCommand(args.command, context.worktree, 120_000, config.maxDiagnostics, context.abort)
+            metrics.record({ name: "diagnostics", details: { ok: result.ok } })
+            return { title: result.ok ? "Patchline · diagnostics clean" : "Patchline · diagnostics failed", output: `${result.ok ? "Diagnostics clean." : `Diagnostics failed (${result.exitCode}).`}\n${result.output}`.trim(), metadata: { kind: "diagnostics", stage: "completed", status: "observed", command: args.command, exitCode: result.exitCode, ok: result.ok, outputLines: result.output ? result.output.split("\n").length : 0 } }
+          } catch (error) {
+            failure(context, error, "diagnostics", undefined, { kind: "diagnostics", command: args.command, writes: 0 })
+            throw toolError(error)
+          }
         },
       }),
       ...(config.summary ? { patchline_summary: tool({
@@ -465,7 +510,8 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         async execute() {
           if (!config.summary) throw new PatchlineError("CAPABILITY_UNAVAILABLE", "Patchline summary is disabled by configuration.")
           const summary = metrics.summary()
-          return [
+          const counters = { reads: summary.read, edits: summary.edit, writes: summary.write, searches: summary.grep + summary.ast_search, diagnostics: summary.diagnostics, staleConflicts: summary.stale_conflict, writesPrevented: summary.write_prevented, fallbacks: summary.fallback }
+          return { title: "Patchline · session summary", metadata: { kind: "summary", status: "observed", stage: "completed", summary: counters }, output: [
             "Patchline",
             `Reads: ${summary.read}`,
             `Edits: ${summary.edit}`,
@@ -475,7 +521,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             `Stale conflicts: ${summary.stale_conflict}`,
             `Writes prevented: ${summary.write_prevented}`,
             `Fallbacks: ${summary.fallback}`,
-          ].join("\n")
+          ].join("\n") }
         },
       }) } : {}),
     },
