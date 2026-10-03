@@ -25,4 +25,12 @@ describe("edit strategy router", () => {
   it("selects batch for multi-file atomic work", () => {
     expect(routeEdit({ fileCount: 3, operationCount: 3, hasExact: true, hasHashline: true, hasPatch: false, requiresAtomicBatch: true })).toMatchObject({ strategy: "batch" })
   })
+
+  it("keeps exact threshold inputs local and routes the next boundary to standard", () => {
+    const common = { fileCount: 1, operationCount: 1, totalLines: 400, hasExact: true, hasHashline: true, hasPatch: false }
+    expect(routeEdit({ ...common, changedLines: 120 })).not.toMatchObject({ strategy: "standard" })
+    expect(routeEdit({ ...common, changedLines: 121 })).toMatchObject({ strategy: "standard" })
+    expect(routeEdit({ ...common, changedLines: 139, totalLines: 400 })).toMatchObject({ strategy: "standard" })
+    expect(routeEdit({ ...common, changedLines: 140, totalLines: 401 })).toMatchObject({ strategy: "standard" })
+  })
 })
