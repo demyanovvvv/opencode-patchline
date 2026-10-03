@@ -85,6 +85,13 @@ export class ScopedSnapshotStore {
     }
   }
 
+  getOrBuildLineIndex(document: TextDocument): { index: LineIndex; reused: boolean } {
+    const rawDigest = digestBytes(document.bytes)
+    const pooled = this.#documents.get(rawDigest)
+    if (pooled) return { index: pooled.lineIndex, reused: true }
+    return { index: buildLineIndex(document.normalizedText), reused: false }
+  }
+
   record(
     scope: SnapshotScope,
     canonicalPath: string,
@@ -101,7 +108,7 @@ export class ScopedSnapshotStore {
     const existing = this.#snapshots.get(key)
     let pooled = this.#documents.get(rawDigest)
     if (!pooled) {
-      const pooledLineIndex = lineIndex ?? buildLineIndex(document.normalizedText)
+      const pooledLineIndex = lineIndex ?? this.getOrBuildLineIndex(document).index
       pooled = { document, lineIndex: pooledLineIndex, refs: 0, bytes: document.bytes.byteLength + 2 * document.text.length + (document.text === document.normalizedText ? 0 : 2 * document.normalizedText.length) }
       this.#documents.set(rawDigest, pooled)
       this.#bytes += pooled.bytes

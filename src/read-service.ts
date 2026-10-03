@@ -2,7 +2,7 @@ import { opendir, stat } from "node:fs/promises"
 import { PatchlineError } from "./errors.js"
 import { readBoundedUtf8Bytes } from "./io/bounded-file.js"
 import { decodeUtf8 } from "./preservation/text.js"
-import { buildLineIndex, sliceIndexedLines } from "./preservation/line-index.js"
+import { sliceIndexedLines } from "./preservation/line-index.js"
 import { ScopedSnapshotStore, type SnapshotScope } from "./snapshot/store.js"
 import { resolveWorkspacePath } from "./workspace/paths.js"
 
@@ -28,6 +28,7 @@ export type FileReadResult = {
   lineEnding: string
   bom: boolean
   output: string
+  lineIndexReused: boolean
 }
 
 export type DirectoryReadResult = {
@@ -115,7 +116,8 @@ export class ReadService {
     }
 
     const document = decodeUtf8(await readBoundedUtf8Bytes(resolved.absolute, resolved.relative, MAX_READ_FILE_BYTES), resolved.relative)
-    const lineIndex = buildLineIndex(document.normalizedText)
+    const lineIndexResult = this.snapshots.getOrBuildLineIndex(document)
+    const lineIndex = lineIndexResult.index
     const totalLines = lineIndex.totalLines
     if (offset > totalLines && !(totalLines === 0 && offset === 1)) {
       throw new PatchlineError("INVALID_ARGUMENT", `Offset ${offset} is out of range for this file (${totalLines} lines)`, { path: displayPath })
@@ -164,6 +166,7 @@ export class ReadService {
       lineEnding: document.lineEnding,
       bom: document.bom,
       output,
+      lineIndexReused: lineIndexResult.reused,
     }
   }
 }

@@ -174,7 +174,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             progress(context, "reading", args.filePath, { kind: "read", path: args.filePath })
             const result = await reads.read({ ...scope(context), ...args })
             const lines = result.kind === "file" ? Math.max(0, result.endLine - result.offset + 1) : 0
-            metrics.record({ name: "read", path: result.path, lines, bytes: result.output.length, durationMs: Date.now() - started })
+            metrics.record({ name: "read", path: result.path, lines, bytes: result.output.length, durationMs: Date.now() - started, details: { totalLines: result.kind === "file" ? result.totalLines : result.totalEntries, selectedLines: lines, ...(result.kind === "file" ? { lineIndexReused: result.lineIndexReused } : {}) } })
             return result.kind === "file"
               ? {
                   title: result.path,

@@ -30,6 +30,38 @@ describe("ScopedSnapshotStore", () => {
     store.invalidate("/w/b.ts")
     expect(store.bytes).toBe(0)
   })
+  it("reuses the pooled line index for identical document digests", () => {
+    const store = new ScopedSnapshotStore()
+    const scope = { sessionId: "s", worktree: "/w" }
+    const first = store.record(scope, "/w/a.ts", "a.ts", decodeUtf8(Buffer.from("first\nsecond\n")), [1])
+    const second = store.record({ ...scope, sessionId: "other" }, "/w/b.ts", "b.ts", decodeUtf8(Buffer.from("first\nsecond\n")), [2])
+
+    expect(second.document).toBe(first.document)
+    expect(second.lineIndex).toBe(first.lineIndex)
+    expect(second.seenLines).not.toBe(first.seenLines)
+  })
+
+  it("creates a different line index when the document digest changes", () => {
+    const store = new ScopedSnapshotStore()
+    const scope = { sessionId: "s", worktree: "/w" }
+    const first = store.record(scope, "/w/a.ts", "a.ts", decodeUtf8(Buffer.from("first\n")), [])
+    const second = store.record(scope, "/w/a.ts", "a.ts", decodeUtf8(Buffer.from("changed\n")), [])
+
+    expect(second.lineIndex).not.toBe(first.lineIndex)
+  })
+
+  it("reports pooled line-index reuse by document digest", () => {
+    const store = new ScopedSnapshotStore()
+    const document = decodeUtf8(Buffer.from("first\nsecond\n"))
+
+    const first = store.getOrBuildLineIndex(document)
+    expect(first.reused).toBe(false)
+    store.record({ sessionId: "s", worktree: "/w" }, "/w/a.ts", "a.ts", document, [], undefined, first.index)
+    const second = store.getOrBuildLineIndex(document)
+    expect(second.reused).toBe(true)
+    expect(second.index).toBe(store.getOrBuildLineIndex(document).index)
+  })
+
   it("isolates snapshots by session and worktree", () => {
     const store = new ScopedSnapshotStore()
     const document = decodeUtf8(encodeUtf8("const value = 1\n", false))
