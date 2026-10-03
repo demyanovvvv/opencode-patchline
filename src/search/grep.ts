@@ -37,34 +37,25 @@ export async function grepWorkspace(input: {
   let skippedCount = 0
   let truncated = false
   const include = input.include ? globExpression(input.include) : undefined
-  const scanFile = async (absolute: string): Promise<void> => {
-    if (truncated) return
+  const scanFile = async (absolute: string): Promise<{ matches: GrepMatch[]; skipped?: { path: string; reason: string } }> => {
     const name = path.basename(absolute)
     const relative = path.relative(root.absolute, absolute).replaceAll("\\", "/")
-    if (include && !include.test(relative) && !include.test(name)) return
-    let content: string
+    if (include && !include.test(relative) && !include.test(name)) return { matches: [] }
     try {
-      const bytes = await readBoundedUtf8Bytes(absolute, relative, MAX_SEARCH_FILE_BYTES)
-      const document = decodeUtf8(bytes, relative)
-      if (document.text.includes("\0")) return
-      content = document.text
-    } catch (error) {
-      skippedCount++
-      if (skipped.length < 30) skipped.push({ path: path.relative(root.workspace, absolute).replaceAll("\\", "/"), reason: error instanceof PatchlineError ? error.code : "UNREADABLE" })
-      return
-    }
-    const lines = content.split(/\r?\n/)
-    for (let index = 0; index < lines.length; index++) {
-      if (!lines[index]!.includes(input.pattern)) continue
-      if (matches.length >= input.maxResults) {
-        truncated = true
-        return
+      const document = decodeUtf8(await readBoundedUtf8Bytes(absolute, relative, MAX_SEARCH_FILE_BYTES), relative)
+      if (document.text.includes("\0")) return { matches: [] }
+      const lines = document.text.split(/\r?\n/)
+      const fileMatches: GrepMatch[] = []
+      for (let index = 0; index < lines.length; index++) {
+        if (lines[index]!.includes(input.pattern)) fileMatches.push({ path: absolute, line: index + 1, text: matchPreview(lines[index]!) })
       }
-      matches.push({ path: absolute, line: index + 1, text: matchPreview(lines[index]!) })
+      return { matches: fileMatches }
+    } catch (error) {
+      return { matches: [], skipped: { path: path.relative(root.workspace, absolute).replaceAll("\\", "/"), reason: error instanceof PatchlineError ? error.code : "UNREADABLE" } }
     }
   }
-  const scan = async (entryPath: string): Promise<void> => {
-    if (truncated) return
+  const files: string[] = []
+  const collect = async (entryPath: string): Promise<void> => {
     const directory = await opendir(entryPath)
     const entries: { name: string; absolute: string; isDirectory: boolean; isFile: boolean }[] = []
     let entryCount = 0
@@ -84,20 +75,39 @@ export async function grepWorkspace(input: {
     }
     entries.sort((left, right) => left.name.localeCompare(right.name))
     for (const entry of entries) {
-      if (truncated) return
-      if (entry.isDirectory) {
-        await scan(entry.absolute)
-        continue
-      }
-      if (!entry.isFile) continue
-      await scanFile(entry.absolute)
+      if (entry.isDirectory) await collect(entry.absolute)
+      else if (entry.isFile) files.push(entry.absolute)
     }
   }
   const fileInfo = await stat(root.absolute).catch(() => undefined)
   if (!fileInfo) throw new PatchlineError("FILE_NOT_FOUND", `Search path not found: ${root.relative}`, { path: root.relative })
-  if (fileInfo.isDirectory()) await scan(root.absolute)
-  else if (fileInfo.isFile()) await scanFile(root.absolute)
+  if (fileInfo.isDirectory()) await collect(root.absolute)
+  else if (fileInfo.isFile()) files.push(root.absolute)
   else throw new PatchlineError("INVALID_ARGUMENT", `Search path must be a file or directory: ${root.relative}`)
+  const results = new Array<Awaited<ReturnType<typeof scanFile>>>(files.length)
+  let nextIndex = 0
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const index = nextIndex++
+      if (index >= files.length) return
+      results[index] = await scanFile(files[index]!)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(8, Math.max(1, files.length)) }, () => worker()))
+  for (const result of results) {
+    if (!result) continue
+    if (result.skipped) {
+      skippedCount++
+      if (skipped.length < 30) skipped.push(result.skipped)
+    }
+    if (matches.length >= input.maxResults) {
+      if (result.matches.length > 0) truncated = true
+      continue
+    }
+    const remaining = input.maxResults - matches.length
+    matches.push(...result.matches.slice(0, remaining))
+    if (result.matches.length > remaining) truncated = true
+  }
   return { matches, truncated, skipped, skippedCount }
 }
 

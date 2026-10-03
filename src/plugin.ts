@@ -297,12 +297,12 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
     tool: {
       ...(config.mode === "precision" ? {
         patchline_execute: tool({
-          description: "Execute snapshot-safe edits with automatic exact, Hashline, patch, or batch strategy selection.",
+          description: "Execute snapshot-safe edits with automatic exact, Hashline, or recoverable batch strategy selection.",
           args: {
-            strategy: tool.schema.enum(["auto", "exact", "hashline", "patch", "batch"]).optional(),
+            strategy: tool.schema.enum(["auto", "exact", "hashline", "batch"]).optional(),
             operations: tool.schema.array(tool.schema.object({
               filePath: tool.schema.string(),
-              snapshot: tool.schema.string().optional(),
+              snapshot: tool.schema.string().describe("Snapshot ID or Hashline tag returned by read"),
               oldString: tool.schema.string().optional(),
               newString: tool.schema.string().optional(),
               replaceAll: tool.schema.boolean().optional(),
@@ -311,6 +311,9 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
           },
           async execute(args, context) {
             const operations = args.operations
+            if (operations.some((operation) => operation.snapshot === undefined || operation.snapshot.length === 0)) {
+              throw new PatchlineError("INVALID_ARGUMENT", "Each adaptive mutation operation requires the snapshot returned by read.")
+            }
             const paths = [...new Set(operations.map((operation) => operation.filePath))]
             const exactOperations = operations.filter((operation) => operation.oldString !== undefined && operation.newString !== undefined)
             const hashlineOperations = operations.filter((operation) => operation.hashlinePatch !== undefined)
@@ -324,7 +327,6 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
               payloadBytes: JSON.stringify(operations).length,
             })
             const selected = args.strategy === "auto" || args.strategy === undefined ? route.strategy : args.strategy
-            if (selected === "patch") throw new PatchlineError("INVALID_ARGUMENT", "Adaptive patch execution requires snapshot-tagged operations; provide Hashline sections or exact operations.")
             if (selected === "hashline") {
               if (hashlineOperations.length !== 1 || operations.length !== 1) throw new PatchlineError("INVALID_ARGUMENT", "Hashline adaptive execution currently accepts exactly one hashlinePatch operation.")
               let stage = "permission"
@@ -441,12 +443,13 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
           maxResults: tool.schema.number().int().min(1).max(500).optional(),
         },
         async execute(args, context) {
+          const started = Date.now()
           try {
             progress(context, "permission", "Patchline · literal search", { kind: "search", pattern: args.pattern, path: args.path })
             await context.ask({ permission: "grep", patterns: [args.pattern], always: ["*"] , metadata: { pattern: args.pattern, path: args.path } })
             progress(context, "searching", "Patchline · literal search", { kind: "search", pattern: args.pattern, path: args.path })
             const result = await grepWorkspace({ worktree: context.worktree, pattern: args.pattern, path: args.path, include: args.include, maxResults: args.maxResults ?? config.maxSearchResults })
-            metrics.record({ name: "grep", lines: result.matches.length })
+            metrics.record({ name: "grep", lines: result.matches.length, durationMs: Date.now() - started, details: { skipped: result.skippedCount, truncated: result.truncated } })
             const skipped = result.skippedCount > 0 ? `\nSkipped ${result.skippedCount} file(s): ${[...new Set(result.skipped.map((item) => item.reason))].join(", ")}.` : ""
             const output = boundedSearchOutput(result.matches.length === 0 ? "No matches found." : `${result.matches.map((match) => `${path.relative(context.worktree, match.path)}:${match.line}: ${match.text}`).join("\n")}${result.truncated ? "\nResults truncated." : ""}`, skipped)
             return { title: `Patchline · ${result.matches.length} matches`, output, metadata: { kind: "search", status: "observed", stage: "completed", pattern: args.pattern, path: args.path, resultCount: result.matches.length, skippedCount: result.skippedCount, truncated: result.truncated || output.includes("Results truncated") } }
@@ -465,12 +468,13 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
           maxResults: tool.schema.number().int().min(1).max(500).optional(),
         },
         async execute(args, context) {
+          const started = Date.now()
           try {
             progress(context, "permission", "Patchline · structural search", { kind: "search", pattern: args.pattern, path: args.filePath })
             await context.ask({ permission: "read", patterns: [args.filePath], always: ["*"] , metadata: { path: args.filePath } })
             progress(context, "searching", "Patchline · structural search", { kind: "search", pattern: args.pattern, path: args.filePath })
             const result = await astSearchFile({ worktree: context.worktree, filePath: args.filePath, pattern: args.pattern, language: args.language, maxResults: args.maxResults ?? config.maxSearchResults })
-            metrics.record({ name: "ast_search", lines: result.matches.length })
+            metrics.record({ name: "ast_search", lines: result.matches.length, durationMs: Date.now() - started, details: { truncated: result.truncated } })
             const output = result.matches.length === 0 ? "No structural matches found." : boundedSearchOutput(`${result.matches.map((match) => `${match.path}:${match.startLine}-${match.endLine}: ${match.text}`).join("\n")}${result.truncated ? "\nResults truncated." : ""}`)
             return { title: `Patchline · ${result.matches.length} structural matches`, output, metadata: { kind: "search", status: "observed", stage: "completed", path: args.filePath, pattern: args.pattern, language: args.language, resultCount: result.matches.length, truncated: result.truncated || output.includes("Results truncated") } }
           } catch (error) {

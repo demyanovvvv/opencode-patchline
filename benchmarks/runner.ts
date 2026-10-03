@@ -4,6 +4,7 @@ import path from "node:path"
 import { performance } from "node:perf_hooks"
 import { EditService } from "../src/edit-service.js"
 import { isFileReadResult, ReadService } from "../src/read-service.js"
+import { grepWorkspace } from "../src/search/grep.js"
 import { ScopedSnapshotStore } from "../src/snapshot/store.js"
 
 const worktree = await mkdtemp(path.join(os.tmpdir(), "patchline-benchmark-"))
@@ -31,7 +32,14 @@ try {
     toolCallsSaved: 0,
     durationMs: Math.round((performance.now() - started) * 100) / 100,
   }
-  const json = JSON.stringify(report, null, 2)
+  const grepDirectory = path.join(worktree, "grep")
+  await mkdir(grepDirectory, { recursive: true })
+  await Promise.all(Array.from({ length: 48 }, (_, index) => writeFile(path.join(grepDirectory, `file-${String(index).padStart(2, "0")}.ts`), index === 47 ? "needle\n" : "quiet\n")))
+  const grepStarted = performance.now()
+  const grepResult = await grepWorkspace({ worktree, path: "grep", pattern: "needle", maxResults: 10 })
+  const grepDurationMs = Math.round((performance.now() - grepStarted) * 100) / 100
+  const benchmark = { ...report, grep: { files: 48, matches: grepResult.matches.length, truncated: grepResult.truncated, skipped: grepResult.skippedCount, durationMs: grepDurationMs } }
+  const json = JSON.stringify(benchmark, null, 2)
   const reportDirectory = path.resolve("benchmarks/reports")
   await mkdir(reportDirectory, { recursive: true })
   await writeFile(path.join(reportDirectory, "latest.json"), `${json}\n`)

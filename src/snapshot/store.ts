@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { xxh32 } from "@node-rs/xxhash"
 import { PatchlineError } from "../errors.js"
 import type { TextDocument } from "../preservation/text.js"
+import { buildLineIndex, type LineIndex } from "../preservation/line-index.js"
 import { normalizedIdentity } from "../workspace/paths.js"
 
 export type SnapshotScope = {
@@ -23,6 +24,7 @@ export type FileSnapshot = SnapshotScope & {
   text: string
   seenLines: ReadonlySet<number>
   document: TextDocument
+  lineIndex: LineIndex
   identity?: FileIdentity | undefined
   recordedAt: number
 }
@@ -54,7 +56,7 @@ export class ScopedSnapshotStore {
   readonly #ttlMs: number
   readonly #maxSnapshots: number
   readonly #maxBytes: number
-  readonly #documents = new Map<string, { document: TextDocument; refs: number; bytes: number }>()
+  readonly #documents = new Map<string, { document: TextDocument; lineIndex: LineIndex; refs: number; bytes: number }>()
   #bytes = 0
   readonly #now: () => number
 
@@ -90,6 +92,7 @@ export class ScopedSnapshotStore {
     document: TextDocument,
     seenLines: Iterable<number>,
     identity?: FileIdentity,
+    lineIndex?: LineIndex,
   ): FileSnapshot {
     this.cleanup()
     const tag = hashlineTag(document.normalizedText)
@@ -98,7 +101,8 @@ export class ScopedSnapshotStore {
     const existing = this.#snapshots.get(key)
     let pooled = this.#documents.get(rawDigest)
     if (!pooled) {
-      pooled = { document, refs: 0, bytes: document.bytes.byteLength + 2 * document.text.length + (document.text === document.normalizedText ? 0 : 2 * document.normalizedText.length) }
+      const pooledLineIndex = lineIndex ?? buildLineIndex(document.normalizedText)
+      pooled = { document, lineIndex: pooledLineIndex, refs: 0, bytes: document.bytes.byteLength + 2 * document.text.length + (document.text === document.normalizedText ? 0 : 2 * document.normalizedText.length) }
       this.#documents.set(rawDigest, pooled)
       this.#bytes += pooled.bytes
     }
@@ -116,6 +120,7 @@ export class ScopedSnapshotStore {
       text: document.normalizedText,
       seenLines: combined,
       document,
+      lineIndex: pooled.lineIndex,
       identity,
       recordedAt: this.#now(),
     }

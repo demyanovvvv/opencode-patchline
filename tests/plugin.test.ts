@@ -53,6 +53,29 @@ describe("OpenCode plugin", () => {
     }
   })
 
+  it("rejects adaptive mutation operations without a snapshot", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = {
+        sessionID: "s",
+        messageID: "m",
+        agent: "build",
+        directory: workspace.path,
+        worktree: workspace.path,
+        abort: new AbortController().signal,
+        metadata: vi.fn(),
+        ask: vi.fn(async () => undefined),
+      }
+      await expect(hooks.tool!.patchline_execute!.execute({
+        strategy: "auto",
+        operations: [{ filePath: "missing.ts", oldString: "old", newString: "new" }],
+      }, context)).rejects.toMatchObject({ code: "INVALID_ARGUMENT", message: expect.stringContaining("snapshot") })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
   it("uses read and edit through their OpenCode tool contracts", async () => {
     const workspace = await temporaryWorkspace()
     try {

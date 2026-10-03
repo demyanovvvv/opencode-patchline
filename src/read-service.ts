@@ -2,6 +2,7 @@ import { opendir, stat } from "node:fs/promises"
 import { PatchlineError } from "./errors.js"
 import { readBoundedUtf8Bytes } from "./io/bounded-file.js"
 import { decodeUtf8 } from "./preservation/text.js"
+import { buildLineIndex, sliceIndexedLines } from "./preservation/line-index.js"
 import { ScopedSnapshotStore, type SnapshotScope } from "./snapshot/store.js"
 import { resolveWorkspacePath } from "./workspace/paths.js"
 
@@ -114,14 +115,13 @@ export class ReadService {
     }
 
     const document = decodeUtf8(await readBoundedUtf8Bytes(resolved.absolute, resolved.relative, MAX_READ_FILE_BYTES), resolved.relative)
-    const lines = document.normalizedText.length === 0 ? [] : document.normalizedText.split("\n")
-    if (document.normalizedText.endsWith("\n")) lines.pop()
-    const totalLines = lines.length
+    const lineIndex = buildLineIndex(document.normalizedText)
+    const totalLines = lineIndex.totalLines
     if (offset > totalLines && !(totalLines === 0 && offset === 1)) {
       throw new PatchlineError("INVALID_ARGUMENT", `Offset ${offset} is out of range for this file (${totalLines} lines)`, { path: displayPath })
     }
     const endLine = Math.min(totalLines, offset + limit - 1)
-    const selectedLines = lines.slice(offset - 1, endLine)
+    const selectedLines = sliceIndexedLines(document.normalizedText, lineIndex, offset, limit)
     if (selectedLines.some((line) => line.length > MAX_READ_LINE_CHARS)) {
       throw new PatchlineError("INVALID_ARGUMENT", `Read range contains a line exceeding the 20,000-character output limit: ${displayPath}`, { path: displayPath })
     }
@@ -143,7 +143,7 @@ export class ReadService {
     const snapshot = this.snapshots.record(request, resolved.canonical, resolved.relative, document, seenLines, {
       device: fileInfo.dev,
       inode: fileInfo.ino,
-    })
+    }, lineIndex)
     const output = [
       `Path: ${displayPath}`,
       `Snapshot: ${snapshot.id}`,

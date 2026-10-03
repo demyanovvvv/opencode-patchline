@@ -6,9 +6,27 @@ import { encodeUtf8 } from "../src/preservation/text.js"
 import { isFileReadResult, ReadService } from "../src/read-service.js"
 import { ScopedSnapshotStore } from "../src/snapshot/store.js"
 import { parseConfig } from "../src/config.js"
+import { buildLineIndex, sliceIndexedLines } from "../src/preservation/line-index.js"
 import { temporaryWorkspace } from "./helpers/workspace.js"
 
 describe("read and exact edit", () => {
+  it("indexes normalized lines without materializing the whole line array", () => {
+    const text = "first\nsecond\nthird"
+    const index = buildLineIndex(text)
+
+    expect(index.totalLines).toBe(3)
+    expect(index.endsWithNewline).toBe(false)
+    expect(sliceIndexedLines(text, index, 2, 2)).toEqual(["second", "third"])
+  })
+
+  it("handles a trailing newline without creating an empty source line", () => {
+    const text = "first\nsecond\n"
+    const index = buildLineIndex(text)
+
+    expect(index.totalLines).toBe(2)
+    expect(index.endsWithNewline).toBe(true)
+    expect(sliceIndexedLines(text, index, 1, 2)).toEqual(["first", "second"])
+  })
   it("applies the current oh-my-pi PUT format through the snapshot contract", async () => {
     const workspace = await temporaryWorkspace()
     try {

@@ -12,8 +12,11 @@ report zero source lines. `edit` accepts `filePath`, `snapshot`, and either
 `oldString`/`newString` or a Hashline patch. `write` accepts `filePath` and
 `content`, creating only new files. `patchline_execute` accepts a list of
 snapshot-anchored operations and selects exact, Hashline, or recoverable batch
-execution when `strategy` is `auto`; it never bypasses the existing edit/write
-safety services. Additional tools are `patchline_grep`,
+execution when `strategy` is `auto`. Every operation must include the snapshot
+returned by `read`; adaptive patch execution is not part of this tool. The
+standalone `apply_patch` tool remains responsible for Hashline sections and
+new-file fallback handling. The adaptive tool never bypasses the existing
+edit/write safety services. Additional tools are `patchline_grep`,
 `patchline_lsp`, `ast_search`, `patchline_edit_batch`, and
 `patchline_diagnostics`.
 

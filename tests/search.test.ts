@@ -172,6 +172,19 @@ describe("search", () => {
     }
   })
 
+  it("marks results truncated only when matches exist beyond the result limit", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "a.ts"), "needle\n")
+      await writeFile(path.join(workspace.path, "b.ts"), "quiet\n")
+      await expect(grepWorkspace({ worktree: workspace.path, pattern: "needle", maxResults: 1 })).resolves.toMatchObject({ matches: [{ line: 1 }], truncated: false })
+      await writeFile(path.join(workspace.path, "b.ts"), "needle\n")
+      await expect(grepWorkspace({ worktree: workspace.path, pattern: "needle", maxResults: 1 })).resolves.toMatchObject({ truncated: true })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
   it("matches direct and nested files with a double-star include glob", async () => {
     const workspace = await temporaryWorkspace()
     try {
