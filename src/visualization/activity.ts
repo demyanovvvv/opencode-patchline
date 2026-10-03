@@ -140,7 +140,7 @@ export function patchlineActivity(calls: readonly ToolCall[]): ActivityView | un
   const additions = numberValue(metadata.added) ?? files?.reduce((sum, file) => sum + file.additions, 0)
   const deletions = numberValue(metadata.deleted) ?? files?.reduce((sum, file) => sum + file.deletions, 0)
   const writes = numberValue(metadata.writes)
-  const mutationTools = new Set(["edit", "write", "apply_patch", "patchline_edit_batch"])
+  const mutationTools = new Set(["edit", "write", "apply_patch", "patchline_execute", "patchline_edit_batch"])
   const kind: ActivityKind = mutationTools.has(call.tool)
     ? "mutation"
     : call.tool === "read" ? "read"
@@ -159,8 +159,8 @@ export function patchlineActivity(calls: readonly ToolCall[]): ActivityView | un
   }
   if (call.state.status === "running") {
     const stage = stringValue(metadata.stage) ?? "preflight"
-    const label = kind === "mutation" ? stageLabels[stage] ?? "Processing changes" : activityLabel(call.tool, metadata, true)
-    return { ...common, status: "running", label }
+    const label = kind === "mutation" ? stage === "planning" ? "Planning edit" : stageLabels[stage] ?? "Processing changes" : activityLabel(call.tool, metadata, true)
+    return { ...common, status: "running", label, reason: stringValue(metadata.routeReason), recoveryAction: stringValue(metadata.recoveryAction) }
   }
   if (call.state.status === "error" || metadata.validation === "failed" || (kind === "diagnostics" && metadata.ok === false)) {
     const batch = call.tool === "patchline_edit_batch" || call.tool === "apply_patch"
@@ -175,7 +175,7 @@ export function patchlineActivity(calls: readonly ToolCall[]): ActivityView | un
       recoveryAction: stringValue(metadata.recoveryAction), validation: stringValue(metadata.validation),
     }
   }
-  return { ...common, status: "completed", label: kind === "mutation" ? "Changes applied" : activityLabel(call.tool, metadata, false), validation: stringValue(metadata.validation) }
+  return { ...common, status: "completed", label: metadata.status === "fallback_required" ? "Standard tool required" : kind === "mutation" ? "Changes applied" : activityLabel(call.tool, metadata, false), validation: stringValue(metadata.validation), reason: stringValue(metadata.routeReason), recoveryAction: stringValue(metadata.recoveryAction) }
 }
 
 function activityLabel(tool: string, metadata: Record<string, unknown>, running: boolean): string {

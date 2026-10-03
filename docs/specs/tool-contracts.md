@@ -11,17 +11,21 @@ snapshot; an empty directory accepts only its initial offset of 1. Empty files
 report zero source lines. `edit` accepts `filePath`, `snapshot`, and either
 `oldString`/`newString` or a Hashline patch. `write` accepts `filePath` and
 `content`, creating only new files. `patchline_execute` accepts a list of
-snapshot-anchored operations and selects exact, Hashline, or recoverable batch
-execution when `strategy` is `auto`. Every operation must include the snapshot
-returned by `read`; adaptive patch execution is not part of this tool. The
+snapshot-anchored operations and selects exact, Hashline, recoverable batch, or
+standard-tool fallback execution when `strategy` is `auto`. Every operation
+must include the snapshot returned by `read`. Large replacements are never
+applied through Hashline; the tool returns bounded `fallback_required` metadata
+with `strategy: "standard"` and asks the caller to use the standard OpenCode
+edit or apply_patch tool. The
 standalone `apply_patch` tool remains responsible for Hashline sections and
 new-file fallback handling. The adaptive tool never bypasses the existing
 edit/write safety services. Additional tools are `patchline_grep`,
 `patchline_lsp`, `ast_search`, `patchline_edit_batch`, and
 `patchline_diagnostics`.
 
-Outputs are bounded and include no unchanged full file. Errors contain a stable
-code and a corrective action. Successful tool results expose bounded structured
+Outputs are bounded and include no unchanged full file. Fallback outputs are
+compact and do not include full old/new content. Errors contain a stable code
+and a corrective action. Successful tool results expose bounded structured
 metadata where the OpenCode adapter supports it: `status` (`observed` or
 `applied`), `recoveryAction`, and operation-specific fields such as `snapshot`,
 `bytesWritten` (actual UTF-8 bytes committed), `bytesRendered`, `added`, `deleted`, `created`, and `validation`. The existing

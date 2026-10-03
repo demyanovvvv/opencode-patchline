@@ -19,6 +19,23 @@ describe("OpenCode plugin", () => {
     }
   })
 
+  it("returns a compact standard-tool fallback for large adaptive changes", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const largeContent = Array.from({ length: 300 }, (_, index) => `line-${index}\n`).join("")
+      const largeReplacement = Array.from({ length: 140 }, (_, index) => `replacement-${index}\n`).join("")
+      await writeFile(path.join(workspace.path, "large.ts"), largeContent)
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const first = await hooks.tool!.read!.execute({ filePath: "large.ts" }, context) as unknown as { metadata: { snapshot: string } }
+      const result = await hooks.tool!.patchline_execute!.execute({ strategy: "auto", operations: [{ filePath: "large.ts", snapshot: first.metadata.snapshot, oldString: Array.from({ length: 140 }, (_, index) => `line-${index}\n`).join(""), newString: largeReplacement }] }, context)
+      expect(result).toMatchObject({ metadata: { status: "fallback_required", strategy: "standard", writes: 0 } })
+      await expect(readFile(path.join(workspace.path, "large.ts"), "utf8")).resolves.toBe(largeContent)
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
   it("uses adaptive execution for a multi-file exact edit", async () => {
     const workspace = await temporaryWorkspace()
     try {

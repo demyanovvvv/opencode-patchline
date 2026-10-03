@@ -18,8 +18,10 @@ omitted content (including an empty preview). Diff computation has a 100 ms /
 are independent of preview limits. Preview text is display-only and must never
 be used as an edit source or as proof that a commit succeeded.
 
-Tools report permission, preflight, committing, rollback, validation and
-completion through `ToolContext.metadata`. Presentation callbacks cannot stop a
+Tools report permission, planning, preflight, committing, rollback, validation,
+fallback and completion through `ToolContext.metadata`. `patchline_execute` is
+rendered as a mutation activity; large-change standard-tool delegation is
+rendered as a compact fallback card with its route reason and recovery action. Presentation callbacks cannot stop a
 commit or rollback. Thrown errors remain rejected tool calls with a reason,
 recovery action, stage, paths and write count where known. `writes` counts landed
 file writes, including subsequently restored files; `restored` and `conflicts`

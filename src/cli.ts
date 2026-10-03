@@ -36,6 +36,7 @@ const errorExplanations: Record<PatchlineErrorCode, { summary: string; action: s
   DIAGNOSTICS_UNAVAILABLE: { summary: "Diagnostics could not be run.", action: "Check the configured command and granted permissions." },
   VALIDATION_FAILED: { summary: "Post-edit validation failed.", action: "Inspect diagnostics before making another edit." },
   FALLBACK_REJECTED: { summary: "The requested fallback operation is disabled.", action: "Use a snapshot-tagged operation or enable the fallback explicitly." },
+  STANDARD_TOOL_REQUIRED: { summary: "The change is too large for Patchline precision editing.", action: "Use the standard OpenCode edit or apply_patch tool." },
 }
 
 function writeJson(output: Output, value: unknown): void {

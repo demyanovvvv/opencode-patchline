@@ -297,9 +297,9 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
     tool: {
       ...(config.mode === "precision" ? {
         patchline_execute: tool({
-          description: "Execute snapshot-safe edits with automatic exact, Hashline, or recoverable batch strategy selection.",
+          description: "Execute snapshot-safe edits with automatic exact, Hashline, batch, or standard-tool fallback selection.",
           args: {
-            strategy: tool.schema.enum(["auto", "exact", "hashline", "batch"]).optional(),
+            strategy: tool.schema.enum(["auto", "exact", "hashline", "batch", "standard"]).optional(),
             operations: tool.schema.array(tool.schema.object({
               filePath: tool.schema.string(),
               snapshot: tool.schema.string().describe("Snapshot ID or Hashline tag returned by read"),
@@ -324,9 +324,20 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
               hasHashline: hashlineOperations.length > 0,
               hasPatch: false,
               requiresAtomicBatch: paths.length > 1,
+              changedLines: exactOperations.reduce((total, operation) => total + Math.max(operation.oldString!.split(/\r?\n/).length, operation.newString!.split(/\r?\n/).length), 0),
               payloadBytes: JSON.stringify(operations).length,
             })
             const selected = args.strategy === "auto" || args.strategy === undefined ? route.strategy : args.strategy
+            if (selected === "standard" || route.strategy === "standard") {
+              if (args.strategy !== undefined && args.strategy !== "auto" && args.strategy !== "standard") {
+                throw new PatchlineError("STANDARD_TOOL_REQUIRED", "This change is too large for Patchline precision editing.", { details: { strategy: route.strategy, routeReason: route.reason, paths } })
+              }
+              return {
+                title: "Patchline · standard tool required",
+                output: "Large change detected. Use the standard OpenCode edit or apply_patch tool.",
+                metadata: { status: "fallback_required", stage: "fallback", strategy: "standard", requestedStrategy: args.strategy ?? "auto", confidence: route.confidence, routeReason: route.reason, paths, writes: 0, recoveryAction: "Use the standard OpenCode edit or apply_patch tool." },
+              }
+            }
             if (selected === "hashline") {
               if (hashlineOperations.length !== 1 || operations.length !== 1) throw new PatchlineError("INVALID_ARGUMENT", "Hashline adaptive execution currently accepts exactly one hashlinePatch operation.")
               let stage = "permission"

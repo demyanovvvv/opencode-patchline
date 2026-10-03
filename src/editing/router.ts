@@ -1,4 +1,4 @@
-export type EditStrategy = "exact" | "hashline" | "patch" | "batch"
+export type EditStrategy = "exact" | "hashline" | "patch" | "batch" | "standard"
 
 export type EditRouteInput = {
   fileCount: number
@@ -26,6 +26,11 @@ export function routeEdit(input: EditRouteInput): EditRoute {
   const totalLines = input.totalLines ?? 0
   const payloadBytes = input.payloadBytes ?? 0
   const ratio = totalLines > 0 ? changedLines / totalLines : 0
+  const largeChange = changedLines > 120 || ratio >= 0.35 || payloadBytes > 64 * 1024 || operationCount >= 40 || fileCount > 20
+
+  if (largeChange) {
+    return { strategy: "standard", confidence: 0.94, reason: "large replacement should use the standard OpenCode editing tool", estimatedPayloadBytes: payloadBytes }
+  }
 
   if (input.requiresAtomicBatch || fileCount > 1) {
     if (input.hasPatch && (ratio >= 0.35 || operationCount >= 40)) {

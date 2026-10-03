@@ -24,6 +24,11 @@ describe("Patchline activity presentation", () => {
     expect(view).toMatchObject({ totalFiles: 100, hiddenFiles: 96 })
   })
 
+  it("renders adaptive mutation planning and standard fallback", () => {
+    expect(patchlineActivity([{ tool: "patchline_execute", state: { status: "running", metadata: { stage: "planning", strategy: "standard", routeReason: "large replacement" } } }])).toMatchObject({ kind: "mutation", status: "running", label: "Planning edit", reason: "large replacement" })
+    expect(patchlineActivity([{ tool: "patchline_execute", state: { status: "completed", metadata: { status: "fallback_required", stage: "fallback", strategy: "standard", routeReason: "large replacement", recoveryAction: "Use standard tool" } } }])).toMatchObject({ kind: "mutation", status: "completed", label: "Standard tool required", recoveryAction: "Use standard tool" })
+  })
+
   it("normalizes every Patchline tool into a themed activity kind", () => {
     expect(patchlineActivity([{ tool: "read", state: { status: "completed", metadata: { path: "src/a.ts", lines: 12, bytesRendered: 240, snapshot: "snap-1" } } }])).toMatchObject({ kind: "read", label: "Snapshot created", paths: ["src/a.ts"], lines: 12, snapshot: "snap-1" })
     expect(patchlineActivity([{ tool: "patchline_grep", state: { status: "completed", metadata: { pattern: "needle", resultCount: 4, truncated: true } } }])).toMatchObject({ kind: "search", label: "Literal search", matchCount: 4, truncated: true })

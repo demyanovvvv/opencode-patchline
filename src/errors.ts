@@ -18,6 +18,7 @@ export type PatchlineErrorCode =
   | "DIAGNOSTICS_UNAVAILABLE"
   | "VALIDATION_FAILED"
   | "FALLBACK_REJECTED"
+  | "STANDARD_TOOL_REQUIRED"
 
 const RECOVERY_ACTIONS: Record<PatchlineErrorCode, string> = {
   OPENCODE_UNSUPPORTED: "Upgrade OpenCode to a supported version and run doctor again.",
@@ -39,6 +40,7 @@ const RECOVERY_ACTIONS: Record<PatchlineErrorCode, string> = {
   DIAGNOSTICS_UNAVAILABLE: "Check the configured command and granted permissions.",
   VALIDATION_FAILED: "Inspect diagnostics before making another edit.",
   FALLBACK_REJECTED: "Use a snapshot-tagged operation or enable the fallback explicitly.",
+  STANDARD_TOOL_REQUIRED: "Use the standard OpenCode edit or apply_patch tool for this large change.",
 }
 
 export function recoveryActionFor(code: PatchlineErrorCode): string {

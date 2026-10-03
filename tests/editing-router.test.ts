@@ -10,8 +10,16 @@ describe("edit strategy router", () => {
     expect(routeEdit({ fileCount: 1, operationCount: 5, changedLines: 18, totalLines: 500, hasExact: false, hasHashline: true, hasPatch: true })).toMatchObject({ strategy: "hashline" })
   })
 
-  it("selects patch for a large transformation", () => {
-    expect(routeEdit({ fileCount: 1, operationCount: 80, changedLines: 600, totalLines: 900, hasExact: false, hasHashline: true, hasPatch: true })).toMatchObject({ strategy: "patch" })
+  it("routes a large transformation to standard tools", () => {
+    expect(routeEdit({ fileCount: 1, operationCount: 80, changedLines: 600, totalLines: 900, hasExact: false, hasHashline: true, hasPatch: true })).toMatchObject({ strategy: "standard" })
+  })
+
+  it("routes large replacements to standard tools", () => {
+    expect(routeEdit({ fileCount: 1, operationCount: 1, changedLines: 140, totalLines: 300, payloadBytes: 70 * 1024, hasExact: true, hasHashline: true, hasPatch: false })).toMatchObject({ strategy: "standard" })
+  })
+
+  it("routes large multi-file changes to standard tools", () => {
+    expect(routeEdit({ fileCount: 21, operationCount: 21, changedLines: 300, totalLines: 600, payloadBytes: 80 * 1024, hasExact: true, hasHashline: true, hasPatch: false, requiresAtomicBatch: true })).toMatchObject({ strategy: "standard" })
   })
 
   it("selects batch for multi-file atomic work", () => {
