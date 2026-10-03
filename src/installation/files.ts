@@ -9,6 +9,7 @@ import type { FileIdentity } from "../snapshot/store.js"
 
 export type FileSnapshot = { path: string; source: string; identity: FileIdentity; parent: FileIdentity }
 export type FileChange = FileSnapshot & { text: string }
+type BinarySnapshot = { path: string; bytes: Uint8Array; identity: FileIdentity; parent: FileIdentity }
 export type InstallPaths = { cwd: string; configDirectory?: string; global?: boolean }
 
 export function globalConfigDirectory(): string {
@@ -50,6 +51,25 @@ export async function assertCurrent(snapshot: FileSnapshot): Promise<void> {
   const current = await readSnapshot(snapshot.path)
   if (!current || current.source !== snapshot.source || current.identity.device !== snapshot.identity.device || current.identity.inode !== snapshot.identity.inode || current.parent.device !== snapshot.parent.device || current.parent.inode !== snapshot.parent.inode) {
     throw new Error(`Configuration changed; retry after inspecting it: ${snapshot.path}`)
+  }
+}
+
+async function readBinarySnapshot(file: string): Promise<BinarySnapshot | undefined> {
+  try {
+    const info = await lstat(file)
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Expected a regular, non-symlink file: ${file}`)
+    if (path.normalize(await realpath(file)) !== path.normalize(path.resolve(file))) throw new Error(`Symlink binary path: ${file}`)
+    return { path: file, bytes: await readFile(file), identity: await readFileIdentity(file), parent: await readFileIdentity(path.dirname(file)) }
+  } catch (error) {
+    if (missing(error)) return undefined
+    throw error
+  }
+}
+
+async function assertBinaryCurrent(snapshot: BinarySnapshot): Promise<void> {
+  const current = await readBinarySnapshot(snapshot.path)
+  if (!current || !Buffer.from(current.bytes).equals(Buffer.from(snapshot.bytes)) || current.identity.device !== snapshot.identity.device || current.identity.inode !== snapshot.identity.inode || current.parent.device !== snapshot.parent.device || current.parent.inode !== snapshot.parent.inode) {
+    throw new Error(`Binary host backup changed; retry after inspecting it: ${snapshot.path}`)
   }
 }
 
@@ -141,7 +161,7 @@ export async function installHostBinary(source: string, target: string): Promise
   const parentIdentity = await readFileIdentity(parent)
   const temporary = path.join(parent, `.patchline-host-${randomUUID()}`)
   const previous = `${target}.patchline-previous`
-  const previousSnapshot = await readSnapshot(previous)
+  const previousSnapshot = await readBinarySnapshot(previous)
   if ((await readFile(source)).equals(before)) return previous
   const retired = `${temporary}-previous`
   await copyFile(source, temporary, constants.COPYFILE_EXCL)
@@ -149,7 +169,7 @@ export async function installHostBinary(source: string, target: string): Promise
     const current = await readFileIdentity(target)
     const directory = await readFileIdentity(parent)
     if (current.device !== identity.device || current.inode !== identity.inode || directory.device !== parentIdentity.device || directory.inode !== parentIdentity.inode || !(await readFile(target)).equals(before)) throw new Error("Host binary changed during installation.")
-    if (previousSnapshot) { await assertCurrent(previousSnapshot); await rename(previous, retired) }
+    if (previousSnapshot) { await assertBinaryCurrent(previousSnapshot); await rename(previous, retired) }
     try {
       await rename(target, previous)
       try { await rename(temporary, target) }

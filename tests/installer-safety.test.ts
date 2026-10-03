@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { parse } from "jsonc-parser"
@@ -113,6 +113,18 @@ describe("installer safety", () => {
     const result = removePatchlineEntries(source)
     expect(result.removed).toBe(3)
     expect(parse(result.text).plugin).toEqual(["other", "opencode-patchline-extra"])
+  })
+  it("accepts an existing binary host backup larger than the configuration limit", async () => {
+    const { installHostBinary } = await import("../src/installation/files.js")
+    const root = await workspace()
+    const source = path.join(root, "new.exe")
+    const target = path.join(root, "opencode.exe")
+    const previous = `${target}.patchline-previous`
+    await writeFile(target, Buffer.alloc(2 * 1024 * 1024, 1))
+    await writeFile(previous, Buffer.alloc(2 * 1024 * 1024, 2))
+    await writeFile(source, Buffer.alloc(2 * 1024 * 1024, 3))
+    await expect(installHostBinary(source, target)).resolves.toBe(previous)
+    await expect(stat(previous)).resolves.toMatchObject({ size: 2 * 1024 * 1024 })
   })
   it("keeps one previous host and makes identical replacement a no-op", async () => {
     const { installHostBinary } = await import("../src/installation/files.js")

@@ -105,7 +105,7 @@ function diffLines(diff: unknown): { lines: ActivityLine[]; truncated: boolean }
 }
 
 export function patchlineActivity(calls: readonly ToolCall[]): ActivityView | undefined {
-  const supported = new Set(["read", "edit", "write", "apply_patch", "patchline_edit_batch", "patchline_grep", "ast_search", "patchline_route_search", "patchline_lsp", "patchline_diagnostics", "patchline_summary"])
+  const supported = new Set(["read", "edit", "write", "apply_patch", "patchline_execute", "patchline_edit_batch", "patchline_grep", "ast_search", "patchline_route_search", "patchline_lsp", "patchline_diagnostics", "patchline_summary"])
   let call: ToolCall | undefined
   for (let index = calls.length - 1; index >= 0; index--) {
     const item = calls[index]!

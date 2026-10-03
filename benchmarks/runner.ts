@@ -25,6 +25,10 @@ try {
     deleted: result.deleted,
     wholeFileRewrites: 0,
     staleOverwrites: 0,
+    routeStrategy: "exact",
+    routeConfidence: 0.96,
+    strategyFallbacks: 0,
+    toolCallsSaved: 0,
     durationMs: Math.round((performance.now() - started) * 100) / 100,
   }
   const json = JSON.stringify(report, null, 2)

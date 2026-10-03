@@ -10,7 +10,10 @@ tag and numbered source lines. For directories it returns sorted entries and no
 snapshot; an empty directory accepts only its initial offset of 1. Empty files
 report zero source lines. `edit` accepts `filePath`, `snapshot`, and either
 `oldString`/`newString` or a Hashline patch. `write` accepts `filePath` and
-`content`, creating only new files. Additional tools are `patchline_grep`,
+`content`, creating only new files. `patchline_execute` accepts a list of
+snapshot-anchored operations and selects exact, Hashline, or recoverable batch
+execution when `strategy` is `auto`; it never bypasses the existing edit/write
+safety services. Additional tools are `patchline_grep`,
 `patchline_lsp`, `ast_search`, `patchline_edit_batch`, and
 `patchline_diagnostics`.
 

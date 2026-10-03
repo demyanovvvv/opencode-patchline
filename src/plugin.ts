@@ -6,6 +6,7 @@ import type { Plugin, PluginModule, ToolContext } from "@opencode-ai/plugin"
 import { tool } from "@opencode-ai/plugin"
 import { parseConfig } from "./config.js"
 import { EditService, type EditRequest } from "./edit-service.js"
+import { routeEdit } from "./editing/router.js"
 import { parseHashlinePatch } from "./editing/hashline-adapter.js"
 import { errorMessage, PatchlineError } from "./errors.js"
 import { looksLikeDirectShellWrite } from "./guards/files.js"
@@ -295,6 +296,74 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
   return {
     tool: {
       ...(config.mode === "precision" ? {
+        patchline_execute: tool({
+          description: "Execute snapshot-safe edits with automatic exact, Hashline, patch, or batch strategy selection.",
+          args: {
+            strategy: tool.schema.enum(["auto", "exact", "hashline", "patch", "batch"]).optional(),
+            operations: tool.schema.array(tool.schema.object({
+              filePath: tool.schema.string(),
+              snapshot: tool.schema.string().optional(),
+              oldString: tool.schema.string().optional(),
+              newString: tool.schema.string().optional(),
+              replaceAll: tool.schema.boolean().optional(),
+              hashlinePatch: tool.schema.string().optional(),
+            })).min(1).max(500),
+          },
+          async execute(args, context) {
+            const operations = args.operations
+            const paths = [...new Set(operations.map((operation) => operation.filePath))]
+            const exactOperations = operations.filter((operation) => operation.oldString !== undefined && operation.newString !== undefined)
+            const hashlineOperations = operations.filter((operation) => operation.hashlinePatch !== undefined)
+            const route = routeEdit({
+              fileCount: paths.length,
+              operationCount: operations.length,
+              hasExact: exactOperations.length === operations.length,
+              hasHashline: hashlineOperations.length > 0,
+              hasPatch: false,
+              requiresAtomicBatch: paths.length > 1,
+              payloadBytes: JSON.stringify(operations).length,
+            })
+            const selected = args.strategy === "auto" || args.strategy === undefined ? route.strategy : args.strategy
+            if (selected === "patch") throw new PatchlineError("INVALID_ARGUMENT", "Adaptive patch execution requires snapshot-tagged operations; provide Hashline sections or exact operations.")
+            if (selected === "hashline") {
+              if (hashlineOperations.length !== 1 || operations.length !== 1) throw new PatchlineError("INVALID_ARGUMENT", "Hashline adaptive execution currently accepts exactly one hashlinePatch operation.")
+              let stage = "permission"
+              try {
+                await context.ask({ permission: "edit", patterns: paths, always: ["*"], metadata: { paths, strategy: selected } })
+                const result = await edits.applyHashline(scope(context), hashlineOperations[0]!.hashlinePatch!, (nextStage) => {
+                  stage = nextStage
+                  progress(context, stage, "Patchline · adaptive Hashline", { paths, strategy: selected })
+                }, context.abort)
+                const validation = await validateMutation(context, result.map((item) => item.path))
+                return { title: "Patchline · adaptive Hashline", output: boundedMutationOutput(result.map((item) => item.output).join("\n\n")), metadata: { status: "applied", stage: "completed", strategy: selected, confidence: route.confidence, routeReason: route.reason, writes: result.length, paths: result.map((item) => item.path), ...validation } }
+              } catch (error) {
+                failure(context, error, stage, paths[0], { paths, strategy: selected })
+                throw toolError(error)
+              }
+            }
+            if (exactOperations.length !== operations.length) throw new PatchlineError("INVALID_ARGUMENT", "Adaptive exact execution requires oldString and newString for every operation.")
+            const requests: EditRequest[] = exactOperations.map((operation) => ({
+              ...scope(context),
+              filePath: operation.filePath,
+              snapshot: operation.snapshot!,
+              exact: { oldString: operation.oldString!, newString: operation.newString!, replaceAll: operation.replaceAll },
+            }))
+            let stage = "permission"
+            try {
+              await context.ask({ permission: "edit", patterns: paths, always: ["*"], metadata: { paths, strategy: selected } })
+              stage = "preflight"
+              const result = await edits.editBatch(requests, (nextStage) => {
+                stage = nextStage
+                progress(context, stage, `Patchline · adaptive ${selected}`, { paths, strategy: selected })
+              }, context.abort)
+              const validation = await validateMutation(context, paths)
+              return { title: `Patchline · adaptive ${selected}`, output: boundedMutationOutput(result.map((item) => item.output).join("\n\n")), metadata: { status: "applied", stage: "completed", strategy: selected, confidence: route.confidence, routeReason: route.reason, writes: result.length, paths, ...validation } }
+            } catch (error) {
+              failure(context, error, stage, paths.length === 1 ? paths[0] : undefined, { paths, strategy: selected })
+              throw toolError(error)
+            }
+          },
+        }),
         read: readTool,
         edit: editTool,
         write: writeTool,

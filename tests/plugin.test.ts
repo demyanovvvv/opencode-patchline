@@ -9,11 +9,45 @@ describe("OpenCode plugin", () => {
     const workspace = await temporaryWorkspace()
     try {
       const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
-      expect(Object.keys(hooks.tool ?? {})).toEqual(expect.arrayContaining(["read", "edit", "write", "apply_patch", "ast_search", "patchline_lsp"]))
+      expect(Object.keys(hooks.tool ?? {})).toEqual(expect.arrayContaining(["read", "edit", "write", "apply_patch", "patchline_execute", "ast_search", "patchline_lsp"]))
       await expect(hooks["tool.execute.before"]?.(
         { tool: "bash", sessionID: "s", callID: "c" },
         { args: { command: "Set-Content -Path a.ts -Value bad" } },
       )).rejects.toMatchObject({ code: "FALLBACK_REJECTED" })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("uses adaptive execution for a multi-file exact edit", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "a.ts"), "const a = 1\n")
+      await writeFile(path.join(workspace.path, "b.ts"), "const b = 1\n")
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const ask = vi.fn(async () => undefined)
+      const context = {
+        sessionID: "s",
+        messageID: "m",
+        agent: "build",
+        directory: workspace.path,
+        worktree: workspace.path,
+        abort: new AbortController().signal,
+        metadata: vi.fn(),
+        ask,
+      }
+      const first = await hooks.tool!.read!.execute({ filePath: "a.ts" }, context) as unknown as { metadata: { snapshot: string } }
+      const second = await hooks.tool!.read!.execute({ filePath: "b.ts" }, context) as unknown as { metadata: { snapshot: string } }
+      const result = await hooks.tool!.patchline_execute!.execute({
+        strategy: "auto",
+        operations: [
+          { filePath: "a.ts", snapshot: first.metadata.snapshot, oldString: "1", newString: "2" },
+          { filePath: "b.ts", snapshot: second.metadata.snapshot, oldString: "1", newString: "2" },
+        ],
+      }, context)
+      expect(result).toMatchObject({ metadata: { status: "applied", strategy: "batch", writes: 2 } })
+      await expect(readFile(path.join(workspace.path, "a.ts"), "utf8")).resolves.toBe("const a = 2\n")
+      await expect(readFile(path.join(workspace.path, "b.ts"), "utf8")).resolves.toBe("const b = 2\n")
     } finally {
       await workspace.cleanup()
     }
