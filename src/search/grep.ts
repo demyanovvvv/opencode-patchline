@@ -73,17 +73,33 @@ export async function grepWorkspace(input: {
     } finally {
       await directory.close()
     }
-    entries.sort((left, right) => left.name.localeCompare(right.name))
+    entries.sort((left, right) => {
+      const compare = (value: string): string => value.replace(/[^0-9A-Za-z]/g, " ").replace(/[0-9]/g, "1").replace(/[A-Za-z]/g, "2")
+      const leftKey = compare(left.name)
+      const rightKey = compare(right.name)
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : left.name < right.name ? -1 : left.name > right.name ? 1 : 0
+    })
     for (const entry of entries) {
       if (entry.isDirectory) await collect(entry.absolute)
       else if (entry.isFile) files.push(entry.absolute)
     }
+  }
+  const sortKey = (value: string): string => Array.from(value).map((character) => {
+    if (/[0-9]/.test(character)) return `1${character}`
+    if (/[A-Za-z]/.test(character)) return `2${character}`
+    return `0${character}`
+  }).join("")
+  const comparePaths = (left: string, right: string): number => {
+    const leftKey = sortKey(path.relative(root.absolute, left).replaceAll("\\", "/"))
+    const rightKey = sortKey(path.relative(root.absolute, right).replaceAll("\\", "/"))
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0
   }
   const fileInfo = await stat(root.absolute).catch(() => undefined)
   if (!fileInfo) throw new PatchlineError("FILE_NOT_FOUND", `Search path not found: ${root.relative}`, { path: root.relative })
   if (fileInfo.isDirectory()) await collect(root.absolute)
   else if (fileInfo.isFile()) files.push(root.absolute)
   else throw new PatchlineError("INVALID_ARGUMENT", `Search path must be a file or directory: ${root.relative}`)
+  files.sort(comparePaths)
   const results = new Array<Awaited<ReturnType<typeof scanFile>>>(files.length)
   let nextIndex = 0
   const worker = async (): Promise<void> => {

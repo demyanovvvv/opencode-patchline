@@ -36,7 +36,6 @@ export async function readSnapshot(file: string): Promise<FileSnapshot | undefin
     const info = await lstat(file)
     if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Expected a regular, non-symlink file: ${file}`)
     if (info.size > 1_048_576) throw new Error(`Configuration exceeds 1 MiB: ${file}`)
-    if (path.normalize(await realpath(file)) !== path.normalize(path.resolve(file))) throw new Error(`Symlink configuration path: ${file}`)
     const identity = await readFileIdentity(file)
     const bytes = await readFile(file)
     const document = decodeUtf8(bytes, file)
@@ -84,7 +83,6 @@ export async function configurationFiles(options: InstallPaths): Promise<FileSna
       try {
         const info = await lstat(ancestor)
         if (info.isSymbolicLink() || !info.isDirectory()) throw new Error(`Unsafe configuration directory: ${ancestor}`)
-        if (path.normalize(await realpath(ancestor)) !== path.normalize(path.resolve(ancestor))) throw new Error(`Symlink configuration directory: ${ancestor}`)
         break
       } catch (error) {
         if (!missing(error)) throw error
