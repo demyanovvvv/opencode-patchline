@@ -17,6 +17,10 @@ function runNpm(args, options = {}) {
 try {
   const { stdout } = await runNpm(["pack", "--json"], { maxBuffer: 5_000_000 })
   const report = JSON.parse(stdout)
+  const files = report[0]?.files
+  if (!Array.isArray(files)) throw new Error("npm pack did not report package files")
+  const forbidden = files.filter((entry) => entry.path.includes(".opencode-host/") || entry.path.includes(".opencode-patchline-state.json") || entry.path.startsWith("tests/") || entry.path.startsWith("src/"))
+  if (forbidden.length > 0) throw new Error(`Unexpected package files: ${forbidden.map((entry) => entry.path).join(", ")}`)
   const filename = report[0]?.filename
   if (typeof filename !== "string") throw new Error("npm pack did not report a package filename")
   tarball = path.resolve(filename)

@@ -141,6 +141,18 @@ describe("installer safety", () => {
     expect(await readFile(previous, "utf8")).toBe("first")
     expect(await readFile(target, "utf8")).toBe("second")
   })
+  it("verifies the committed host binary matches the source", async () => {
+    const { installHostBinary } = await import("../src/installation/files.js")
+    const root = await workspace()
+    const source = path.join(root, "new.exe")
+    const target = path.join(root, "opencode.exe")
+    await writeFile(source, "patched host")
+    await writeFile(target, "stock host")
+    const previous = await installHostBinary(source, target)
+    expect(await readFile(target, "utf8")).toBe(await readFile(source, "utf8"))
+    expect(await readFile(previous, "utf8")).toBe("stock host")
+  })
+
   it("installs a host binary with a backup and refuses linked targets", async () => {
     const { installHostBinary } = await import("../src/installation/files.js")
     const root = await workspace()

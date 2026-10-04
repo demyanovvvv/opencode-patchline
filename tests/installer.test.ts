@@ -237,6 +237,26 @@ describe("Patchline installer", () => {
     expect(JSON.parse(await readFile(config, "utf8"))).toEqual({ plugin: ["other-plugin"] })
     expect(commands).toEqual([{ command: "npm", args: ["uninstall", "--save-dev", "typescript-language-server"] }])
   })
+  it("rolls back plugin registration and state when LSP installation fails", async () => {
+    const root = await workspace("patchline-installer-rollback-")
+    const config = path.join(root, "opencode.json")
+    const original = JSON.stringify({ plugin: ["other"] })
+    await writeFile(config, original)
+    const code = await installPatchline({
+      cwd: root,
+      configDirectory: root,
+      stateDirectory: root,
+      confirm: async () => true,
+      hasCommand: async (command) => command === "opencode" || command === "bun",
+      runCommand: async (command) => command === "npm" ? 7 : 0,
+      stdout: () => undefined,
+      stderr: () => undefined,
+    })
+    expect(code).toBe(7)
+    expect(await readFile(config, "utf8")).toBe(original)
+    await expect(readFile(path.join(root, ".opencode-patchline-state.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" })
+  })
+
   it("deduplicates registrations after install and retains the existing options", async () => {
     const root = await workspace("patchline-dedup-")
     const config = path.join(root, "opencode.json")

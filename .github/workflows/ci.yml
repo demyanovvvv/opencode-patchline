@@ -45,6 +45,6 @@ jobs:
       - name: Run Windows direct plugin smoke
         if: matrix.os == 'windows-2022'
         run: npm run build; $env:PATCHLINE_PLUGIN_SMOKE_DIRECT = '1'; node scripts/plugin-smoke.mjs
-      - run: npm run smoke:package
       - run: npm audit --audit-level=high
-      - run: npm pack --dry-run
+      - name: Run package contents and public API smoke
+        run: npm run smoke:package

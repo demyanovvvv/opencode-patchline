@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline/promises"
 import path from "node:path"
-import { access, mkdir, realpath, readFile } from "node:fs/promises"
+import { access, mkdir, realpath, readFile, rm } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { applyEdits, createScanner, findNodeAtLocation, modify, parse, parseTree, type ParseError } from "jsonc-parser"
 import { executeCommand, type CommandResult } from "./installation/process.js"
@@ -17,6 +17,7 @@ type RunCommand = (command: string, args: readonly string[]) => Promise<number>
 type HasCommand = (command: string) => Promise<boolean>
 type Confirm = (message: string) => Promise<boolean>
 type CaptureCommand = (command: string, args: readonly string[]) => Promise<CommandResult>
+type InstalledPackageSet = { packages: readonly string[]; global: boolean }
 
 export type InstallerOptions = {
   cwd?: string
@@ -139,6 +140,7 @@ async function readState(filePath: string): Promise<InstallerState> {
   const value: unknown = JSON.parse(snapshot.source)
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid installer state.")
   const state = value as Record<string, unknown>
+  if (state.schemaVersion !== undefined && state.schemaVersion !== 1) throw new Error("Unsupported installer state version.")
   if (state.lspPackages !== undefined && (!Array.isArray(state.lspPackages) || state.lspPackages.some((item) => !LSP_PACKAGES.includes(item)))) throw new Error("Invalid installer dependency ownership.")
   if (state.addonPackages !== undefined && (!Array.isArray(state.addonPackages) || state.addonPackages.some((item) => !ADDON_PACKAGES.includes(item)))) throw new Error("Invalid installer add-on ownership.")
   const result: InstallerState = {}
@@ -251,7 +253,43 @@ async function normalizeOptions(options: InstallerOptions): Promise<InstallerOpt
 }
 
 async function saveInstallationState(options: InstallerOptions, language: InstallerLanguage, lspPackages: string[], addonPackages: string[], lspConfig?: OwnedLsp): Promise<void> {
-  await saveState(stateFileOf(options), { language, scope: scopeOf(options), lspPackages, addonPackages, packageName: options.packageName ?? PATCHLINE_PACKAGE, ...(lspConfig ? { lspConfig } : {}) })
+  await saveState(stateFileOf(options), { schemaVersion: 1, language, scope: scopeOf(options), lspPackages, addonPackages, packageName: options.packageName ?? PATCHLINE_PACKAGE, ...(lspConfig ? { lspConfig } : {}) })
+}
+
+async function rollbackPluginRegistration(options: InstallerOptions, previousConfigs: Awaited<ReturnType<typeof configurationFiles>>, packageName: string, log: Output, addedLsp?: OwnedLsp): Promise<void> {
+  const currentFiles = await configurationFiles({ cwd: options.cwd!, ...(options.configDirectory ? { configDirectory: options.configDirectory } : {}), ...(options.global !== undefined ? { global: options.global } : {}) })
+  const previousPaths = new Set(previousConfigs.map((file) => file.path))
+  const restore = []
+  for (const previous of previousConfigs) {
+    const current = currentFiles.find((file) => file.path === previous.path)
+    if (!current || current.source === previous.source) continue
+    const removedPlugin = removePatchlineEntries(current.source, packageName).text
+    const stripped = addedLsp ? removeOwnedLsp(removedPlugin, addedLsp) : removedPlugin
+    const before = parse(previous.source.replace(/^\uFEFF/, ""), [], { allowTrailingComma: true })
+    const after = parse(stripped.replace(/^\uFEFF/, ""), [], { allowTrailingComma: true })
+    if (JSON.stringify(before) === JSON.stringify(after)) restore.push({ ...current, text: previous.source })
+  }
+  await commitConfigurations(restore, log)
+  for (const current of currentFiles) {
+    if (previousPaths.has(current.path)) continue
+    const removed = removePatchlineEntries(current.source, packageName).text
+    if (removed !== current.source) {
+      const remaining = parse(removed.replace(/^\uFEFF/, ""), [], { allowTrailingComma: true })
+      if (Array.isArray(remaining?.plugin) && remaining.plugin.length === 0) {
+        await assertCurrent(current)
+        await rm(current.path)
+      }
+    }
+  }
+}
+
+async function rollbackInstalledPackages(sets: readonly InstalledPackageSet[], runCommand: RunCommand, log: Output): Promise<void> {
+  for (const set of sets) {
+    if (set.packages.length === 0) continue
+    const args = ["uninstall", ...(set.global ? ["--global"] : ["--save-dev"]), ...set.packages]
+    const code = await runCommand("npm", args)
+    if (code !== 0) log(`Rollback warning: npm uninstall exited with code ${code}.`)
+  }
 }
 
 async function performInstall(rawOptions: InstallerOptions = {}): Promise<number> {
@@ -273,7 +311,20 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
       throw new Error(language === "ru" ? "Требуется OpenCode >=1.18.0 и <2. Установите совместимую версию OpenCode." : "OpenCode >=1.18.0 and <2 is required. Install a compatible OpenCode version.")
     }
   }
-  const previousConfigs = await configurationFiles(options)
+  const previousConfigs = await configurationFiles({ cwd: options.cwd!, ...(options.configDirectory ? { configDirectory: options.configDirectory } : {}), ...(options.global !== undefined ? { global: options.global } : {}) })
+  const previousStateSnapshot = await readSnapshot(stateFileOf(options))
+  const installedPackages: InstalledPackageSet[] = []
+  let configuredLsp: OwnedLsp | undefined
+  let pluginRegistered = false
+  const rollback = async (): Promise<void> => {
+    if (configuredLsp || pluginRegistered) {
+      await rollbackPluginRegistration(options, previousConfigs, packageName, (file) => output(options, text.backup(file)), configuredLsp)
+    }
+    await rollbackInstalledPackages(installedPackages, runCommand, (line) => output(options, line))
+    if (previousStateSnapshot) await saveState(stateFileOf(options), JSON.parse(previousStateSnapshot.source))
+    else await removeState(stateFileOf(options))
+  }
+  try {
   for (const file of previousConfigs) {
     removePatchlineEntries(file.source, state.packageName ?? PATCHLINE_PACKAGE)
     output(options, text.backup(await backup(file)))
@@ -284,20 +335,11 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
   if (options.global) pluginArgs.push("--global")
   const pluginCode = await runCommand("opencode", pluginArgs)
   if (pluginCode !== 0) {
-    const currentFiles = await configurationFiles(options)
-    const restore = []
-    for (const previous of previousConfigs) {
-      const current = currentFiles.find((file) => file.path === previous.path)
-      if (!current || current.source === previous.source) continue
-      const stripped = removePatchlineEntries(current.source, packageName).text
-      const before = parse(previous.source.replace(/^\uFEFF/, ""), [], { allowTrailingComma: true })
-      const after = parse(stripped.replace(/^\uFEFF/, ""), [], { allowTrailingComma: true })
-      if (JSON.stringify(before) === JSON.stringify(after)) restore.push({ ...current, text: previous.source })
-    }
-    await commitConfigurations(restore, (file) => output(options, text.backup(file)))
+    await rollbackPluginRegistration(options, previousConfigs, packageName, (file) => output(options, text.backup(file)))
     errorOutput(options, text.error(language === "ru" ? `Регистрация плагина завершилась с кодом ${pluginCode}.` : `OpenCode plugin registration failed with exit code ${pluginCode}.`))
     return pluginCode
   }
+  pluginRegistered = true
   const deduplicated = (await configurationFiles(options)).flatMap((file) => {
     const config = parse(file.source.replace(/^\uFEFF/, ""), [], { allowTrailingComma: true })
     const plugins = config.plugin as unknown[] | undefined
@@ -337,13 +379,16 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
         ? ["install", "--global", ...missingPackages]
         : ["install", "--save-dev", ...missingPackages]
       const dependencyCode = await runCommand("npm", missingPackages.length === 0 && !options.global ? ["install"] : npmArgs)
+      installedPackages.push({ packages: missingPackages, global: Boolean(options.global) })
       if (dependencyCode !== 0) {
+        await rollback()
         errorOutput(options, text.error(text.lspFailed(dependencyCode)))
         return dependencyCode
       }
       ownedPackages = [...new Set([...ownedPackages, ...missingPackages])]
       await saveInstallationState(options, language, ownedPackages, ownedAddons, lspConfig)
       lspConfig = await configureLsp(options, lspConfig, (file) => output(options, text.backup(file)))
+      configuredLsp = lspConfig
       output(options, text.lspInstalled)
     }
   }
@@ -361,7 +406,9 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
         output(options, text.runtimeInstalled)
       } else {
         const addonCode = await runCommand("npm", ["install", "--global", ...missingAddons])
+        installedPackages.push({ packages: missingAddons, global: true })
         if (addonCode !== 0) {
+          await rollback()
           errorOutput(options, text.error(text.runtimeFailed(addonCode)))
           return addonCode
         }
@@ -375,6 +422,12 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
   await saveInstallationState(options, language, ownedPackages, ownedAddons, lspConfig)
   output(options, text.complete)
   return 0
+  } catch (error) {
+    try { await rollback() } catch (rollbackError) {
+      throw new Error(`Installation failed and rollback was incomplete: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`, { cause: error })
+    }
+    throw error
+  }
 }
 
 

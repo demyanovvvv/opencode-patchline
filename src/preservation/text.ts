@@ -72,6 +72,13 @@ export function applyNormalizedTextPreservingShape(normalizedText: string, docum
     commonEnd < normalizedText.length - commonStart &&
     original[original.length - commonEnd - 1] === normalizedText[normalizedText.length - commonEnd - 1]
   ) commonEnd++
+  const suffixStart = original.length - commonEnd
+  if (
+    commonEnd > 0 &&
+    suffixStart > commonStart &&
+    original[suffixStart] === "\n" &&
+    normalizedText[normalizedText.length - commonEnd] === "\n"
+  ) commonEnd--
   const rawOffsetAt = (normalizedOffset: number): number => {
     let rawOffset = 0
     let consumed = 0

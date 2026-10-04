@@ -5,3 +5,5 @@ coverage/
 benchmarks/reports/latest.json
 benchmarks/reports/latest.md
 .opencode-host/
+.opencode-patchline-state.json
+.opencode/.opencode-patchline-state.json

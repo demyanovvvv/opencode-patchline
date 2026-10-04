@@ -87,13 +87,30 @@ describe("installer lifecycle", () => {
     expect(await readFile(file, "utf8")).toBe(source)
   })
 
-  it("saves registration and language even when dependency installation fails", async () => {
+  it("rolls back registration and state when dependency installation fails", async () => {
     const root = await workspace()
     expect(await installPatchline({
       cwd: root, language: "ru", yes: true, stdout: () => undefined, stderr: () => undefined,
       hasCommand: async () => false, runCommand: async (command) => command === "npm" ? 1 : 0,
     })).toBe(1)
-    expect(JSON.parse(await readFile(path.join(root, ".opencode-patchline-state.json"), "utf8"))).toMatchObject({ language: "ru", lspPackages: [] })
+    await expect(readFile(path.join(root, ".opencode-patchline-state.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" })
+  })
+
+  it("removes a newly created plugin config when a later install phase fails", async () => {
+    const root = await workspace()
+    const config = path.join(root, "opencode.json")
+    expect(await installPatchline({
+      cwd: root, language: "en", yes: true, stdout: () => undefined, stderr: () => undefined,
+      hasCommand: async (command) => command === "opencode" || command === "bun",
+      runCommand: async (command) => {
+        if (command === "opencode") {
+          await writeFile(config, '{"plugin":["opencode-patchline"]}')
+          return 0
+        }
+        return 9
+      },
+    })).toBe(9)
+    await expect(readFile(config, "utf8")).rejects.toMatchObject({ code: "ENOENT" })
   })
 
   it("configures an installed TypeScript LSP and removes only its owned settings", async () => {

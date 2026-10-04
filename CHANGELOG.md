@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added compensating installer rollback for plugin registration, owned local/global
+  dependencies, LSP configuration, and runtime state after partial failures.
+- Added versioned installer state metadata and repository ignores for machine-local
+  ownership state.
+- Strengthened direct shell-write detection for common redirection, interpreter,
+  PowerShell, and file-copy forms while documenting permission enforcement as the
+  authoritative boundary.
+- Preserved dominant line endings for inserted content in mixed-ending documents
+  and added regression coverage for suffix-boundary edits.
+
 ## 1.2.0 - 2026-10-01
 
 - Added themed conversation cards for all eleven Patchline tools, status-colored

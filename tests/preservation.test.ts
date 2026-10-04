@@ -16,6 +16,12 @@ describe("text preservation", () => {
     expect(decodeUtf8(result).text).toBe("one\r\ntwo\nchanged\r\n")
   })
 
+  it("uses the dominant line ending for inserted mixed-ending content", () => {
+    const document = decodeUtf8(encodeUtf8("one\r\ntwo\r\nthree\nfour\r\n", false))
+    const result = applyNormalizedTextPreservingShape("one\ntwo\nchanged\nnew\nfour\n", document)
+    expect(decodeUtf8(result).text).toBe("one\r\ntwo\r\nchanged\r\nnew\r\nfour\r\n")
+  })
+
   it("rejects invalid UTF-8", () => {
     expect(() => decodeUtf8(Uint8Array.from([0xc3, 0x28]))).toThrowError(PatchlineError)
   })

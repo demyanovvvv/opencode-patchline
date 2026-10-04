@@ -73,13 +73,16 @@ export function matchesAllowedPath(relativePath: string, patterns: readonly stri
 }
 
 export function looksLikeDirectShellWrite(command: string): boolean {
+  const normalized = command.replace(/[\r\n]+/g, " ").trim()
   return [
-    /(?:^|[;&|]\s*)set-content\b/i,
-    /\bout-file\b/i,
-    /(?:^|[;&|]\s*)tee\b/i,
+    /(?:^|[;&|]\s*)(?:set-content|add-content|out-file)\b/i,
+    /\b(?:tee|tee-object|install|cp|copy|mv|move)\b[^\r\n]*\s(?:>|>>|-[^\s]*[dpfim]|\/y\b)/i,
     /\bsed\s+[^\r\n]*-[a-z]*i[a-z]*\b/i,
     /\bperl\s+[^\r\n]*-[a-z]*pi[a-z]*\b/i,
     /(?:^|[^>])>{1,2}\s*["']?[^\s|&;]+/,
-    /\b(?:writeFile|writeFileSync|write_text|write_bytes)\s*\(/,
-  ].some((pattern) => pattern.test(command))
+    /\b(?:writeFile|writeFileSync|write_text|write_bytes|open)\s*\([^\n]*[, ]+["'](?:w|a|w\+|a\+)["']/i,
+    /\b(?:python|python3|node|ruby|deno)\b[^\r\n]*(?:writeFile|writeFileSync|write_text|write_bytes|open\s*\([^\n]*["'](?:w|a|w\+|a\+)["'])/i,
+    /\b(?:cat|printf|echo)\b[^\r\n]*>{1,2}\s*/i,
+    /<<[-~]?\s*["']?\w+["']?/,
+  ].some((pattern) => pattern.test(normalized))
 }

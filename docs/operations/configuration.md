@@ -40,3 +40,12 @@ snapshot-tagged Hashline sections remain the precision editing path.
 the hard 20,000-character safety cap. `telemetry: false` does not retain
 detailed local events; aggregate counters remain available to the optional
 `patchline_summary` tool. Setting `summary: false` omits that tool entirely.
+
+Installer state is runtime ownership metadata and should not be committed to
+source control. Project-local state is ignored by the repository policy. The
+shell-write guard is best-effort detection; OpenCode permission checks remain
+the authoritative enforcement boundary.
+
+For mixed line-ending files, unchanged prefix and suffix bytes are preserved.
+Newline characters in the changed region use the dominant line ending from
+the original document, while BOM and final-newline shape are preserved.

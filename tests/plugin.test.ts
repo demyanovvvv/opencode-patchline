@@ -5,6 +5,24 @@ import { PatchlinePlugin } from "../src/plugin.js"
 import { temporaryWorkspace } from "./helpers/workspace.js"
 
 describe("OpenCode plugin", () => {
+  it.each([
+    "cat input.txt > output.txt",
+    "printf 'bad' > output.txt",
+    "python -c \"open('output.txt', 'w').write('bad')\"",
+    "node -e \"require('fs').writeFileSync('output.txt', 'bad')\"",
+  ])("blocks common direct shell write form: %s", async (command) => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      await expect(hooks["tool.execute.before"]?.(
+        { tool: "bash", sessionID: "s", callID: "c" },
+        { args: { command } },
+      )).rejects.toMatchObject({ code: "FALLBACK_REJECTED" })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
   it("registers familiar precision tools and blocks direct shell writes", async () => {
     const workspace = await temporaryWorkspace()
     try {

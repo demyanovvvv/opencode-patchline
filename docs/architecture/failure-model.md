@@ -29,6 +29,13 @@ retained for recovery. Clipboard register state is published after successful
 commit only. Mutation APIs propagate cancellation before preflight and between
 commits; cancellation during a partial batch uses the same guarded rollback
 and reports `cancelled`, `restored`, and `conflicts` metadata. Atomic replacement
-cleanup after a successful rename is best-effort and cannot hide a landed write. and is scoped to the session/worktree.
+cleanup after a successful rename is best-effort and cannot hide a landed write.
+Snapshot and clipboard state is scoped to the session/worktree.
+
+Installer mutations use a compensating transaction across configuration, owned
+dependencies, LSP registration, and installer state. A failure restores
+previous configuration and state when the files remain unchanged, and reports
+rollback conflicts without overwriting external changes. Dependency cleanup is
+scoped to the exact local or global installation that was changed.
 Presentation callbacks cannot interrupt a commit or rollback. Post-edit validation
 failures retain the applied diff, next snapshot and known write count.

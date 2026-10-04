@@ -178,7 +178,9 @@ export async function installHostBinary(source: string, target: string): Promise
       if (previousSnapshot) await rename(retired, previous)
       throw error
     }
-    if (previousSnapshot) await rm(retired)
+    const committed = await lstat(target)
+    if (!committed.isFile() || committed.isSymbolicLink() || !(await readFile(target)).equals(await readFile(source))) throw new Error("Committed host binary does not match the source.")
+    if (previousSnapshot) await rm(retired, { force: true })
     return previous
   } finally { await rm(temporary, { force: true }) }
 }
