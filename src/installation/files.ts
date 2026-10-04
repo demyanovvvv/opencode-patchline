@@ -1,5 +1,5 @@
 import { constants } from "node:fs"
-import { copyFile, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises"
+import { copyFile, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
@@ -57,7 +57,6 @@ async function readBinarySnapshot(file: string): Promise<BinarySnapshot | undefi
   try {
     const info = await lstat(file)
     if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Expected a regular, non-symlink file: ${file}`)
-    if (path.normalize(await realpath(file)) !== path.normalize(path.resolve(file))) throw new Error(`Symlink binary path: ${file}`)
     return { path: file, bytes: await readFile(file), identity: await readFileIdentity(file), parent: await readFileIdentity(path.dirname(file)) }
   } catch (error) {
     if (missing(error)) return undefined
@@ -138,7 +137,6 @@ export async function saveState(file: string, state: unknown): Promise<void> {
     await atomicReplace(file, Buffer.from(text), { expectedParent: snapshot.parent, expectedTarget: snapshot.identity })
   } else {
     await mkdir(path.dirname(file), { recursive: true })
-    if (path.normalize(await realpath(path.dirname(file))) !== path.normalize(path.resolve(path.dirname(file)))) throw new Error(`Symlink state directory: ${file}`)
     await writeFile(file, text, { encoding: "utf8", flag: "wx", mode: 0o600 })
   }
 }
@@ -153,7 +151,6 @@ export async function installHostBinary(source: string, target: string, onRollba
   const to = await lstat(target)
   if (!from.isFile() || from.isSymbolicLink() || !to.isFile() || to.isSymbolicLink()) throw new Error("Host binary must be a regular, non-symlink file.")
   const parent = path.dirname(target)
-  if (path.normalize(await realpath(parent)) !== path.normalize(path.resolve(parent))) throw new Error("Symlink host directory.")
   const before = await readFile(target)
   const identity = await readFileIdentity(target)
   const parentIdentity = await readFileIdentity(parent)
