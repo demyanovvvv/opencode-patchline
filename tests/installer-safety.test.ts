@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { parse } from "jsonc-parser"
@@ -10,7 +10,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 async function workspace() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "patchline-installer-safety-"))
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "patchline-installer-safety-")))
   roots.push(root)
   return root
 }
