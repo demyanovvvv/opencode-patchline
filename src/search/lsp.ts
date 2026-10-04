@@ -53,7 +53,14 @@ async function resolveOpenCodeCommand(): Promise<string> {
   if (process.platform !== "win32") return "opencode"
 
   const entries = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)
-  const candidates = entries.flatMap((entry) => [
+  const prefixes = [
+    process.env.npm_config_prefix,
+    process.env.NPM_CONFIG_PREFIX,
+    process.env.APPDATA ? path.join(process.env.APPDATA, "npm") : undefined,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "npm") : undefined,
+    path.dirname(process.execPath),
+  ].filter((value): value is string => Boolean(value))
+  const candidates = [...entries, ...prefixes].flatMap((entry) => [
     path.join(entry, "opencode.exe"),
     path.join(entry, "node_modules", "opencode-ai", "bin", "opencode.exe"),
   ])
