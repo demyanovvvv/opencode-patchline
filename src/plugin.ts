@@ -299,7 +299,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         patchline_execute: tool({
           description: "Execute snapshot-safe edits with automatic exact, Hashline, batch, or standard-tool fallback selection.",
           args: {
-            strategy: tool.schema.enum(["auto", "exact", "hashline", "batch", "standard"]).optional(),
+            strategy: tool.schema.enum(["auto", "exact", "hashline", "batch", "patch", "standard"]).optional(),
             operations: tool.schema.array(tool.schema.object({
               filePath: tool.schema.string(),
               snapshot: tool.schema.string().describe("Snapshot ID or Hashline tag returned by read"),
@@ -317,6 +317,33 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             const paths = [...new Set(operations.map((operation) => operation.filePath))]
             const exactOperations = operations.filter((operation) => operation.oldString !== undefined && operation.newString !== undefined)
             const hashlineOperations = operations.filter((operation) => operation.hashlinePatch !== undefined)
+            if (operations.some((operation) => {
+              const hasExactField = operation.oldString !== undefined || operation.newString !== undefined
+              const hasExact = operation.oldString !== undefined && operation.newString !== undefined
+              const hasHashline = operation.hashlinePatch !== undefined
+              return hasExactField !== hasExact || hasExact === hasHashline
+            })) {
+              throw new PatchlineError("INVALID_ARGUMENT", "Each adaptive operation must provide exactly one complete exact or Hashline representation.")
+            }
+            if (hashlineOperations.length > 0 && hashlineOperations.length !== operations.length) {
+              throw new PatchlineError("INVALID_ARGUMENT", "Adaptive execution cannot mix exact and Hashline operations.")
+            }
+            if (args.strategy === "patch") {
+              throw new PatchlineError("INVALID_ARGUMENT", "Adaptive patch strategy is not supported; use apply_patch directly.")
+            }
+            const routingSnapshots = new Map<string, { text: string; totalLines: number }>()
+            let changedLines = 0
+            for (const operation of exactOperations) {
+              const resolved = await resolveWorkspacePath(context.worktree, operation.filePath)
+              const snapshot = snapshots.get(scope(context), resolved.canonical, operation.snapshot!)
+              if (!snapshot) continue
+              routingSnapshots.set(resolved.canonical, { text: snapshot.text, totalLines: snapshot.lineIndex.totalLines })
+              const projected = operation.replaceAll
+                ? snapshot.text.split(operation.oldString!).join(operation.newString!)
+                : snapshot.text.replace(operation.oldString!, operation.newString!)
+              const stats = diffStats(snapshot.text, projected)
+              changedLines += Math.max(stats.added, stats.deleted)
+            }
             const route = routeEdit({
               fileCount: paths.length,
               operationCount: operations.length,
@@ -324,8 +351,9 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
               hasHashline: hashlineOperations.length > 0,
               hasPatch: false,
               requiresAtomicBatch: paths.length > 1,
-              changedLines: exactOperations.reduce((total, operation) => total + Math.max(operation.oldString!.split(/\r?\n/).length, operation.newString!.split(/\r?\n/).length), 0),
-              payloadBytes: JSON.stringify(operations).length,
+              changedLines,
+              totalLines: paths.length === 1 ? [...routingSnapshots.values()][0]?.totalLines ?? 0 : 0,
+              payloadBytes: Buffer.byteLength(JSON.stringify(operations), "utf8"),
             })
             const selected = args.strategy === "auto" || args.strategy === undefined ? route.strategy : args.strategy
             if (selected === "standard" || route.strategy === "standard") {

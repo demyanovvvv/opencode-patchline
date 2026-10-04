@@ -26,7 +26,7 @@ describe("Patchline activity presentation", () => {
 
   it("renders adaptive mutation planning and standard fallback", () => {
     expect(patchlineActivity([{ tool: "patchline_execute", state: { status: "running", metadata: { stage: "planning", strategy: "standard", routeReason: "large replacement" } } }])).toMatchObject({ kind: "mutation", status: "running", label: "Planning edit", reason: "large replacement" })
-    expect(patchlineActivity([{ tool: "patchline_execute", state: { status: "completed", metadata: { status: "fallback_required", stage: "fallback", strategy: "standard", requestedStrategy: "auto", confidence: "high", routeReason: "large replacement", recoveryAction: "Use standard tool" } } }])).toMatchObject({ kind: "mutation", status: "completed", label: "Standard tool required", strategy: "standard", requestedStrategy: "auto", confidence: "high", recoveryAction: "Use standard tool" })
+    expect(patchlineActivity([{ tool: "patchline_execute", state: { status: "completed", metadata: { status: "fallback_required", stage: "fallback", strategy: "standard", requestedStrategy: "auto", confidence: 0.94, routeReason: "large replacement", recoveryAction: "Use standard tool" } } }])).toMatchObject({ kind: "mutation", status: "completed", label: "Standard tool required", strategy: "standard", requestedStrategy: "auto", confidence: 0.94, recoveryAction: "Use standard tool" })
   })
 
   it("normalizes every Patchline tool into a themed activity kind", () => {

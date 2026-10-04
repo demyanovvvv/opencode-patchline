@@ -36,6 +36,116 @@ describe("OpenCode plugin", () => {
     }
   })
 
+  it("routes a ratio-sized replacement to the standard tool without writing", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const content = Array.from({ length: 100 }, (_, index) => `line-${index}\n`).join("")
+      const replacement = Array.from({ length: 40 }, (_, index) => `replacement-${index}\n`).join("")
+      await writeFile(path.join(workspace.path, "ratio.ts"), content)
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const first = await hooks.tool!.read!.execute({ filePath: "ratio.ts" }, context) as unknown as { metadata: { snapshot: string } }
+      const result = await hooks.tool!.patchline_execute!.execute({ strategy: "auto", operations: [{ filePath: "ratio.ts", snapshot: first.metadata.snapshot, oldString: content.split("\n").slice(0, 40).join("\n"), newString: replacement }] }, context)
+      expect(result).toMatchObject({ metadata: { status: "fallback_required", strategy: "standard", writes: 0 } })
+      await expect(readFile(path.join(workspace.path, "ratio.ts"), "utf8")).resolves.toBe(content)
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("routes the exact 35 percent boundary using logical snapshot lines", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const content = Array.from({ length: 100 }, (_, index) => `line-${index}\n`).join("")
+      const replacement = Array.from({ length: 35 }, (_, index) => `replacement-${index}\n`).join("")
+      await writeFile(path.join(workspace.path, "boundary.ts"), content)
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const first = await hooks.tool!.read!.execute({ filePath: "boundary.ts" }, context) as unknown as { metadata: { snapshot: string } }
+      const result = await hooks.tool!.patchline_execute!.execute({ strategy: "auto", operations: [{ filePath: "boundary.ts", snapshot: first.metadata.snapshot, oldString: content.split("\n").slice(0, 35).join("\n"), newString: replacement }] }, context)
+      expect(result).toMatchObject({ metadata: { status: "fallback_required", strategy: "standard", writes: 0 } })
+      await expect(readFile(path.join(workspace.path, "boundary.ts"), "utf8")).resolves.toBe(content)
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("routes replaceAll by the affected snapshot lines", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const content = Array.from({ length: 100 }, () => "x\n").join("")
+      await writeFile(path.join(workspace.path, "replace-all.ts"), content)
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const first = await hooks.tool!.read!.execute({ filePath: "replace-all.ts" }, context) as unknown as { metadata: { snapshot: string } }
+      const result = await hooks.tool!.patchline_execute!.execute({ strategy: "auto", operations: [{ filePath: "replace-all.ts", snapshot: first.metadata.snapshot, oldString: "x", newString: "y", replaceAll: true }] }, context)
+      expect(result).toMatchObject({ metadata: { status: "fallback_required", strategy: "standard", writes: 0 } })
+      await expect(readFile(path.join(workspace.path, "replace-all.ts"), "utf8")).resolves.toBe(content)
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("rejects unsupported explicit patch strategy", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "patch.ts"), "const value = 1\n")
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const first = await hooks.tool!.read!.execute({ filePath: "patch.ts" }, context) as unknown as { metadata: { snapshot: string } }
+      await expect(hooks.tool!.patchline_execute!.execute({ strategy: "patch", operations: [{ filePath: "patch.ts", snapshot: first.metadata.snapshot, oldString: "const value = 1", newString: "const value = 2" }] }, context)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("rejects mixed exact and Hashline adaptive operations", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "mixed.ts"), "const value = 1\n")
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const first = await hooks.tool!.read!.execute({ filePath: "mixed.ts" }, context) as unknown as { metadata: { snapshot: string; tag: string } }
+      await expect(hooks.tool!.patchline_execute!.execute({ strategy: "auto", operations: [{ filePath: "mixed.ts", snapshot: first.metadata.snapshot, oldString: "const value = 1", newString: "const value = 2" }, { filePath: "mixed.ts", snapshot: first.metadata.snapshot, hashlinePatch: `[mixed.ts#${first.metadata.tag}]\nPUT 1: const value = 3` }] }, context)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("rejects one adaptive operation with both exact and Hashline representations", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "ambiguous.ts"), "const value = 1\n")
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const first = await hooks.tool!.read!.execute({ filePath: "ambiguous.ts" }, context) as unknown as { metadata: { snapshot: string; tag: string } }
+      await expect(hooks.tool!.patchline_execute!.execute({ strategy: "auto", operations: [{
+        filePath: "ambiguous.ts",
+        snapshot: first.metadata.snapshot,
+        oldString: "const value = 1",
+        newString: "const value = 2",
+        hashlinePatch: `[ambiguous.ts#${first.metadata.tag}]\nPUT 1: const value = 3`,
+      }] }, context)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
+  it("uses UTF-8 bytes when routing payload size", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "unicode.ts"), "const value = 1\n")
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const first = await hooks.tool!.read!.execute({ filePath: "unicode.ts" }, context) as unknown as { metadata: { snapshot: string } }
+      const operation = { filePath: "unicode.ts", snapshot: first.metadata.snapshot, oldString: "const value = 1", newString: "😀".repeat(40_000) }
+      const result = await hooks.tool!.patchline_execute!.execute({ strategy: "auto", operations: [operation] }, context)
+      expect(result).toMatchObject({ metadata: { status: "fallback_required", strategy: "standard", writes: 0 } })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+
   it("uses adaptive execution for a multi-file exact edit", async () => {
     const workspace = await temporaryWorkspace()
     try {

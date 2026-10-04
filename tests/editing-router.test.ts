@@ -26,6 +26,11 @@ describe("edit strategy router", () => {
     expect(routeEdit({ fileCount: 3, operationCount: 3, hasExact: true, hasHashline: true, hasPatch: false, requiresAtomicBatch: true })).toMatchObject({ strategy: "batch" })
   })
 
+  it("routes patch-only representations to the standard tool", () => {
+    expect(routeEdit({ fileCount: 1, operationCount: 1, changedLines: 2, totalLines: 500, hasExact: false, hasHashline: false, hasPatch: true })).toMatchObject({ strategy: "standard" })
+    expect(routeEdit({ fileCount: 2, operationCount: 2, hasExact: false, hasHashline: false, hasPatch: true, requiresAtomicBatch: true })).toMatchObject({ strategy: "standard" })
+  })
+
   it("keeps exact threshold inputs local and routes the next boundary to standard", () => {
     const common = { fileCount: 1, operationCount: 1, totalLines: 400, hasExact: true, hasHashline: true, hasPatch: false }
     expect(routeEdit({ ...common, changedLines: 120 })).not.toMatchObject({ strategy: "standard" })

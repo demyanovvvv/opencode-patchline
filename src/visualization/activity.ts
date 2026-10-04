@@ -20,7 +20,7 @@ export type ActivityView = {
   recoveryAction?: string | undefined
   strategy?: string | undefined
   requestedStrategy?: string | undefined
-  confidence?: string | undefined
+  confidence?: number | undefined
   validation?: string | undefined
   lines?: number | undefined
   bytes?: number | undefined
@@ -158,7 +158,7 @@ export function patchlineActivity(calls: readonly ToolCall[]): ActivityView | un
     matchCount: numberValue(metadata.resultCount) ?? numberValue(metadata.matches), truncated: booleanValue(metadata.truncated),
     query: stringValue(metadata.query) ?? stringValue(call.input?.query), pattern: stringValue(metadata.pattern) ?? stringValue(call.input?.pattern),
     language: stringValue(metadata.language) ?? stringValue(call.input?.language), mechanism: stringValue(metadata.mechanism), operation: stringValue(metadata.operation) ?? stringValue(call.input?.operation),
-    strategy: stringValue(metadata.strategy), requestedStrategy: stringValue(metadata.requestedStrategy), confidence: stringValue(metadata.confidence),
+    strategy: stringValue(metadata.strategy), requestedStrategy: stringValue(metadata.requestedStrategy), confidence: numberValue(metadata.confidence),
     exitCode: numberValue(metadata.exitCode), outputLines: numberValue(metadata.outputLines), command: stringValue(metadata.command), summary: recordValue(metadata.summary) ?? recordValue(metadata),
   }
   if (call.state.status === "running") {
