@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { spawnSync } from "node:child_process"
 import path from "node:path"
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from "node:fs"
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 
 const powershell = "pwsh"
@@ -10,7 +10,7 @@ const available = spawnSync(powershell, ["-NoProfile", "-Command", "exit 0"]).st
 describe.skipIf(!available)("PowerShell installer wrappers", () => {
   for (const action of ["install", "uninstall"]) {
     it(`${action} forwards arguments, working directory and failure exit code`, () => {
-      const directory = mkdtempSync(path.join(tmpdir(), "patchline wrapper "))
+      const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "patchline wrapper ")))
       copyFileSync(path.resolve(`${action}.ps1`), path.join(directory, `${action}.ps1`))
       const file = path.join(directory, `${action}.ps1`).replaceAll("'", "''")
       const name = process.platform === "win32" ? "npx.cmd" : "npx"
@@ -28,7 +28,7 @@ describe.skipIf(!available)("PowerShell installer wrappers", () => {
 
   for (const built of [true, false]) {
     it(`uses the source checkout ${built ? "CLI" : "build instructions without registry access"}`, () => {
-      const directory = mkdtempSync(path.join(tmpdir(), "patchline checkout "))
+      const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "patchline checkout ")))
       try {
         copyFileSync(path.resolve("install.ps1"), path.join(directory, "install.ps1"))
         mkdirSync(path.join(directory, "src"))
