@@ -335,7 +335,8 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
 
   output(options, text.starting(packageName))
   output(options, text.scope(scope))
-  if (!options.runCommand) await ensureVisualHost(options)
+  let rollbackVisualHost: (() => Promise<void>) | undefined
+  if (!options.runCommand) rollbackVisualHost = await ensureVisualHost(options)
   if (!options.runCommand || options.captureCommand) {
     const version = await capture(options, "opencode", ["--version"])
     if (version.code !== 0 || !/^1\.(?:18|19|[2-9]\d|\d{3,})\./.test(version.output)) {
@@ -393,6 +394,7 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
       if (previousStateSnapshot && expectedState) await commitConfigurations([{ ...expectedState, text: previousStateSnapshot.source }], (file) => output(options, text.backup(file)))
       else if (expectedState) await removeState(stateFileOf(options))
     })
+    await attempt(async () => { await rollbackVisualHost?.() })
     if (conflicts.length) throw new Error(`Rollback conflicts: ${conflicts.join("; ")}`)
   }
   try {
@@ -592,7 +594,7 @@ export async function uninstallPatchline(rawOptions: InstallerOptions = {}): Pro
   }
 }
 
-export async function protectVisualHostUpdates(file: string): Promise<void> {
+export async function protectVisualHostUpdates(file: string, onRollback?: (restore: () => Promise<void>) => void): Promise<void> {
   const snapshot = await readSnapshot(file)
   if (!snapshot) throw new Error(`OpenCode global configuration not found: ${file}`)
   const bom = snapshot.source.startsWith("\uFEFF") ? "\uFEFF" : ""
@@ -604,6 +606,12 @@ export async function protectVisualHostUpdates(file: string): Promise<void> {
   if (preference === false || preference === "notify") return
   const text = bom + applyEdits(source, modify(source, ["autoupdate"], "notify", { formattingOptions: { insertSpaces: true, tabSize: 2, eol: source.includes("\r\n") ? "\r\n" : "\n" } }))
   await commitConfigurations([{ ...snapshot, text }], () => {})
+  const landed = await readSnapshot(file)
+  if (!landed) throw new Error("Visual host configuration snapshot unavailable.")
+  onRollback?.(async () => {
+    await assertCurrent(landed)
+    await commitConfigurations([{ ...landed, text: snapshot.source }], () => {})
+  })
 }
 
 export function integratedHostVersion(upstream: string, plugin: string): string {
@@ -632,12 +640,15 @@ export function patchHostUpdates(source: string, cli: string): string {
   return source.replace(anchor, `${anchor}${newline}${block}`)
 }
 
-async function ensureVisualHost(options: InstallerOptions): Promise<void> {
+async function ensureVisualHost(options: InstallerOptions): Promise<(() => Promise<void>) | undefined> {
   if (process.platform !== "win32" || process.arch !== "x64") throw new Error("Automatic conversation UI host installation currently requires Windows x64.")
   const globalFiles = await configurationFiles({ ...options, cwd: options.cwd!, global: true })
   const serverConfig = globalFiles.find((file) => /^opencode\.jsonc?$/.test(path.basename(file.path)))
   if (!serverConfig) throw new Error("An OpenCode global configuration is required to protect the custom UI host from automatic replacement.")
-  await protectVisualHostUpdates(serverConfig.path)
+  let rollbackVisualConfig: (() => Promise<void>) | undefined
+  await protectVisualHostUpdates(serverConfig.path, (restore) => { rollbackVisualConfig = restore })
+  let rollbackHost: (() => Promise<void>) | undefined
+  try {
   const version = await executeCommand("opencode", ["--version"], options.cwd!)
   const packageRoot = fileURLToPath(new URL("..", import.meta.url))
   const manifest = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8")) as { version: string }
@@ -645,7 +656,7 @@ async function ensureVisualHost(options: InstallerOptions): Promise<void> {
   if (latest && latest.code !== 0) throw new Error("Could not resolve the upstream OpenCode version; existing host retained.")
   const upstream = options.opencodeVersion ?? latest!.output.trim()
   const desiredVersion = integratedHostVersion(upstream, manifest.version)
-  if (version.code === 0 && version.output.trim() === desiredVersion) return
+  if (version.code === 0 && version.output.trim() === desiredVersion) return undefined
   if (!options.yes && !await (options.confirm ?? confirmPrompt)("Install the Patchline-compatible OpenCode UI host and replace the opencode executable (with a backup)?")) throw new Error("Conversation UI host installation was declined; installation is incomplete.")
   if ((await executeCommand("bun", ["--version"], options.cwd!).catch(() => ({ code: 1, output: "" }))).code !== 0) {
     if ((await executeCommand("npm", ["install", "--global", "bun"], options.cwd!, true)).code !== 0) throw new Error("Bun is required to build the UI host.")
@@ -690,10 +701,18 @@ async function ensureVisualHost(options: InstallerOptions): Promise<void> {
   if ((await executeCommand("bun", ["run", "script/build.ts", "--single", "--skip-install", "--skip-embed-web-ui"], buildDirectory, true, { OPENCODE_VERSION: desiredVersion })).code !== 0) throw new Error("UI host build failed.")
   const binary = path.join(buildDirectory, "dist", "opencode-windows-x64", "bin", "opencode.exe")
   const target = await resolveInstalledOpenCode()
-  const previous = await installHostBinary(binary, target)
+  const previous = await installHostBinary(binary, target, (restore) => { rollbackHost = restore })
   output(options, `OpenCode UI host installed. Backup: ${previous}`)
   const installed = await executeCommand("opencode", ["--version"], options.cwd!)
   if (installed.code !== 0 || installed.output.trim() !== desiredVersion) throw new Error("The opencode command does not resolve to the installed UI host.")
+  return async () => {
+    await rollbackHost?.()
+    await rollbackVisualConfig?.()
+  }
+  } catch (error) {
+    try { await rollbackHost?.() } finally { await rollbackVisualConfig?.() }
+    throw error
+  }
 }
 
 export async function resolveInstalledOpenCode(searchPath = process.env.PATH ?? ""): Promise<string> {

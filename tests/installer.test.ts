@@ -53,6 +53,16 @@ describe("Patchline installer", () => {
       expect(JSON.parse(await readFile(file, "utf8")).autoupdate).toBe(value === true ? "notify" : value)
     }
   })
+  it("restores visual host update preferences through guarded rollback", async () => {
+    const root = await workspace("patchline-host-policy-rollback-")
+    const file = path.join(root, "opencode.json")
+    const source = '{"autoupdate":true,"theme":"custom"}\n'
+    await writeFile(file, source)
+    let rollback: (() => Promise<void>) | undefined
+    await protectVisualHostUpdates(file, (restore) => { rollback = restore })
+    await rollback!()
+    expect(await readFile(file, "utf8")).toBe(source)
+  })
 
   it("resolves a canonical installed host path", async () => {
     const root = await workspace("patchline-host-path-")

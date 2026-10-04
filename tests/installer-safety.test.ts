@@ -16,6 +16,35 @@ async function workspace() {
 }
 
 describe("installer safety", () => {
+  it("restores the host and prior backup through a guarded rollback", async () => {
+    const { installHostBinary } = await import("../src/installation/files.js")
+    const root = await workspace()
+    const source = path.join(root, "new.exe")
+    const target = path.join(root, "opencode.exe")
+    const previous = `${target}.patchline-previous`
+    await writeFile(source, "new")
+    await writeFile(target, "old")
+    await writeFile(previous, "older")
+    let rollback: (() => Promise<void>) | undefined
+    await installHostBinary(source, target, (restore) => { rollback = restore })
+    expect(rollback).toBeTypeOf("function")
+    await rollback!()
+    expect(await readFile(target, "utf8")).toBe("old")
+    expect(await readFile(previous, "utf8")).toBe("older")
+  })
+  it("preserves an externally replaced host during rollback", async () => {
+    const { installHostBinary } = await import("../src/installation/files.js")
+    const root = await workspace()
+    const source = path.join(root, "new.exe")
+    const target = path.join(root, "opencode.exe")
+    await writeFile(source, "new")
+    await writeFile(target, "old")
+    let rollback: (() => Promise<void>) | undefined
+    await installHostBinary(source, target, (restore) => { rollback = restore })
+    await writeFile(target, "external")
+    await expect(rollback!()).rejects.toThrow("changed")
+    expect(await readFile(target, "utf8")).toBe("external")
+  })
   it("accepts a caller workspace alias while still rejecting nested config aliases", async () => {
     const root = await workspace()
     const aliases = await workspace()

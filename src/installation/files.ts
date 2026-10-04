@@ -150,7 +150,7 @@ export async function removeState(file: string): Promise<void> {
   if (snapshot) { await assertCurrent(snapshot); await rm(file) }
 }
 
-export async function installHostBinary(source: string, target: string): Promise<string> {
+export async function installHostBinary(source: string, target: string, onRollback?: (restore: () => Promise<void>) => void): Promise<string> {
   const from = await lstat(source)
   const to = await lstat(target)
   if (!from.isFile() || from.isSymbolicLink() || !to.isFile() || to.isSymbolicLink()) throw new Error("Host binary must be a regular, non-symlink file.")
@@ -180,6 +180,16 @@ export async function installHostBinary(source: string, target: string): Promise
     }
     const committed = await lstat(target)
     if (!committed.isFile() || committed.isSymbolicLink() || !(await readFile(target)).equals(await readFile(source))) throw new Error("Committed host binary does not match the source.")
+    const landed = await readBinarySnapshot(target)
+    const ownedBackup = await readBinarySnapshot(previous)
+    if (!landed || !ownedBackup) throw new Error("Host rollback snapshots unavailable.")
+    onRollback?.(async () => {
+      await assertBinaryCurrent(landed)
+      await assertBinaryCurrent(ownedBackup)
+      await atomicReplace(target, ownedBackup.bytes, { expectedParent: landed.parent, expectedTarget: landed.identity })
+      if (previousSnapshot) await atomicReplace(previous, previousSnapshot.bytes, { expectedParent: ownedBackup.parent, expectedTarget: ownedBackup.identity })
+      else { await assertBinaryCurrent(ownedBackup); await rm(previous) }
+    })
     if (previousSnapshot) await rm(retired, { force: true })
     return previous
   } finally { await rm(temporary, { force: true }) }
