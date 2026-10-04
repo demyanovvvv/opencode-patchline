@@ -26,6 +26,7 @@ export type WriteRequest = {
 
 export type PreparedWrite = WriteRequest & {
   absolutePath: string
+  ioPath: string
   canonicalPath: string
   relativePath: string
   signal?: AbortSignal | undefined
@@ -62,7 +63,7 @@ export class WriteService {
       })
     }
     item.signal?.throwIfAborted()
-    const handle = await open(item.absolutePath, "wx+")
+    const handle = await open(item.ioPath, "wx+")
     const created: CreatedFile = { bytes: Buffer.alloc(0) }
     try {
       onCreated?.(created)
@@ -150,7 +151,7 @@ export class WriteService {
       signal?.throwIfAborted()
       await this.replaceExistingFile(resolved.absolute, request.content, targetIdentity, parentIdentity)
     } else {
-      const item: PreparedWrite = { ...request, absolutePath: resolved.absolute, canonicalPath: resolved.canonical, relativePath: resolved.relative, signal }
+      const item: PreparedWrite = { ...request, absolutePath: resolved.absolute, ioPath: resolved.lexical, canonicalPath: resolved.canonical, relativePath: resolved.relative, signal }
       let created: CreatedWrite | undefined
       try {
         await this.writeCreatedFile(item, (file) => { created = { ...item, ...file } })
@@ -207,7 +208,7 @@ export class WriteService {
       const canonicalIdentity = normalizedIdentity(resolved.canonical)
       if (paths.has(canonicalIdentity)) throw new PatchlineError("INVALID_ARGUMENT", `Create batch contains duplicate target: ${resolved.relative}`)
       paths.add(canonicalIdentity)
-       prepared.push({ ...request, absolutePath: resolved.absolute, canonicalPath: resolved.canonical, relativePath: resolved.relative, signal })
+       prepared.push({ ...request, absolutePath: resolved.absolute, ioPath: resolved.lexical, canonicalPath: resolved.canonical, relativePath: resolved.relative, signal })
     }
     const created = new Map<string, CreatedWrite>()
     reportMutationStage(observer, "committing")

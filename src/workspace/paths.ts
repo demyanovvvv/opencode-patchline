@@ -4,6 +4,7 @@ import { PatchlineError } from "../errors.js"
 
 export type ResolvedPath = {
   absolute: string
+  lexical: string
   canonical: string
   workspace: string
   relative: string
@@ -61,7 +62,7 @@ export async function resolveWorkspacePath(worktree: string, inputPath: string):
   const canonical = pathExists ? await realpath(lexical) : await canonicalFuturePath(lexical)
   if (!isInside(canonicalWorkspace, canonical)) throw new PatchlineError("SYMLINK_ESCAPE", `Path resolves outside the worktree: ${inputPath}`, { path: inputPath })
   if (isGitInternalPath(canonicalWorkspace, canonical)) throw new PatchlineError("GIT_INTERNAL_PATH", `Editing .git internals is not allowed: ${inputPath}`, { path: inputPath })
-  return { absolute: canonical, canonical, workspace: canonicalWorkspace, relative: path.relative(canonicalWorkspace, canonical) || lexicalRelative, exists: pathExists, symlink: lexicalInfo?.isSymbolicLink() === true }
+  return { absolute: canonical, lexical, canonical, workspace: canonicalWorkspace, relative: path.relative(canonicalWorkspace, canonical) || lexicalRelative, exists: pathExists, symlink: lexicalInfo?.isSymbolicLink() === true }
 }
 
 export function normalizedIdentity(filePath: string): string {
