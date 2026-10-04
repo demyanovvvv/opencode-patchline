@@ -42,9 +42,11 @@ detailed local events; aggregate counters remain available to the optional
 `patchline_summary` tool. Setting `summary: false` omits that tool entirely.
 
 Installer state is runtime ownership metadata and should not be committed to
-source control. Project-local state is ignored by the repository policy. The
-shell-write guard is best-effort detection; OpenCode permission checks remain
-the authoritative enforcement boundary.
+source control. Project-local state is ignored by the repository policy. A
+failed local install restores the captured package manifest and lockfiles when
+npm changed them without an external intervening edit. The shell-write guard
+is best-effort detection; OpenCode permission checks remain the authoritative
+enforcement boundary.
 
 For mixed line-ending files, unchanged prefix and suffix bytes are preserved.
 Newline characters in the changed region use the dominant line ending from

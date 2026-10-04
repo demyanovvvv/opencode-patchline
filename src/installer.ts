@@ -4,7 +4,7 @@ import { access, mkdir, realpath, readFile, rm } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { applyEdits, createScanner, findNodeAtLocation, modify, parse, parseTree, type ParseError } from "jsonc-parser"
 import { executeCommand, type CommandResult } from "./installation/process.js"
-import { assertCurrent, backup, commitConfigurations, configurationFiles, globalConfigDirectory, installHostBinary, projectDirectory, readSnapshot, removeState, saveState } from "./installation/files.js"
+import { assertCurrent, backup, commitConfigurations, configurationFiles, globalConfigDirectory, installHostBinary, projectDirectory, readSnapshot, removeState, saveState, type FileChange } from "./installation/files.js"
 import { configureLsp, removeOwnedLsp, type OwnedLsp } from "./installation/lsp.js"
 
 // jsonc-parser declares SyntaxKind as an ambient const enum, incompatible with verbatimModuleSyntax.
@@ -18,6 +18,7 @@ type HasCommand = (command: string) => Promise<boolean>
 type Confirm = (message: string) => Promise<boolean>
 type CaptureCommand = (command: string, args: readonly string[]) => Promise<CommandResult>
 type InstalledPackageSet = { packages: readonly string[]; global: boolean }
+type PackageFileSnapshot = { path: string; source: string | undefined }
 
 export type InstallerOptions = {
   cwd?: string
@@ -292,6 +293,33 @@ async function rollbackInstalledPackages(sets: readonly InstalledPackageSet[], r
   }
 }
 
+async function capturePackageFiles(options: InstallerOptions): Promise<PackageFileSnapshot[]> {
+  if (options.global) return []
+  const directory = options.cwd ?? process.cwd()
+  const names = ["package.json", "package-lock.json", "npm-shrinkwrap.json"]
+  return await Promise.all(names.map(async (name) => {
+    const pathName = path.join(directory, name)
+    const file = await readSnapshot(pathName)
+    return { path: pathName, source: file?.source }
+  }))
+}
+
+async function rollbackPackageFiles(snapshots: readonly PackageFileSnapshot[], log: Output): Promise<void> {
+  const restores: FileChange[] = []
+  for (const snapshot of snapshots) {
+    const current = await readSnapshot(snapshot.path)
+    if (snapshot.source === undefined) {
+      if (!current) continue
+      await assertCurrent(current)
+      await rm(current.path)
+      continue
+    }
+    if (!current || current.source === snapshot.source) continue
+    restores.push({ ...current, text: snapshot.source })
+  }
+  if (restores.length) await commitConfigurations(restores, log)
+}
+
 async function performInstall(rawOptions: InstallerOptions = {}): Promise<number> {
   const options = await normalizeOptions(rawOptions)
   const state = await readState(stateFileOf(options))
@@ -313,6 +341,7 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
   }
   const previousConfigs = await configurationFiles({ cwd: options.cwd!, ...(options.configDirectory ? { configDirectory: options.configDirectory } : {}), ...(options.global !== undefined ? { global: options.global } : {}) })
   const previousStateSnapshot = await readSnapshot(stateFileOf(options))
+  const previousPackageFiles = await capturePackageFiles(options)
   const installedPackages: InstalledPackageSet[] = []
   let configuredLsp: OwnedLsp | undefined
   let pluginRegistered = false
@@ -321,6 +350,7 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
       await rollbackPluginRegistration(options, previousConfigs, packageName, (file) => output(options, text.backup(file)), configuredLsp)
     }
     await rollbackInstalledPackages(installedPackages, runCommand, (line) => output(options, line))
+    await rollbackPackageFiles(previousPackageFiles, (file) => output(options, text.backup(file)))
     if (previousStateSnapshot) await saveState(stateFileOf(options), JSON.parse(previousStateSnapshot.source))
     else await removeState(stateFileOf(options))
   }

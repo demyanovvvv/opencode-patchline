@@ -13,7 +13,10 @@ fail closed.
 Multi-file commit failures report landed paths and attempt byte-for-byte
 rollback. Because portable filesystems cannot guarantee one atomic operation
 across several paths, Patchline promises complete preflight and best-effort
-rollback rather than claiming strict transactionality. A landed write is tracked
+rollback rather than claiming strict transactionality. Installer rollback also
+captures local package manifests and lockfiles, restoring them only when their
+current contents still reflect the failed installation; external changes are
+reported as rollback conflicts. A landed write is tracked
 before snapshot bookkeeping, so bookkeeping failures also enter guarded rollback.
 The `writes` count records landed file writes, including those subsequently
 restored; `details.restored` and `details.conflicts` describe rollback outcomes.

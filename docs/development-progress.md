@@ -200,8 +200,8 @@ npm pack --dry-run
 Latest test result:
 
 ```text
-21 test files passed
-170 tests passed
+30 test files passed
+266 tests passed, 2 skipped
 ```
 
 Verification includes cancellation-safe mutation rollback, serialized Hashline clipboard state, component-wise parent creation guards, bounded snapshot bytes, bounded diff computation, skipped-file search reporting, unified validation metadata, and TUI history/output limits.
@@ -215,9 +215,10 @@ wholeFileRewrites: 0
 staleOverwrites: 0
 ```
 
-The Vitest dependency chain was upgraded to Vitest 5.0.1. `npm audit` now
-reports three low-severity upstream advisories in OpenTUI/Babel; the available
-fix is a breaking downgrade and is not applied.
+The Vitest dependency chain was upgraded to Vitest 5.0.1. `npm audit --omit=dev`
+reports three low-severity upstream advisories in OpenTUI/Babel through the
+OpenCode UI dependency chain; available fixes require breaking dependency
+changes and are not applied.
 
 ## Known limitations
 

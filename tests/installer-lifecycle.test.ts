@@ -96,6 +96,22 @@ describe("installer lifecycle", () => {
     await expect(readFile(path.join(root, ".opencode-patchline-state.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" })
   })
 
+  it("restores the local package manifest when dependency installation fails", async () => {
+    const root = await workspace()
+    const manifest = path.join(root, "package.json")
+    const source = '{"name":"fixture","dependencies":{"other":"1.0.0"}}\n'
+    await writeFile(manifest, source)
+    expect(await installPatchline({
+      cwd: root, language: "en", yes: true, stdout: () => undefined, stderr: () => undefined,
+      hasCommand: async () => false,
+      runCommand: async (command) => {
+        if (command === "npm") await writeFile(manifest, '{"name":"fixture","dependencies":{"other":"1.0.0","typescript":"latest"}}\n')
+        return command === "npm" ? 1 : 0
+      },
+    })).toBe(1)
+    expect(await readFile(manifest, "utf8")).toBe(source)
+  })
+
   it("removes a newly created plugin config when a later install phase fails", async () => {
     const root = await workspace()
     const config = path.join(root, "opencode.json")
