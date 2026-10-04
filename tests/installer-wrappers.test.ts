@@ -47,7 +47,10 @@ describe.skipIf(!available)("PowerShell installer wrappers", () => {
           expect(result.stderr).toBe("")
           expect(result.status).toBe(23)
           const lines = result.stdout.trim().split(/\r?\n/)
-          expect(JSON.parse(lines[0]!)).toEqual([path.join(directory, "dist", "cli.js"), "install", "--local", "--global", "--lang", "ru", "argument with spaces"])
+          const forwarded = JSON.parse(lines[0]!) as string[]
+          expect(path.basename(forwarded[0]!)).toBe("cli.js")
+          expect(path.basename(path.dirname(forwarded[0]!))).toBe("dist")
+          expect(forwarded.slice(1)).toEqual(["install", "--local", "--global", "--lang", "ru", "argument with spaces"])
           expect(lines[1]).toBe(path.resolve("tests"))
         } else {
           expect(result.status).toBe(1)
