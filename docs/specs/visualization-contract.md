@@ -20,12 +20,15 @@ be used as an edit source or as proof that a commit succeeded.
 
 Tools report permission, planning, preflight, committing, rollback, validation,
 fallback and completion through `ToolContext.metadata`. `patchline_execute` is
-rendered as a mutation activity; large-change standard-tool delegation is
-rendered as a compact fallback card with its route reason and recovery action. Presentation callbacks cannot stop a
-commit or rollback. Thrown errors remain rejected tool calls with a reason,
-recovery action, stage, paths and write count where known. `writes` counts landed
-file writes, including subsequently restored files; `restored` and `conflicts`
-identify rollback outcomes. Unknown commit outcomes never imply zero writes.
+rendered as a mutation activity. When the selected strategy is `exact`, the
+activity is labelled `Planning exact edit` during planning and reports
+`strategy: "exact"`. Large-change standard-tool delegation is rendered as a
+compact fallback card with its route reason and recovery action. Presentation
+callbacks cannot stop a commit or rollback. Thrown errors remain rejected tool
+calls with a reason, recovery action, stage, paths and write count where known.
+`writes` counts landed file writes, including subsequently restored files;
+`restored` and `conflicts` identify rollback outcomes. Unknown commit outcomes
+never imply zero writes.
 A nonzero validation exit retains `status: applied` with `validation: failed`;
 a validation exception retains the applied diff, snapshot and `writes: 1` in
 error metadata. Hashline batch metadata includes all source and move paths;

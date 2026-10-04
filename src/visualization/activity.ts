@@ -163,23 +163,37 @@ export function patchlineActivity(calls: readonly ToolCall[]): ActivityView | un
   }
   if (call.state.status === "running") {
     const stage = stringValue(metadata.stage) ?? "preflight"
-    const label = kind === "mutation" ? stage === "planning" ? "Planning edit" : stageLabels[stage] ?? "Processing changes" : activityLabel(call.tool, metadata, true)
+    const strategy = stringValue(metadata.strategy)
+    let label = kind === "mutation" ? stage === "planning" ? "Planning edit" : stageLabels[stage] ?? "Processing changes" : activityLabel(call.tool, metadata, true)
+    if (kind === "mutation" && strategy === "exact") {
+      label = stage === "committing" ? "Writing changes" : stage === "planning" ? "Planning edit" : stageLabels[stage] ?? "Processing changes"
+      if (label === "Planning edit") label = "Planning exact edit"
+      if (label === "Processing changes") label = "Applying exact edit"
+    }
     return { ...common, status: "running", label, reason: stringValue(metadata.routeReason), recoveryAction: stringValue(metadata.recoveryAction) }
   }
   if (call.state.status === "error" || metadata.validation === "failed" || (kind === "diagnostics" && metadata.ok === false)) {
     const batch = call.tool === "patchline_edit_batch" || call.tool === "apply_patch"
     const rejected = writes === 0 && (metadata.stage === "permission" || metadata.stage === "preflight")
+    const strategy = stringValue(metadata.strategy)
+    let mutationLabel = metadata.validation === "failed" && writes !== undefined && writes > 0 ? "Changes applied · validation failed" : `${batch ? "Batch" : "Edit"} ${rejected ? "rejected" : "failed"}`
+    if (strategy === "exact" && !batch) {
+      if (rejected) mutationLabel = "Exact edit rejected"
+      else if (metadata.validation === "failed" && writes !== undefined && writes > 0) mutationLabel = "Changes applied · validation failed"
+      else mutationLabel = "Exact edit failed"
+    }
     return {
       ...common,
       status: "failed",
-      label: kind === "mutation" ? metadata.validation === "failed" && writes !== undefined && writes > 0 ? "Changes applied · validation failed" : `${batch ? "Batch" : "Edit"} ${rejected ? "rejected" : "failed"}` : activityLabel(call.tool, metadata, false),
+      label: kind === "mutation" ? mutationLabel : activityLabel(call.tool, metadata, false),
       restored: Array.isArray(metadata.restored) ? metadata.restored.filter((item): item is string => typeof item === "string") : undefined,
       conflicts: Array.isArray(metadata.conflicts) ? metadata.conflicts.filter((item): item is string => typeof item === "string") : undefined,
       reason: stringValue(metadata.reason) ?? call.state.error,
       recoveryAction: stringValue(metadata.recoveryAction), validation: stringValue(metadata.validation),
     }
   }
-  return { ...common, status: "completed", label: metadata.status === "fallback_required" ? "Standard tool required" : kind === "mutation" ? "Changes applied" : activityLabel(call.tool, metadata, false), validation: stringValue(metadata.validation), reason: stringValue(metadata.routeReason), recoveryAction: stringValue(metadata.recoveryAction) }
+  const completedLabel = metadata.status === "fallback_required" ? "Standard tool required" : kind === "mutation" ? (stringValue(metadata.strategy) === "exact" ? "Exact edit applied" : "Changes applied") : activityLabel(call.tool, metadata, false)
+  return { ...common, status: "completed", label: completedLabel, validation: stringValue(metadata.validation), reason: stringValue(metadata.routeReason), recoveryAction: stringValue(metadata.recoveryAction) }
 }
 
 function activityLabel(tool: string, metadata: Record<string, unknown>, running: boolean): string {

@@ -87,7 +87,14 @@ function FileDiff(props: { file: ActivityFile; expanded: boolean; onToggle: () =
 }
 function Summary(props: { activity: ActivityView; api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
+  const confidence = props.activity.confidence
   return <box gap={0}>
+    <Show when={props.activity.kind === "mutation"}>
+      <Show when={props.activity.strategy}><text fg={theme().textMuted}>Strategy: {props.activity.strategy}{props.activity.requestedStrategy && props.activity.requestedStrategy !== props.activity.strategy ? ` · requested ${props.activity.requestedStrategy}` : ""}</text></Show>
+      <Show when={confidence !== undefined && confidence !== null}><text fg={theme().textMuted}>Confidence: {Math.round(confidence! * 100)}%</text></Show>
+      <Show when={props.activity.reason}><text fg={theme().textMuted}>Route: {props.activity.reason}</text></Show>
+      <Show when={props.activity.recoveryAction}><text fg={theme().textMuted}>Recovery: {props.activity.recoveryAction}</text></Show>
+    </Show>
     <Show when={props.activity.kind === "read"}><text fg={theme().textMuted}>{props.activity.lines ?? 0} lines · {props.activity.bytes ?? 0} bytes</text><Show when={props.activity.snapshot}><text fg={theme().textMuted}>Snapshot: {props.activity.snapshot}</text></Show></Show>
     <Show when={props.activity.kind === "search"}><text fg={theme().textMuted}>{props.activity.matchCount ?? 0} matches{props.activity.language ? ` · ${props.activity.language}` : ""}</text><Show when={props.activity.pattern}><text fg={theme().textMuted}>Pattern: {props.activity.pattern}</text></Show></Show>
     <Show when={props.activity.kind === "route"}><text fg={theme().textMuted}>Selected: {props.activity.mechanism ?? "unknown"}</text><Show when={props.activity.query}><text fg={theme().textMuted}>Query: {props.activity.query}</text></Show></Show>
@@ -134,10 +141,13 @@ function Activity(props: { api: TuiPluginApi; session_id?: string; part?: ToolPa
             </text>
           </box>
           <Show when={activity().additions !== undefined || activity().deletions !== undefined || activity().writes !== undefined}>
-            <text fg={theme().textMuted}>{activity().totalFiles ?? activity().paths.length} files · <span style={{ fg: theme().diffAdded }}>+{activity().additions ?? 0}</span> <span style={{ fg: theme().diffRemoved }}>−{activity().deletions ?? 0}</span> · {activity().writes ?? 0} writes</text>
+            <text fg={theme().textMuted}>{activity().totalFiles ?? activity().paths.length} files · <span style={{ fg: theme().diffAdded }}>+{activity().additions ?? 0}</span> <span style={{ fg: theme().diffRemoved }}>−{activity().deletions ?? 0}</span> · {activity().writes ?? 0} writes{activity().strategy ? ` · ${activity().strategy}` : ""}</text>
           </Show>
           <For each={activity().paths.slice(0, 4)}>{(file) => <Show when={!activity().files?.some((item) => item.path === file)}><text fg={theme().text} wrapMode="word">{file}</text></Show>}</For>
-          <Summary activity={activity()} api={props.api} />
+          <Show when={activity().kind === "mutation" && (activity().strategy || activity().requestedStrategy || activity().reason)}>
+            <Show when={activity().kind === "mutation" && (activity().strategy || activity().requestedStrategy || activity().reason)}><Summary activity={activity()} api={props.api} /></Show>
+          <Show when={activity().kind !== "mutation"}><Summary activity={activity()} api={props.api} /></Show>
+          </Show>
           <Show when={(activity().hiddenFiles ?? 0) > 0}><text fg={theme().textMuted}>… {activity().hiddenFiles} more files</text></Show>
           <Show when={activity().writes !== undefined || activity().validation !== undefined}><text marginTop={1} fg={activity().validation === "failed" ? theme().error : activity().validation === "passed" ? theme().success : theme().textMuted}>Validation: {activity().validation?.replaceAll("_", " ") ?? "pending"}</text></Show>
           <Show when={activity().status === "failed"}>

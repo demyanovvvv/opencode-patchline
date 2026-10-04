@@ -29,6 +29,13 @@ describe("Patchline activity presentation", () => {
     expect(patchlineActivity([{ tool: "patchline_execute", state: { status: "completed", metadata: { status: "fallback_required", stage: "fallback", strategy: "standard", requestedStrategy: "auto", confidence: 0.94, routeReason: "large replacement", recoveryAction: "Use standard tool" } } }])).toMatchObject({ kind: "mutation", status: "completed", label: "Standard tool required", strategy: "standard", requestedStrategy: "auto", confidence: 0.94, recoveryAction: "Use standard tool" })
   })
 
+  it("renders patchline_execute with strategy=exact", () => {
+    expect(patchlineActivity([{ tool: "patchline_execute", state: { status: "running", metadata: { stage: "planning", strategy: "exact", requestedStrategy: "exact", paths: ["src/test.ts"] } } }])).toMatchObject({ kind: "mutation", status: "running", label: "Planning exact edit", strategy: "exact", paths: ["src/test.ts"] })
+    expect(patchlineActivity([{ tool: "patchline_execute", state: { status: "running", metadata: { stage: "committing", strategy: "exact", paths: ["src/test.ts"] } } }])).toMatchObject({ kind: "mutation", status: "running", label: "Writing changes", strategy: "exact" })
+    expect(patchlineActivity([{ tool: "patchline_execute", state: { status: "completed", metadata: { status: "applied", stage: "completed", strategy: "exact", requestedStrategy: "exact", writes: 1, paths: ["src/test.ts"], added: 1, deleted: 1 } } }])).toMatchObject({ kind: "mutation", status: "completed", label: "Exact edit applied", strategy: "exact", writes: 1 })
+    expect(patchlineActivity([{ tool: "patchline_execute", state: { status: "error", metadata: { status: "failed", stage: "committing", strategy: "exact", reason: "file locked", paths: ["src/test.ts"], writes: 0, recoveryAction: "Retry after unlocking" } } }])).toMatchObject({ kind: "mutation", status: "failed", label: "Exact edit failed", strategy: "exact", recoveryAction: "Retry after unlocking", writes: 0 })
+  })
+
   it("normalizes every Patchline tool into a themed activity kind", () => {
     expect(patchlineActivity([{ tool: "read", state: { status: "completed", metadata: { path: "src/a.ts", lines: 12, bytesRendered: 240, snapshot: "snap-1" } } }])).toMatchObject({ kind: "read", label: "Snapshot created", paths: ["src/a.ts"], lines: 12, snapshot: "snap-1" })
     expect(patchlineActivity([{ tool: "patchline_grep", state: { status: "completed", metadata: { pattern: "needle", resultCount: 4, truncated: true } } }])).toMatchObject({ kind: "search", label: "Literal search", matchCount: 4, truncated: true })
