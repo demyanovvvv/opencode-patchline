@@ -40,6 +40,7 @@ export async function grepWorkspace(input: {
   const scanFile = async (absolute: string): Promise<{ matches: GrepMatch[]; skipped?: { path: string; reason: string } }> => {
     const name = path.basename(absolute)
     const relative = path.relative(root.absolute, absolute).replaceAll("\\", "/")
+    const displayPath = path.resolve(input.worktree, relative || input.path || ".")
     if (include && !include.test(relative) && !include.test(name)) return { matches: [] }
     try {
       const document = decodeUtf8(await readBoundedUtf8Bytes(absolute, relative, MAX_SEARCH_FILE_BYTES), relative)
@@ -47,11 +48,11 @@ export async function grepWorkspace(input: {
       const lines = document.text.split(/\r?\n/)
       const fileMatches: GrepMatch[] = []
       for (let index = 0; index < lines.length; index++) {
-        if (lines[index]!.includes(input.pattern)) fileMatches.push({ path: absolute, line: index + 1, text: matchPreview(lines[index]!) })
+        if (lines[index]!.includes(input.pattern)) fileMatches.push({ path: displayPath, line: index + 1, text: matchPreview(lines[index]!) })
       }
       return { matches: fileMatches }
     } catch (error) {
-      return { matches: [], skipped: { path: path.relative(root.workspace, absolute).replaceAll("\\", "/"), reason: error instanceof PatchlineError ? error.code : "UNREADABLE" } }
+      return { matches: [], skipped: { path: path.relative(input.worktree, displayPath).replaceAll("\\", "/"), reason: error instanceof PatchlineError ? error.code : "UNREADABLE" } }
     }
   }
   const files: string[] = []
