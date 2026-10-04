@@ -15,6 +15,82 @@ async function workspace() {
 }
 
 describe("installer regressions", () => {
+  it("retains ownership state when dependency cleanup fails", async () => {
+    const root = await workspace()
+    const errors: string[] = []
+    expect(await installPatchline({ cwd: root, yes: true, stdout: () => undefined, stderr: (line) => errors.push(line),
+      hasCommand: async (command) => { if (command === "bun") throw new Error("later failure"); return false },
+      runCommand: async (command, args) => command === "npm" && args[0] === "uninstall" ? 7 : 0,
+    })).toBe(1)
+    expect(JSON.parse(await readFile(path.join(root, ".opencode-patchline-state.json"), "utf8")).lspPackages).toContain("typescript")
+    expect(errors.join("\n")).toContain("7")
+  })
+  it("restores a pre-existing pinned plugin after a later failure", async () => {
+    const root = await workspace()
+    const file = path.join(root, "opencode.json")
+    const source = '{"plugin":[["opencode-patchline@1.0.0",{"enabled":true}],"other"]}\n'
+    await writeFile(file, source)
+    expect(await installPatchline({ cwd: root, yes: true, stdout: () => undefined, stderr: () => undefined,
+      hasCommand: async () => false, runCommand: async (command, args) => command === "npm" && args[0] === "install" ? 9 : 0,
+    })).toBe(9)
+    expect(await readFile(file, "utf8")).toBe(source)
+  })
+  it("restores the previous installer state byte for byte", async () => {
+    const root = await workspace()
+    const file = path.join(root, ".opencode-patchline-state.json")
+    const source = '{ "language": "ru", "scope": "project" }\r\n'
+    await writeFile(file, source)
+    expect(await installPatchline({ cwd: root, yes: true, stdout: () => undefined, stderr: () => undefined,
+      hasCommand: async () => false, runCommand: async (command, args) => command === "npm" && args[0] === "install" ? 9 : 0,
+    })).toBe(9)
+    expect(await readFile(file, "utf8")).toBe(source)
+  })
+  it("rolls back dependencies when npm throws after a partial install", async () => {
+    const root = await workspace()
+    const calls: string[] = []
+    expect(await installPatchline({ cwd: root, yes: true, stdout: () => undefined, stderr: () => undefined,
+      hasCommand: async () => false,
+      runCommand: async (command, args) => {
+        calls.push(`${command}:${args[0]}`)
+        if (command === "npm" && args[0] === "install") throw new Error("partial install")
+        return 0
+      },
+    })).toBe(1)
+    expect(calls).toContain("npm:uninstall")
+  })
+  it.each(["package.json", ".opencode-patchline-state.json"])("preserves an external %s edit before rollback", async (name) => {
+    const root = await workspace()
+    const file = path.join(root, name)
+    const external = '{"user":"external"}\n'
+    if (name === "package.json") await writeFile(file, '{"name":"fixture"}\n')
+    const errors: string[] = []
+    expect(await installPatchline({
+      cwd: root, yes: true, stdout: () => undefined, stderr: (line) => errors.push(line),
+      hasCommand: async (command) => {
+        if (command === "bun") { await writeFile(file, external); throw new Error("later failure") }
+        return false
+      },
+      runCommand: async (command, args) => {
+        if (command === "npm" && args[0] === "install") await writeFile(path.join(root, "package.json"), '{"name":"fixture","devDependencies":{"typescript":"latest"}}\n')
+        return 0
+      },
+    })).toBe(1)
+    expect(await readFile(file, "utf8")).toBe(external)
+    expect(errors.join("\n")).toContain("conflict")
+  })
+  it("preserves unrelated settings in a newly created config during rollback", async () => {
+    const root = await workspace()
+    const file = path.join(root, "opencode.json")
+    expect(await installPatchline({
+      cwd: root, yes: true, stdout: () => undefined, stderr: () => undefined,
+      hasCommand: async () => false,
+      runCommand: async (command, args) => {
+        if (command === "opencode") await writeFile(file, '{"plugin":["opencode-patchline"],"theme":"custom"}')
+        return command === "npm" && args[0] === "install" ? 9 : 0
+      },
+    })).toBe(9)
+    expect(parse(await readFile(file, "utf8"))).toEqual({ plugin: [], theme: "custom" })
+  })
   it.each([
     ["opencode-patchline"],
     ["opencode-patchline", "opencode-patchline@1.1.0"],

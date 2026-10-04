@@ -35,7 +35,7 @@ export function interpretLspOutput(operation: LspBridgeOperation, stdout: string
     throw new PatchlineError("DIAGNOSTICS_UNAVAILABLE", boundedErrorDetail(diagnostics || `OpenCode LSP bridge exited with ${exitCode}`))
   }
   if (/\b(?:all\s+)?LSPs?\s+are\s+disabled\b|no\s+LSP\s+(?:servers?|configur)/i.test(diagnostics)) {
-    throw new PatchlineError("CAPABILITY_UNAVAILABLE", boundedErrorDetail(`OpenCode LSP is unavailable for ${operation}: ${diagnostics}\n${LSP_RECOVERY}`))
+    throw new PatchlineError("CAPABILITY_UNAVAILABLE", boundedErrorDetail(`OpenCode LSP is unavailable for ${operation}: ${diagnostics}\n${LSP_RECOVERY}`), { details: { operation, lsp: "disabled" } })
   }
   const result = stdout.trim()
   if ((result === "" || /^\[\s*\]$/.test(result)) && operation !== "diagnostics") {
@@ -126,7 +126,7 @@ export async function runOpenCodeLspBridge(input: {
       settled = true
       cleanup()
       if (cause.name === "AbortError") reject(cause)
-       else reject(new PatchlineError("CAPABILITY_UNAVAILABLE", boundedErrorDetail(`OpenCode LSP bridge is unavailable: ${cause.message}`), { cause }))
+       else reject(new PatchlineError("CAPABILITY_UNAVAILABLE", boundedErrorDetail(`OpenCode LSP bridge is unavailable: ${cause.message}`), { cause, details: { operation: input.operation } }))
     })
     child.on("close", (code) => {
       if (settled) return

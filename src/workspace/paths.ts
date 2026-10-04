@@ -8,6 +8,7 @@ export type ResolvedPath = {
   workspace: string
   relative: string
   exists: boolean
+  symlink: boolean
 }
 
 function comparePath(value: string): string {
@@ -49,25 +50,18 @@ async function canonicalFuturePath(filePath: string): Promise<string> {
 
 export async function resolveWorkspacePath(worktree: string, inputPath: string): Promise<ResolvedPath> {
   if (!inputPath.trim()) throw new PatchlineError("INVALID_ARGUMENT", "Path must not be empty.")
-  const absoluteWorkspace = path.resolve(worktree)
-  const canonicalWorkspace = await realpath(absoluteWorkspace)
-  const absolute = path.resolve(absoluteWorkspace, inputPath)
-  if (!isInside(absoluteWorkspace, absolute)) {
-    throw new PatchlineError("PATH_OUTSIDE_WORKSPACE", `Path is outside the worktree: ${inputPath}`, { path: inputPath })
-  }
-  const relative = path.relative(absoluteWorkspace, absolute)
-  if (isGitInternalPath(absoluteWorkspace, absolute)) {
-    throw new PatchlineError("GIT_INTERNAL_PATH", `Editing .git internals is not allowed: ${inputPath}`, { path: inputPath })
-  }
-  const pathExists = await exists(absolute)
-  const canonical = pathExists ? await realpath(absolute) : await canonicalFuturePath(absolute)
-  if (!isInside(canonicalWorkspace, canonical)) {
-    throw new PatchlineError("SYMLINK_ESCAPE", `Path resolves outside the worktree: ${inputPath}`, { path: inputPath })
-  }
-  if (isGitInternalPath(canonicalWorkspace, canonical)) {
-    throw new PatchlineError("GIT_INTERNAL_PATH", `Editing .git internals is not allowed: ${inputPath}`, { path: inputPath })
-  }
-  return { absolute, canonical, workspace: canonicalWorkspace, relative, exists: pathExists }
+  const lexicalWorkspace = path.resolve(worktree)
+  const canonicalWorkspace = await realpath(lexicalWorkspace)
+  const lexical = path.resolve(lexicalWorkspace, inputPath)
+  if (!isInside(lexicalWorkspace, lexical)) throw new PatchlineError("PATH_OUTSIDE_WORKSPACE", `Path is outside the worktree: ${inputPath}`, { path: inputPath })
+  const lexicalRelative = path.relative(lexicalWorkspace, lexical)
+  if (isGitInternalPath(lexicalWorkspace, lexical)) throw new PatchlineError("GIT_INTERNAL_PATH", `Editing .git internals is not allowed: ${inputPath}`, { path: inputPath })
+  const pathExists = await exists(lexical)
+  const lexicalInfo = pathExists ? await lstat(lexical) : undefined
+  const canonical = pathExists ? await realpath(lexical) : await canonicalFuturePath(lexical)
+  if (!isInside(canonicalWorkspace, canonical)) throw new PatchlineError("SYMLINK_ESCAPE", `Path resolves outside the worktree: ${inputPath}`, { path: inputPath })
+  if (isGitInternalPath(canonicalWorkspace, canonical)) throw new PatchlineError("GIT_INTERNAL_PATH", `Editing .git internals is not allowed: ${inputPath}`, { path: inputPath })
+  return { absolute: canonical, canonical, workspace: canonicalWorkspace, relative: path.relative(canonicalWorkspace, canonical) || lexicalRelative, exists: pathExists, symlink: lexicalInfo?.isSymbolicLink() === true }
 }
 
 export function normalizedIdentity(filePath: string): string {

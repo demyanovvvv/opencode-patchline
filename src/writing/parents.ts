@@ -23,13 +23,15 @@ export async function cleanupParents(worktree: string, directories: readonly Cre
 export async function ensureParents(worktree: string, filePath: string, signal?: AbortSignal): Promise<CreatedDirectory[]> {
   const target = await resolveWorkspacePath(worktree, filePath)
   const directories: CreatedDirectory[] = []
-  const relative = path.relative(target.workspace, path.dirname(target.absolute))
+  const relative = path.dirname(target.relative)
   let parent = target.workspace
+  let currentRelative = ""
   try {
     for (const part of relative.split(path.sep).filter(Boolean)) {
+      currentRelative = path.join(currentRelative, part)
       signal?.throwIfAborted()
       const expectedParent = await readFileIdentity(parent)
-      const next = await resolveWorkspacePath(worktree, path.join(parent, part))
+      const next = await resolveWorkspacePath(worktree, currentRelative)
       if (!next.exists) {
         const actual = await readFileIdentity(parent)
         if (actual.device !== expectedParent.device || actual.inode !== expectedParent.inode) throw new PatchlineError("STALE_SNAPSHOT", "Create parent changed.")
@@ -37,7 +39,7 @@ export async function ensureParents(worktree: string, filePath: string, signal?:
         try { await mkdir(next.absolute); created = true } catch (cause) {
           if ((cause as NodeJS.ErrnoException).code !== "EEXIST") throw cause
         }
-        const checked = await resolveWorkspacePath(worktree, next.absolute)
+        const checked = await resolveWorkspacePath(worktree, currentRelative)
         if (normalizedIdentity(checked.canonical) !== normalizedIdentity(next.canonical)) throw new PatchlineError("STALE_SNAPSHOT", "Created parent changed.")
         if (created) directories.push({ absolute: checked.absolute, identity: await readFileIdentity(checked.absolute) })
       }

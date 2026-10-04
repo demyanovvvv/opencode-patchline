@@ -14,6 +14,19 @@ and records only packages it installed. Existing packages are not claimed by the
 installer. User-disabled and custom LSP settings are preserved.
 Installer language preferences affect installer/uninstaller messages only.
 
+Failed local dependency installation captures package manifests and lockfiles
+after the npm command returns (including partial failures). Rollback verifies
+those captured bytes and file/parent identities before npm cleanup or restoration.
+Later external edits are preserved and reported as conflicts. External edits
+during the npm subprocess itself cannot be attributed reliably; this remains a
+best-effort process boundary rather than an atomic filesystem transaction.
+Installer state is checked against the last installer-owned snapshot and restored
+byte for byte. Independent rollback stages continue after a conflict and rollback
+is attempted only once. A new configuration containing unrelated settings is
+edited to remove owned registration rather than deleted.
+Failed dependency cleanup retains the current ownership state for recovery and
+reports the non-zero cleanup exit code instead of declaring rollback successful.
+
 Repeated installation uses `opencode plugin --force` when the selected scope
 already contains Patchline. The bare package name resolves to `@latest` through
 OpenCode; explicit local paths/specifiers are preserved. Direct Patchline package

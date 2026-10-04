@@ -16,6 +16,16 @@ async function workspace() {
 }
 
 describe("installer safety", () => {
+  it("accepts a caller workspace alias while still rejecting nested config aliases", async () => {
+    const root = await workspace()
+    const aliases = await workspace()
+    const alias = path.join(aliases, "project")
+    try { await symlink(root, alias, process.platform === "win32" ? "junction" : "dir") } catch { return }
+    expect(await installPatchline({ cwd: alias, configDirectory: root, stateDirectory: root, stdout: () => undefined, stderr: () => undefined,
+      hasCommand: async () => true, runCommand: async () => 0,
+    })).toBe(0)
+    expect(JSON.parse(await readFile(path.join(root, ".opencode-patchline-state.json"), "utf8")).scope).toBe("project")
+  })
   it("preserves JSONC comments, BOM, line endings and unrelated configuration", () => {
     const source = '\uFEFF{\r\n  // user settings\r\n  "theme": "custom",\r\n  "plugin": ["other", ["opencode-patchline@1.1.0", {}],],\r\n}\r\n'
     const result = removePatchlineEntries(source)

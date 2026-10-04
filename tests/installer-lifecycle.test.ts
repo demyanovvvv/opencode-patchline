@@ -91,7 +91,7 @@ describe("installer lifecycle", () => {
     const root = await workspace()
     expect(await installPatchline({
       cwd: root, language: "ru", yes: true, stdout: () => undefined, stderr: () => undefined,
-      hasCommand: async () => false, runCommand: async (command) => command === "npm" ? 1 : 0,
+      hasCommand: async () => false, runCommand: async (command, args) => command === "npm" && args[0] === "install" ? 1 : 0,
     })).toBe(1)
     await expect(readFile(path.join(root, ".opencode-patchline-state.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" })
   })
@@ -104,9 +104,9 @@ describe("installer lifecycle", () => {
     expect(await installPatchline({
       cwd: root, language: "en", yes: true, stdout: () => undefined, stderr: () => undefined,
       hasCommand: async () => false,
-      runCommand: async (command) => {
+      runCommand: async (command, args) => {
         if (command === "npm") await writeFile(manifest, '{"name":"fixture","dependencies":{"other":"1.0.0","typescript":"latest"}}\n')
-        return command === "npm" ? 1 : 0
+        return command === "npm" && args[0] === "install" ? 1 : 0
       },
     })).toBe(1)
     expect(await readFile(manifest, "utf8")).toBe(source)
@@ -118,12 +118,12 @@ describe("installer lifecycle", () => {
     expect(await installPatchline({
       cwd: root, language: "en", yes: true, stdout: () => undefined, stderr: () => undefined,
       hasCommand: async (command) => command === "opencode" || command === "bun",
-      runCommand: async (command) => {
+      runCommand: async (command, args) => {
         if (command === "opencode") {
           await writeFile(config, '{"plugin":["opencode-patchline"]}')
           return 0
         }
-        return 9
+        return args[0] === "install" ? 9 : 0
       },
     })).toBe(9)
     await expect(readFile(config, "utf8")).rejects.toMatchObject({ code: "ENOENT" })

@@ -2,9 +2,24 @@ import { mkdir, symlink, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
 import { resolveWorkspacePath } from "../src/workspace/paths.js"
+import { ensureParents } from "../src/writing/parents.js"
 import { temporaryWorkspace } from "./helpers/workspace.js"
 
 describe("workspace paths", () => {
+  it("creates nested parents through a workspace root alias without escaping it", async () => {
+    const workspace = await temporaryWorkspace()
+    const aliases = await temporaryWorkspace()
+    try {
+      const alias = path.join(aliases.path, "root")
+      await symlink(workspace.path, alias, process.platform === "win32" ? "junction" : "dir")
+      await expect(ensureParents(alias, "nested/deep/file.ts")).resolves.toHaveLength(2)
+      expect((await resolveWorkspacePath(workspace.path, "nested/deep")).exists).toBe(true)
+      await expect(ensureParents(alias, "../escape/file.ts")).rejects.toMatchObject({ code: "PATH_OUTSIDE_WORKSPACE" })
+    } finally {
+      await aliases.cleanup()
+      await workspace.cleanup()
+    }
+  })
   it("resolves nested future paths inside the worktree", async () => {
     const workspace = await temporaryWorkspace()
     try {
@@ -12,6 +27,19 @@ describe("workspace paths", () => {
       expect(result.exists).toBe(false)
       expect(path.relative(result.workspace, result.canonical)).toBe(path.join("new", "nested", "file.ts"))
     } finally {
+      await workspace.cleanup()
+    }
+  })
+  it("uses one canonical absolute spelling for an aliased workspace", async () => {
+    const workspace = await temporaryWorkspace()
+    const aliases = await temporaryWorkspace()
+    try {
+      const alias = path.join(aliases.path, "root")
+      try { await symlink(workspace.path, alias, process.platform === "win32" ? "junction" : "dir") } catch { return }
+      const result = await resolveWorkspacePath(alias, "nested/file.ts")
+      expect(path.normalize(result.absolute)).toBe(path.normalize(result.canonical))
+    } finally {
+      await aliases.cleanup()
       await workspace.cleanup()
     }
   })

@@ -347,6 +347,7 @@ export class EditService {
       const key = normalizedIdentity(resolved.canonical)
       if (occupied.has(key)) throw new PatchlineError("INVALID_ARGUMENT", `Duplicate Hashline target: ${section.path}`)
       occupied.add(key)
+      if (section.fileOp && resolved.symlink) throw new PatchlineError("SYMLINK_ESCAPE", `File operations cannot target a symbolic link: ${resolved.relative}`, { path: resolved.relative })
       if (section.fileOp) {
         const entry = await lstat(resolved.absolute)
         if (entry.isSymbolicLink()) throw new PatchlineError("SYMLINK_ESCAPE", `File operations cannot target a symbolic link: ${resolved.relative}`, { path: resolved.relative })

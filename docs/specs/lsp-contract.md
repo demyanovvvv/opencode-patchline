@@ -23,3 +23,7 @@ fallback hint, since the isolated CLI request cannot prove that a document or
 workspace index has been initialized. Disabled or unconfigured LSP is reported
 with the same capability error rather than being misreported as no symbols. The bridge requests OpenCode startup logs at INFO level to make
 that distinction observable without changing the user's OpenCode configuration.
+Capability errors include the requested `operation`. Disabled/unconfigured LSP
+adds `lsp: "disabled"`; empty symbol output adds `indexing: "unverified"`. These
+are distinct degraded states and integration checks accept the host's actual
+state rather than requiring indexing to be unverified when LSP is disabled.

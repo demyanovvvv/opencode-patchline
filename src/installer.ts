@@ -4,7 +4,7 @@ import { access, mkdir, realpath, readFile, rm } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { applyEdits, createScanner, findNodeAtLocation, modify, parse, parseTree, type ParseError } from "jsonc-parser"
 import { executeCommand, type CommandResult } from "./installation/process.js"
-import { assertCurrent, backup, commitConfigurations, configurationFiles, globalConfigDirectory, installHostBinary, projectDirectory, readSnapshot, removeState, saveState, type FileChange } from "./installation/files.js"
+import { assertCurrent, backup, commitConfigurations, configurationFiles, globalConfigDirectory, installHostBinary, projectDirectory, readSnapshot, removeState, saveState, type FileChange, type FileSnapshot } from "./installation/files.js"
 import { configureLsp, removeOwnedLsp, type OwnedLsp } from "./installation/lsp.js"
 
 // jsonc-parser declares SyntaxKind as an ambient const enum, incompatible with verbatimModuleSyntax.
@@ -250,7 +250,8 @@ export function removePatchlineEntries(source: string, packageName = PATCHLINE_P
 }
 
 async function normalizeOptions(options: InstallerOptions): Promise<InstallerOptions & { cwd: string }> {
-  return { ...options, cwd: options.global ? options.cwd ?? process.cwd() : await projectDirectory(options.cwd ?? process.cwd()) }
+  const cwd = await realpath(options.cwd ?? process.cwd())
+  return { ...options, cwd: options.global ? cwd : await projectDirectory(cwd) }
 }
 
 async function saveInstallationState(options: InstallerOptions, language: InstallerLanguage, lspPackages: string[], addonPackages: string[], lspConfig?: OwnedLsp): Promise<void> {
@@ -266,19 +267,23 @@ async function rollbackPluginRegistration(options: InstallerOptions, previousCon
     if (!current || current.source === previous.source) continue
     const removedPlugin = removePatchlineEntries(current.source, packageName).text
     const stripped = addedLsp ? removeOwnedLsp(removedPlugin, addedLsp) : removedPlugin
-    const before = parse(previous.source.replace(/^\uFEFF/, ""), [], { allowTrailingComma: true })
+    const previousStripped = removePatchlineEntries(previous.source, packageName).text
+    const before = parse(previousStripped.replace(/^\uFEFF/, ""), [], { allowTrailingComma: true })
     const after = parse(stripped.replace(/^\uFEFF/, ""), [], { allowTrailingComma: true })
     if (JSON.stringify(before) === JSON.stringify(after)) restore.push({ ...current, text: previous.source })
   }
   await commitConfigurations(restore, log)
   for (const current of currentFiles) {
     if (previousPaths.has(current.path)) continue
-    const removed = removePatchlineEntries(current.source, packageName).text
+    const removedPlugin = removePatchlineEntries(current.source, packageName).text
+    const removed = addedLsp ? removeOwnedLsp(removedPlugin, addedLsp) : removedPlugin
     if (removed !== current.source) {
       const remaining = parse(removed.replace(/^\uFEFF/, ""), [], { allowTrailingComma: true })
-      if (Array.isArray(remaining?.plugin) && remaining.plugin.length === 0) {
+      if (Array.isArray(remaining?.plugin) && remaining.plugin.length === 0 && Object.keys(remaining).every((key) => key === "plugin")) {
         await assertCurrent(current)
         await rm(current.path)
+      } else {
+        await commitConfigurations([{ ...current, text: removed }], log)
       }
     }
   }
@@ -289,7 +294,7 @@ async function rollbackInstalledPackages(sets: readonly InstalledPackageSet[], r
     if (set.packages.length === 0) continue
     const args = ["uninstall", ...(set.global ? ["--global"] : ["--save-dev"]), ...set.packages]
     const code = await runCommand("npm", args)
-    if (code !== 0) log(`Rollback warning: npm uninstall exited with code ${code}.`)
+    if (code !== 0) { log(`Rollback warning: npm uninstall exited with code ${code}.`); throw new Error(`Dependency cleanup failed with exit code ${code}.`) }
   }
 }
 
@@ -304,18 +309,16 @@ async function capturePackageFiles(options: InstallerOptions): Promise<PackageFi
   }))
 }
 
-async function rollbackPackageFiles(snapshots: readonly PackageFileSnapshot[], log: Output): Promise<void> {
+async function rollbackPackageFiles(snapshots: readonly PackageFileSnapshot[], expected: readonly FileSnapshot[], log: Output): Promise<void> {
   const restores: FileChange[] = []
   for (const snapshot of snapshots) {
     const current = await readSnapshot(snapshot.path)
-    if (snapshot.source === undefined) {
-      if (!current) continue
-      await assertCurrent(current)
-      await rm(current.path)
-      continue
-    }
-    if (!current || current.source === snapshot.source) continue
-    restores.push({ ...current, text: snapshot.source })
+    if (current?.source === snapshot.source) continue
+    const owned = expected.find((item) => item.path === snapshot.path)
+    if (!owned) throw new Error(`Rollback conflict: package file ownership is unknown: ${snapshot.path}`)
+    await assertCurrent(owned)
+    if (snapshot.source === undefined) await rm(owned.path)
+    else restores.push({ ...owned, text: snapshot.source })
   }
   if (restores.length) await commitConfigurations(restores, log)
 }
@@ -342,17 +345,55 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
   const previousConfigs = await configurationFiles({ cwd: options.cwd!, ...(options.configDirectory ? { configDirectory: options.configDirectory } : {}), ...(options.global !== undefined ? { global: options.global } : {}) })
   const previousStateSnapshot = await readSnapshot(stateFileOf(options))
   const previousPackageFiles = await capturePackageFiles(options)
+  let expectedPackageFiles: FileSnapshot[] = []
+  let expectedState = previousStateSnapshot
+  const saveOwnedState = async (language: InstallerLanguage, packages: string[], addons: string[], lsp?: OwnedLsp): Promise<void> => {
+    if (expectedState) await assertCurrent(expectedState)
+    else if (await readSnapshot(stateFileOf(options))) throw new Error("Rollback conflict: installer state appeared externally.")
+    await saveInstallationState(options, language, packages, addons, lsp)
+    expectedState = await readSnapshot(stateFileOf(options))
+  }
+  const runDependencyInstall = async (args: readonly string[]): Promise<number> => {
+    try { return await runCommand("npm", args) }
+    finally {
+      expectedPackageFiles = []
+      for (const item of previousPackageFiles) {
+        const current = await readSnapshot(item.path)
+        if (current) expectedPackageFiles.push(current)
+      }
+    }
+  }
   const installedPackages: InstalledPackageSet[] = []
   let configuredLsp: OwnedLsp | undefined
   let pluginRegistered = false
+  let rollbackStarted = false
   const rollback = async (): Promise<void> => {
-    if (configuredLsp || pluginRegistered) {
-      await rollbackPluginRegistration(options, previousConfigs, packageName, (file) => output(options, text.backup(file)), configuredLsp)
+    if (rollbackStarted) return
+    rollbackStarted = true
+    const conflicts: string[] = []
+    const attempt = async (operation: () => Promise<void>): Promise<void> => {
+      try { await operation() } catch (error) { conflicts.push(error instanceof Error ? error.message : String(error)) }
     }
-    await rollbackInstalledPackages(installedPackages, runCommand, (line) => output(options, line))
-    await rollbackPackageFiles(previousPackageFiles, (file) => output(options, text.backup(file)))
-    if (previousStateSnapshot) await saveState(stateFileOf(options), JSON.parse(previousStateSnapshot.source))
-    else await removeState(stateFileOf(options))
+    if (configuredLsp || pluginRegistered) await attempt(() => rollbackPluginRegistration(options, previousConfigs, packageName, (file) => output(options, text.backup(file)), configuredLsp))
+    let dependenciesRestored = false
+    await attempt(async () => {
+      for (const expected of expectedPackageFiles) await assertCurrent(expected)
+      await rollbackInstalledPackages(installedPackages, runCommand, (line) => output(options, line))
+      for (const expected of expectedPackageFiles) {
+        const current = await readSnapshot(expected.path)
+        if (current) Object.assign(expected, current)
+      }
+      await rollbackPackageFiles(previousPackageFiles, expectedPackageFiles, (file) => output(options, text.backup(file)))
+      dependenciesRestored = true
+    })
+    await attempt(async () => {
+      if (!dependenciesRestored && installedPackages.length) throw new Error("Installer ownership state retained for dependency recovery.")
+      if (expectedState) await assertCurrent(expectedState)
+      else if (await readSnapshot(stateFileOf(options))) throw new Error("Installer state appeared externally.")
+      if (previousStateSnapshot && expectedState) await commitConfigurations([{ ...expectedState, text: previousStateSnapshot.source }], (file) => output(options, text.backup(file)))
+      else if (expectedState) await removeState(stateFileOf(options))
+    })
+    if (conflicts.length) throw new Error(`Rollback conflicts: ${conflicts.join("; ")}`)
   }
   try {
   for (const file of previousConfigs) {
@@ -393,7 +434,7 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
   let lspConfig = state.lspConfig
   let ownedPackages = sameScope ? [...(state.lspPackages ?? [])] : []
   let ownedAddons = sameScope ? [...(state.addonPackages ?? [])] : []
-  await saveInstallationState(options, language, ownedPackages, ownedAddons, lspConfig)
+  await saveOwnedState(language, ownedPackages, ownedAddons, lspConfig)
 
   const lspAvailable = await hasCommand("typescript-language-server")
   if (!lspAvailable) {
@@ -408,15 +449,15 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
       const npmArgs = options.global
         ? ["install", "--global", ...missingPackages]
         : ["install", "--save-dev", ...missingPackages]
-      const dependencyCode = await runCommand("npm", missingPackages.length === 0 && !options.global ? ["install"] : npmArgs)
       installedPackages.push({ packages: missingPackages, global: Boolean(options.global) })
+      const dependencyCode = await runDependencyInstall(missingPackages.length === 0 && !options.global ? ["install"] : npmArgs)
       if (dependencyCode !== 0) {
         await rollback()
         errorOutput(options, text.error(text.lspFailed(dependencyCode)))
         return dependencyCode
       }
       ownedPackages = [...new Set([...ownedPackages, ...missingPackages])]
-      await saveInstallationState(options, language, ownedPackages, ownedAddons, lspConfig)
+      await saveOwnedState(language, ownedPackages, ownedAddons, lspConfig)
       lspConfig = await configureLsp(options, lspConfig, (file) => output(options, text.backup(file)))
       configuredLsp = lspConfig
       output(options, text.lspInstalled)
@@ -443,13 +484,13 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
           return addonCode
         }
         ownedAddons = [...new Set([...ownedAddons, ...missingAddons])]
-        await saveInstallationState(options, language, ownedPackages, ownedAddons, lspConfig)
+        await saveOwnedState(language, ownedPackages, ownedAddons, lspConfig)
         output(options, text.runtimeInstalled)
       }
     }
   }
 
-  await saveInstallationState(options, language, ownedPackages, ownedAddons, lspConfig)
+  await saveOwnedState(language, ownedPackages, ownedAddons, lspConfig)
   output(options, text.complete)
   return 0
   } catch (error) {

@@ -248,7 +248,7 @@ describe("Patchline installer", () => {
       stateDirectory: root,
       confirm: async () => true,
       hasCommand: async (command) => command === "opencode" || command === "bun",
-      runCommand: async (command) => command === "npm" ? 7 : 0,
+      runCommand: async (command, args) => command === "npm" && args[0] === "install" ? 7 : 0,
       stdout: () => undefined,
       stderr: () => undefined,
     })

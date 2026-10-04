@@ -44,6 +44,7 @@ describe("search", () => {
     expect(() => interpretLspOutput("documentSymbol", "[]", "all LSPs are disabled", 0)).toThrowError(expect.objectContaining({
       code: "CAPABILITY_UNAVAILABLE",
       message: expect.stringContaining("ast_search"),
+      details: { operation: "documentSymbol", lsp: "disabled" },
     }))
   })
 
@@ -358,7 +359,7 @@ describe("search", () => {
   it("uses the installed OpenCode LSP status bridge", async () => {
     const workspace = await temporaryWorkspace()
     try {
-      await expect(runOpenCodeLspBridge({ worktree: workspace.path, operation: "workspaceSymbol", query: "MissingSymbol" })).rejects.toMatchObject({ code: "CAPABILITY_UNAVAILABLE", details: { indexing: "unverified" } })
+      await expect(runOpenCodeLspBridge({ worktree: workspace.path, operation: "workspaceSymbol", query: "MissingSymbol" })).rejects.toMatchObject({ code: "CAPABILITY_UNAVAILABLE", details: { operation: "workspaceSymbol" } })
     } finally {
       await workspace.cleanup()
     }
