@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { parse } from "jsonc-parser"
@@ -8,7 +8,7 @@ import { installPatchline, uninstallPatchline } from "../src/installer.js"
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))) })
 async function workspace() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "patchline-installer-lifecycle-"))
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "patchline-installer-lifecycle-")))
   roots.push(root)
   return root
 }

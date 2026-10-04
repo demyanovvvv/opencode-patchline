@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
 const roots: string[] = []
 async function workspace(prefix: string): Promise<string> {
-  const root = await mkdtemp(path.join(os.tmpdir(), prefix))
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), prefix)))
   roots.push(root)
   return root
 }
