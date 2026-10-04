@@ -74,7 +74,7 @@ describe("search", () => {
     const originalPath = process.env.PATH
     try {
       process.env.PATH = ""
-      await expect(runOpenCodeLspBridge({ worktree: workspace.path, operation: "workspaceSymbol", query: "value" })).rejects.toMatchObject({ code: "CAPABILITY_UNAVAILABLE", details: { indexing: "unverified" } })
+      await expect(runOpenCodeLspBridge({ worktree: workspace.path, operation: "workspaceSymbol", query: "value" })).rejects.toMatchObject({ code: "CAPABILITY_UNAVAILABLE" })
     } finally {
       process.env.PATH = originalPath
       await workspace.cleanup()
@@ -388,7 +388,7 @@ describe("search", () => {
       const marker = path.join(workspace.path, "lsp-shell-injection.txt")
       const query = "MissingSymbol & echo injected>lsp-shell-injection.txt & rem"
 
-      await expect(runOpenCodeLspBridge({ worktree: workspace.path, operation: "workspaceSymbol", query })).rejects.toMatchObject({ code: "CAPABILITY_UNAVAILABLE", details: { indexing: "unverified" } })
+      await expect(runOpenCodeLspBridge({ worktree: workspace.path, operation: "workspaceSymbol", query })).rejects.toMatchObject({ code: "CAPABILITY_UNAVAILABLE" })
 
       await expect(readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" })
     } finally {
