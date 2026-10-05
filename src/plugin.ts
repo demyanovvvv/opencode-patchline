@@ -356,6 +356,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
               payloadBytes: Buffer.byteLength(JSON.stringify(operations), "utf8"),
             })
             const selected = args.strategy === "auto" || args.strategy === undefined ? route.strategy : args.strategy
+            progress(context, "planning", "Patchline · planning", { paths, strategy: selected, requestedStrategy: args.strategy ?? "auto", routeReason: route.reason, confidence: route.confidence })
             if (selected === "standard" || route.strategy === "standard") {
               if (args.strategy !== undefined && args.strategy !== "auto" && args.strategy !== "standard") {
                 throw new PatchlineError("STANDARD_TOOL_REQUIRED", "This change is too large for Patchline precision editing.", { details: { strategy: route.strategy, routeReason: route.reason, paths } })
@@ -397,8 +398,9 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
                 stage = nextStage
                 progress(context, stage, `Patchline · adaptive ${selected}`, { paths, strategy: selected })
               }, context.abort)
+              const files = editFiles(result, context.worktree, "diff")
               const validation = await validateMutation(context, paths)
-              return { title: `Patchline · adaptive ${selected}`, output: boundedMutationOutput(result.map((item) => item.output).join("\n\n")), metadata: { status: "applied", stage: "completed", strategy: selected, confidence: route.confidence, routeReason: route.reason, writes: result.length, paths, ...validation } }
+              return { title: `Patchline · adaptive ${selected}`, output: boundedMutationOutput(result.map((item) => item.output).join("\n\n")), metadata: { status: "applied", stage: "completed", strategy: selected, confidence: route.confidence, routeReason: route.reason, writes: result.length, paths, added: result.reduce((sum, item) => sum + item.added, 0), deleted: result.reduce((sum, item) => sum + item.deleted, 0), files, ...validation } }
             } catch (error) {
               failure(context, error, stage, paths.length === 1 ? paths[0] : undefined, { paths, strategy: selected })
               throw toolError(error)
