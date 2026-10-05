@@ -3,7 +3,7 @@ import type { TuiPlugin, TuiPluginModule, TuiPluginApi } from "@opencode-ai/plug
 import type { ToolPart } from "@opencode-ai/sdk/v2"
 import { SyntaxStyle } from "@opentui/core"
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
-import { patchlineActivity, type ActivityFile, type ActivityView } from "./visualization/activity.js"
+import { PATCHLINE_ACTIVITY_TOOLS, patchlineActivity, type ActivityFile, type ActivityView } from "./visualization/activity.js"
 
 function Disclosure(props: { api: TuiPluginApi; label: string; onToggle: () => void }) {
   const [hover, setHover] = createSignal(false)
@@ -144,10 +144,8 @@ function Activity(props: { api: TuiPluginApi; session_id?: string; part?: ToolPa
             <text fg={theme().textMuted}>{activity().totalFiles ?? activity().paths.length} files · <span style={{ fg: theme().diffAdded }}>+{activity().additions ?? 0}</span> <span style={{ fg: theme().diffRemoved }}>−{activity().deletions ?? 0}</span> · {activity().writes ?? 0} writes{activity().strategy ? ` · ${activity().strategy}` : ""}</text>
           </Show>
           <For each={activity().paths.slice(0, 4)}>{(file) => <Show when={!activity().files?.some((item) => item.path === file)}><text fg={theme().text} wrapMode="word">{file}</text></Show>}</For>
-          <Show when={activity().kind === "mutation" && (activity().strategy || activity().requestedStrategy || activity().reason)}>
-            <Show when={activity().kind === "mutation" && (activity().strategy || activity().requestedStrategy || activity().reason)}><Summary activity={activity()} api={props.api} /></Show>
+          <Show when={activity().kind === "mutation" && (activity().strategy || activity().requestedStrategy || activity().reason)}><Summary activity={activity()} api={props.api} /></Show>
           <Show when={activity().kind !== "mutation"}><Summary activity={activity()} api={props.api} /></Show>
-          </Show>
           <Show when={(activity().hiddenFiles ?? 0) > 0}><text fg={theme().textMuted}>… {activity().hiddenFiles} more files</text></Show>
           <Show when={activity().writes !== undefined || activity().validation !== undefined}><text marginTop={1} fg={activity().validation === "failed" ? theme().error : activity().validation === "passed" ? theme().success : theme().textMuted}>Validation: {activity().validation?.replaceAll("_", " ") ?? "pending"}</text></Show>
           <Show when={activity().status === "failed"}>
@@ -170,7 +168,7 @@ function Activity(props: { api: TuiPluginApi; session_id?: string; part?: ToolPa
 }
 
 export const PatchlineTui: TuiPlugin = async (api) => {
-  const slots = Object.fromEntries(["read", "edit", "write", "apply_patch", "patchline_edit_batch", "patchline_grep", "ast_search", "patchline_route_search", "patchline_lsp", "patchline_diagnostics", "patchline_summary"].map((tool) => [`tool_${tool}`, (_context: unknown, props: { part: ToolPart }) => <Activity api={api} part={props.part} />]))
+  const slots = Object.fromEntries(PATCHLINE_ACTIVITY_TOOLS.map((tool) => [`tool_${tool}`, (_context: unknown, props: { part: ToolPart }) => <Activity api={api} part={props.part} />]))
   api.slots.register({ order: 510, slots: { ...slots, sidebar_content(_context, props) {
     return <Activity api={api} session_id={props.session_id} />
   } } })

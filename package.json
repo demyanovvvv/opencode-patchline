@@ -67,6 +67,7 @@
     "smoke:tui": "npm run build && npm exec --yes --package=bun -- bun --conditions=browser scripts/tui-smoke.mjs",
     "smoke:install": "npm run build && node scripts/install-smoke.mjs",
     "smoke:installer-lifecycle": "npm run build && node scripts/installer-lifecycle-smoke.mjs",
+    "smoke:host": "npm run build && node scripts/installer-lifecycle-smoke.mjs --host",
     "smoke:installer-lsp": "npm run build && node scripts/installer-lsp-smoke.mjs",
     "prepack": "npm run build"
   },

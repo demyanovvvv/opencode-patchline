@@ -25,6 +25,9 @@ export type FileReadResult = {
   offset: number
   endLine: number
   totalLines: number
+  requestedLimit: number
+  truncated: boolean
+  nextOffset?: number | undefined
   lineEnding: string
   bom: boolean
   output: string
@@ -60,14 +63,14 @@ export class ReadService {
     if (request.limit !== undefined && (!Number.isInteger(request.limit) || request.limit < 1)) {
       throw new PatchlineError("INVALID_ARGUMENT", "Read limit must be a positive integer.", { path: request.filePath })
     }
-    const resolved = await resolveWorkspacePath(request.worktree, request.filePath)
+    const resolved = await resolveWorkspacePath(request.worktree, request.filePath, request.authorizePath)
     if (!resolved.exists) {
       throw new PatchlineError("FILE_NOT_FOUND", `File not found: ${request.filePath}`, { path: request.filePath })
     }
     const fileInfo = await stat(resolved.absolute, { bigint: true })
     const displayPath = resolved.relative || "."
     const offset = request.offset ?? 1
-    const limit = Math.min(this.defaultLimit, request.limit ?? this.defaultLimit)
+    const limit = fileInfo.isDirectory() ? Math.min(this.defaultLimit, request.limit ?? this.defaultLimit) : Math.min(2_000, request.limit ?? this.defaultLimit)
 
     if (fileInfo.isDirectory()) {
       const directory = await opendir(resolved.absolute)
@@ -122,25 +125,29 @@ export class ReadService {
     if (offset > totalLines && !(totalLines === 0 && offset === 1)) {
       throw new PatchlineError("INVALID_ARGUMENT", `Offset ${offset} is out of range for this file (${totalLines} lines)`, { path: displayPath })
     }
-    const endLine = Math.min(totalLines, offset + limit - 1)
+    let endLine = Math.min(totalLines, offset + limit - 1)
     const selectedLines = sliceIndexedLines(document.normalizedText, lineIndex, offset, limit)
-    if (selectedLines.some((line) => line.length > MAX_READ_LINE_CHARS)) {
-      throw new PatchlineError("INVALID_ARGUMENT", `Read range contains a line exceeding the 20,000-character output limit: ${displayPath}`, { path: displayPath })
-    }
-    const rows = selectedLines.map((line, index) => `${offset + index}:${line}`)
-    const more = endLine < totalLines ? `\n\nMore content is available after line ${endLine}.` : ""
-    const outputPrefix = [
+    const rows: string[] = []
+    const prefix = (last: number) => [
       `Path: ${displayPath}`,
       `Snapshot: ${"x".repeat(17)}`,
       `Hashline: [${resolved.relative}#${"x".repeat(4)}]`,
-      `Range: ${offset}-${endLine} of ${totalLines}`,
+      `Range: ${offset}-${last} of ${totalLines}`,
       `Text: ${document.lineEnding}, BOM ${document.bom ? "yes" : "no"}`,
       "",
-      ...rows,
-    ].join("\n") + more
-    if (outputPrefix.length > MAX_READ_OUTPUT_CHARS) {
-      throw new PatchlineError("INVALID_ARGUMENT", `File read output exceeds the 20,000-character limit: ${displayPath}`, { path: displayPath })
+    ].join("\n")
+    const continuation = (last: number) => last < totalLines ? `\n\nMore content is available after line ${last}. Use offset=${last + 1} to continue. Requested limit=${request.limit ?? this.defaultLimit}; returned ${Math.max(0, last - offset + 1)} lines (bounded page).` : ""
+    let rendered = 0
+    for (const [index, line] of selectedLines.entries()) {
+      const row = `${offset + index}:${line}`
+      const last = offset + index
+      if (line.length > MAX_READ_LINE_CHARS || prefix(last).length + rendered + row.length + index + continuation(last).length > MAX_READ_OUTPUT_CHARS) break
+      rows.push(row)
+      rendered += row.length
     }
+    if (selectedLines.length > 0 && rows.length === 0) throw new PatchlineError("INVALID_ARGUMENT", `A source line exceeds the bounded read output: ${displayPath}. Use ordinary apply_patch with a smaller context.`, { path: displayPath })
+    endLine = Math.min(totalLines, offset + rows.length - 1)
+    const more = continuation(endLine)
     const seenLines = Array.from({ length: Math.max(0, endLine - offset + 1) }, (_, index) => offset + index)
     const snapshot = this.snapshots.record(request, resolved.canonical, resolved.relative, document, seenLines, {
       device: fileInfo.dev,
@@ -163,6 +170,9 @@ export class ReadService {
       offset,
       endLine,
       totalLines,
+      requestedLimit: request.limit ?? this.defaultLimit,
+      truncated: endLine < totalLines,
+      nextOffset: endLine < totalLines ? endLine + 1 : undefined,
       lineEnding: document.lineEnding,
       bom: document.bom,
       output,

@@ -8,6 +8,7 @@ import { normalizedIdentity } from "../workspace/paths.js"
 export type SnapshotScope = {
   sessionId: string
   worktree: string
+  authorizePath?: ((path: string) => Promise<void>) | undefined
 }
 
 export type FileIdentity = {

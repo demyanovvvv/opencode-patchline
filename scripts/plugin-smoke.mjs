@@ -10,8 +10,8 @@ import { createSmokeEnvironment } from "./smoke-environment.mjs"
 const pluginPath = path.resolve(fileURLToPath(new URL("../dist/plugin.js", import.meta.url)))
 const worktree = await mkdtemp(path.join(os.tmpdir(), "patchline-plugin-smoke-"))
 const execute = promisify(execFile)
-const required = ["read", "edit", "write", "apply_patch", "patchline_grep", "ast_search", "patchline_edit_batch", "patchline_diagnostics", "patchline_summary"]
-const hashlineRequired = ["read", "edit", "write", "apply_patch"]
+const required = ["read", "edit", "write", "apply_patch", "patchline_apply_patch", "patchline_execute", "patchline_grep", "ast_search", "patchline_edit_batch", "patchline_diagnostics", "patchline_summary"]
+const hashlineRequired = ["read", "edit", "write", "patchline_apply_patch"]
 
 async function freePort() {
   const server = createServer()

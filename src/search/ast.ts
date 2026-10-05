@@ -59,11 +59,12 @@ export async function astSearchFile(input: {
   pattern: string
   language?: string | undefined
   maxResults: number
+  authorizePath?: ((path: string) => Promise<void>) | undefined
 }): Promise<{ matches: AstMatch[]; truncated: boolean }> {
   if (!Number.isInteger(input.maxResults) || input.maxResults < 1 || input.maxResults > 500) {
     throw new PatchlineError("INVALID_ARGUMENT", "Search result limit must be an integer between 1 and 500.")
   }
-  const resolved = await resolveWorkspacePath(input.worktree, input.filePath)
+  const resolved = await resolveWorkspacePath(input.worktree, input.filePath, input.authorizePath)
   if (!resolved.exists) throw new PatchlineError("FILE_NOT_FOUND", `File not found: ${input.filePath}`, { path: input.filePath })
   const languageName = input.language?.toLowerCase() ?? path.extname(resolved.absolute).slice(1).toLowerCase()
   const language = languages[languageName]

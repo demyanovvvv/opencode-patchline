@@ -228,21 +228,20 @@ describe("read and exact edit", () => {
     }
   })
 
-  it("rejects a file page whose rendered output exceeds the read output budget", async () => {
+  it("returns a bounded page and marks only displayed lines as observed", async () => {
     const workspace = await temporaryWorkspace()
     try {
       await writeFile(path.join(workspace.path, "wide-page.ts"), `${Array.from({ length: 120 }, (_, index) => `${String(index).padStart(3, "0")}:${"x".repeat(200)}`).join("\n")}\n`)
       const snapshots = new ScopedSnapshotStore()
 
-      await expect(new ReadService(snapshots).read({
-        sessionId: "s",
-        worktree: workspace.path,
-        filePath: "wide-page.ts",
-      })).rejects.toMatchObject({
-        code: "INVALID_ARGUMENT",
-        path: "wide-page.ts",
-      })
-      expect(snapshots.size).toBe(0)
+      const result = await new ReadService(snapshots).read({ sessionId: "s", worktree: workspace.path, filePath: "wide-page.ts" })
+      if (!isFileReadResult(result)) throw new Error("Expected file read")
+      expect(result.output.length).toBeLessThanOrEqual(20_000)
+      expect(result.endLine).toBeLessThan(120)
+      expect(result.nextOffset).toBe(result.endLine + 1)
+      const snapshot = snapshots.get({ sessionId: "s", worktree: workspace.path }, path.join(workspace.path, "wide-page.ts"), result.snapshot)!
+      expect(snapshot.seenLines.has(result.endLine)).toBe(true)
+      expect(snapshot.seenLines.has(result.endLine + 1)).toBe(false)
     } finally {
       await workspace.cleanup()
     }
@@ -257,12 +256,11 @@ describe("read and exact edit", () => {
       await writeFile(path.join(workspace.path, filePath), `${Array.from({ length: 120 }, (_, index) => `${String(index).padStart(3, "0")}:${"x".repeat(180)}`).join("\n")}\n`)
       const snapshots = new ScopedSnapshotStore()
 
-      await expect(new ReadService(snapshots).read({
-        sessionId: "s",
-        worktree: workspace.path,
-        filePath,
-      })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
-      expect(snapshots.size).toBe(0)
+      const result = await new ReadService(snapshots).read({ sessionId: "s", worktree: workspace.path, filePath })
+      if (!isFileReadResult(result)) throw new Error("Expected file read")
+      expect(result.output.length).toBeLessThanOrEqual(20_000)
+      expect(result.endLine).toBeLessThan(120)
+      expect(snapshots.size).toBe(1)
     } finally {
       await workspace.cleanup()
     }
@@ -324,7 +322,7 @@ describe("read and exact edit", () => {
     }
   })
 
-  it("caps explicit file read limits at the configured initial range", async () => {
+  it("honors explicit file read limits independently of the initial range", async () => {
     const workspace = await temporaryWorkspace()
     try {
       await writeFile(path.join(workspace.path, "bounded.ts"), "one\ntwo\nthree\nfour\n")
@@ -336,9 +334,8 @@ describe("read and exact edit", () => {
       })
 
       if (!isFileReadResult(result)) throw new Error("Expected file read")
-      expect(result.endLine).toBe(2)
-      expect(result.output).toContain("More content is available after line 2.")
-      expect(result.output).not.toContain("3:three")
+      expect(result.endLine).toBe(4)
+      expect(result.output).toContain("3:three")
     } finally {
       await workspace.cleanup()
     }

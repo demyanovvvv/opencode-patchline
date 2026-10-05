@@ -2,11 +2,15 @@
 
 Status: Accepted
 
-Every path is resolved from the tool context directory and canonicalized. The
-real existing path, or nearest existing parent for a new file, must remain
-inside the canonical worktree. `.git` internals, traversal, and symlink escape
-are rejected, including aliases that resolve to a canonical `.git` path.
-Relative path equality is never used as snapshot identity.
+Paths are resolved from the tool context worktree and canonicalized. Service
+calls remain worktree-bound unless supplied an explicit authorization callback.
+The OpenCode adapter permits explicit absolute external paths only after
+`external_directory` and operation-specific read/edit authorization against
+the canonical target. Relative traversal and workspace symlink escapes remain
+rejected, as do lexical and canonical `.git` internals.
+External snapshots remain scoped to the originating session and worktree;
+the worktree is never expanded to a drive or common ancestor. Commit and
+rollback repeat path authorization and existing identity/digest checks.
 
 Parent creation traverses relative components from the caller's workspace root;
 it never computes a traversal between canonical and lexical path spellings.

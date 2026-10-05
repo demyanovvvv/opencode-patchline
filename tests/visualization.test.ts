@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest"
 import { patchlineActivity } from "../src/visualization/activity.js"
 
 describe("Patchline activity presentation", () => {
+  it("renders the dedicated Hashline tool as a mutation with file diffs", () => {
+    expect(patchlineActivity([{ tool: "patchline_apply_patch", state: { status: "completed", metadata: { writes: 1, files: [{ path: "source.ts", diff: "@@ -1,1 +1,1 @@\n-before\n+after", additions: 1, deletions: 1 }] } } }])).toMatchObject({ kind: "mutation", writes: 1, additions: 1, deletions: 1 })
+  })
   it("renders read-only activities and prioritizes an active mutation", () => {
     expect(patchlineActivity([{ tool: "patchline_lsp", state: { status: "completed", metadata: { operation: "workspaceSymbol", query: "Patchline" } } }])).toMatchObject({ kind: "lsp", label: "Workspace symbols" })
     const view = patchlineActivity([

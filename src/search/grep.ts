@@ -26,12 +26,13 @@ export async function grepWorkspace(input: {
   path?: string | undefined
   include?: string | undefined
   maxResults: number
+  authorizePath?: ((path: string) => Promise<void>) | undefined
 }): Promise<{ matches: GrepMatch[]; truncated: boolean; skipped: Array<{ path: string; reason: string }>; skippedCount: number }> {
   if (!input.pattern) throw new PatchlineError("INVALID_ARGUMENT", "Search pattern is required.")
   if (!Number.isInteger(input.maxResults) || input.maxResults < 1 || input.maxResults > 500) {
     throw new PatchlineError("INVALID_ARGUMENT", "Search result limit must be an integer between 1 and 500.")
   }
-  const root = await resolveWorkspacePath(input.worktree, input.path ?? ".")
+  const root = await resolveWorkspacePath(input.worktree, input.path ?? ".", input.authorizePath)
   const matches: GrepMatch[] = []
   const skipped: Array<{ path: string; reason: string }> = []
   let skippedCount = 0

@@ -18,13 +18,22 @@ import {
   resolveInstalledOpenCode,
   integratedHostVersion,
   patchHostUpdates,
+  patchHostToolSelection,
 } from "../src/installer.js"
 
 describe("Patchline installer", () => {
+  it("keeps ordinary apply_patch visible across models in the integrated host", () => {
+    const original = 'if (tool.id === ApplyPatchTool.id) return usePatch\nif (tool.id === EditTool.id || tool.id === WriteTool.id) return !usePatch'
+    const result = patchHostToolSelection(original)
+    expect(result).toContain('if (tool.id === ApplyPatchTool.id) return true')
+    expect(result).toContain('if (tool.id === EditTool.id || tool.id === WriteTool.id) return true')
+    expect(patchHostToolSelection(result)).toBe(result)
+    expect(() => patchHostToolSelection("unsupported")).toThrow("Unsupported OpenCode")
+  })
   it("derives integrated versions independently from upstream and plugin versions", () => {
-    expect(integratedHostVersion("1.18.34", "1.1.0")).toBe("1.18.34+patchline.1.1.0")
-    expect(integratedHostVersion("1.18.35", "1.1.0")).toBe("1.18.35+patchline.1.1.0")
-    expect(integratedHostVersion("1.18.35", "1.1.1-beta.1")).toBe("1.18.35+patchline.1.1.1-beta.1")
+    expect(integratedHostVersion("1.18.34", "1.1.0")).toBe("1.18.34+patchline.1.1.0.tools1")
+    expect(integratedHostVersion("1.18.35", "1.1.0")).toBe("1.18.35+patchline.1.1.0.tools1")
+    expect(integratedHostVersion("1.18.35", "1.1.1-beta.1")).toBe("1.18.35+patchline.1.1.1-beta.1.tools1")
     expect(() => integratedHostVersion("latest", "1.1.0")).toThrow()
     expect(() => integratedHostVersion("1.18.34", "broken")).toThrow()
   })

@@ -1,3 +1,4 @@
+export const PATCHLINE_ACTIVITY_TOOLS = ["read", "edit", "write", "apply_patch", "patchline_apply_patch", "patchline_execute", "patchline_edit_batch", "patchline_grep", "ast_search", "patchline_route_search", "patchline_lsp", "patchline_diagnostics", "patchline_summary"] as const
 export type ActivityStatus = "running" | "completed" | "failed"
 export type ActivityKind = "read" | "mutation" | "search" | "route" | "lsp" | "diagnostics" | "summary"
 
@@ -108,7 +109,7 @@ function diffLines(diff: unknown): { lines: ActivityLine[]; truncated: boolean }
 }
 
 export function patchlineActivity(calls: readonly ToolCall[]): ActivityView | undefined {
-  const supported = new Set(["read", "edit", "write", "apply_patch", "patchline_execute", "patchline_edit_batch", "patchline_grep", "ast_search", "patchline_route_search", "patchline_lsp", "patchline_diagnostics", "patchline_summary"])
+  const supported = new Set<string>(PATCHLINE_ACTIVITY_TOOLS)
   let call: ToolCall | undefined
   for (let index = calls.length - 1; index >= 0; index--) {
     const item = calls[index]!
@@ -143,7 +144,7 @@ export function patchlineActivity(calls: readonly ToolCall[]): ActivityView | un
   const additions = numberValue(metadata.added) ?? files?.reduce((sum, file) => sum + file.additions, 0)
   const deletions = numberValue(metadata.deleted) ?? files?.reduce((sum, file) => sum + file.deletions, 0)
   const writes = numberValue(metadata.writes)
-  const mutationTools = new Set(["edit", "write", "apply_patch", "patchline_execute", "patchline_edit_batch"])
+  const mutationTools = new Set(["edit", "write", "apply_patch", "patchline_apply_patch", "patchline_execute", "patchline_edit_batch"])
   const kind: ActivityKind = mutationTools.has(call.tool)
     ? "mutation"
     : call.tool === "read" ? "read"
@@ -173,7 +174,7 @@ export function patchlineActivity(calls: readonly ToolCall[]): ActivityView | un
     return { ...common, status: "running", label, reason: stringValue(metadata.routeReason), recoveryAction: stringValue(metadata.recoveryAction) }
   }
   if (call.state.status === "error" || metadata.validation === "failed" || (kind === "diagnostics" && metadata.ok === false)) {
-    const batch = call.tool === "patchline_edit_batch" || call.tool === "apply_patch"
+    const batch = call.tool === "patchline_edit_batch" || call.tool === "apply_patch" || call.tool === "patchline_apply_patch"
     const rejected = writes === 0 && (metadata.stage === "permission" || metadata.stage === "preflight")
     const strategy = stringValue(metadata.strategy)
     let mutationLabel = metadata.validation === "failed" && writes !== undefined && writes > 0 ? "Changes applied · validation failed" : `${batch ? "Batch" : "Edit"} ${rejected ? "rejected" : "failed"}`

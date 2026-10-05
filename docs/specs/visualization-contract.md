@@ -24,6 +24,8 @@ rendered as a mutation activity. When the selected strategy is `exact`, the
 activity is labelled `Planning exact edit` during planning and reports
 `strategy: "exact"`. Large-change standard-tool delegation is rendered as a
 compact fallback card with its route reason and recovery action. Presentation
+Conversation slots include `patchline_execute` and `patchline_apply_patch`.
+Adaptive Hashline results expose the same bounded file diffs as batch edits.
 callbacks cannot stop a commit or rollback. Thrown errors remain rejected tool
 calls with a reason, recovery action, stage, paths and write count where known.
 `writes` counts landed file writes, including subsequently restored files;
@@ -82,8 +84,8 @@ Stock OpenCode 1.18.34 does not expose tool-card slots. Conversation rendering
 requires the modified host checkout `.opencode-host/` (ignored by Git).
 Its session `ToolPart` wraps the existing tool switch in a replacement slot
 named `tool_<tool ID>`, passing reactive `part`, `message` and `last` props.
-Unregistered slots retain the existing renderer. Patchline registers all eleven
-tool IDs through the existing scoped slot API.
+Unregistered slots retain the existing renderer. Patchline registers its tool
+IDs from a shared activity registry; smoke tests compare against server tools.
 
 Build from `.opencode-host/packages/opencode`:
 

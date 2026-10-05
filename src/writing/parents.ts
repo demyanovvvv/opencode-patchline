@@ -7,10 +7,10 @@ import { readFileIdentity } from "./atomic.js"
 
 export type CreatedDirectory = { absolute: string; identity: FileIdentity }
 
-export async function cleanupParents(worktree: string, directories: readonly CreatedDirectory[]): Promise<void> {
+export async function cleanupParents(worktree: string, directories: readonly CreatedDirectory[], authorizePath?: (path: string) => Promise<void>): Promise<void> {
   for (const directory of [...directories].reverse()) {
     try {
-      const current = await resolveWorkspacePath(worktree, directory.absolute)
+      const current = await resolveWorkspacePath(worktree, directory.absolute, authorizePath)
       const identity = await readFileIdentity(current.absolute)
       if (identity.device !== directory.identity.device || identity.inode !== directory.identity.inode) continue
       await rmdir(current.absolute)
@@ -20,18 +20,23 @@ export async function cleanupParents(worktree: string, directories: readonly Cre
   }
 }
 
-export async function ensureParents(worktree: string, filePath: string, signal?: AbortSignal): Promise<CreatedDirectory[]> {
-  const target = await resolveWorkspacePath(worktree, filePath)
+export async function ensureParents(worktree: string, filePath: string, signal?: AbortSignal, authorizePath?: (path: string) => Promise<void>): Promise<CreatedDirectory[]> {
+  const target = await resolveWorkspacePath(worktree, filePath, authorizePath)
   const directories: CreatedDirectory[] = []
-  const relative = path.dirname(target.relative)
   let parent = target.workspace
-  let currentRelative = ""
+  if (path.isAbsolute(target.relative)) {
+    parent = path.dirname(target.absolute)
+    while (!(await resolveWorkspacePath(worktree, parent, authorizePath)).exists) parent = path.dirname(parent)
+  }
+  const relative = path.relative(parent, path.dirname(target.absolute))
+  let currentRelative = path.isAbsolute(target.relative) ? path.relative(target.workspace, parent) : ""
   try {
     for (const part of relative.split(path.sep).filter(Boolean)) {
       currentRelative = path.join(currentRelative, part)
       signal?.throwIfAborted()
       const expectedParent = await readFileIdentity(parent)
-      const next = await resolveWorkspacePath(worktree, currentRelative)
+      const component = path.isAbsolute(target.relative) ? path.resolve(target.workspace, currentRelative) : currentRelative
+      const next = await resolveWorkspacePath(worktree, component, authorizePath)
       if (!next.exists) {
         const actual = await readFileIdentity(parent)
         if (actual.device !== expectedParent.device || actual.inode !== expectedParent.inode) throw new PatchlineError("STALE_SNAPSHOT", "Create parent changed.")
@@ -39,7 +44,7 @@ export async function ensureParents(worktree: string, filePath: string, signal?:
         try { await mkdir(next.absolute); created = true } catch (cause) {
           if ((cause as NodeJS.ErrnoException).code !== "EEXIST") throw cause
         }
-        const checked = await resolveWorkspacePath(worktree, currentRelative)
+        const checked = await resolveWorkspacePath(worktree, component, authorizePath)
         if (normalizedIdentity(checked.canonical) !== normalizedIdentity(next.canonical)) throw new PatchlineError("STALE_SNAPSHOT", "Created parent changed.")
         if (created) directories.push({ absolute: checked.absolute, identity: await readFileIdentity(checked.absolute) })
       }
@@ -47,7 +52,7 @@ export async function ensureParents(worktree: string, filePath: string, signal?:
     }
     return directories
   } catch (cause) {
-    await cleanupParents(worktree, directories)
+    await cleanupParents(worktree, directories, authorizePath)
     throw cause
   }
 }

@@ -20,6 +20,15 @@ type CaptureCommand = (command: string, args: readonly string[]) => Promise<Comm
 type InstalledPackageSet = { packages: readonly string[]; global: boolean }
 type PackageFileSnapshot = { path: string; source: string | undefined }
 
+export function patchHostToolSelection(source: string): string {
+  const patchFilter = "if (tool.id === ApplyPatchTool.id) return usePatch"
+  const editFilter = "if (tool.id === EditTool.id || tool.id === WriteTool.id) return !usePatch"
+  const patchedPatch = "if (tool.id === ApplyPatchTool.id) return true"
+  const patchedEdit = "if (tool.id === EditTool.id || tool.id === WriteTool.id) return true"
+  if (source.includes(patchedPatch) && source.includes(patchedEdit)) return source
+  if (!source.includes(patchFilter) || !source.includes(editFilter)) throw new Error("Unsupported OpenCode tool selection; host not changed.")
+  return source.replace(patchFilter, patchedPatch).replace(editFilter, patchedEdit)
+}
 export type InstallerOptions = {
   cwd?: string
   global?: boolean
@@ -618,7 +627,7 @@ export function integratedHostVersion(upstream: string, plugin: string): string 
   const stable = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
   const packageVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
   if (!stable.test(upstream) || !packageVersion.test(plugin)) throw new Error("Invalid upstream or Patchline version.")
-  return `${upstream}+patchline.${plugin}`
+  return `${upstream}+patchline.${plugin}.tools1`
 }
 
 export function patchHostUpdates(source: string, cli: string): string {
@@ -687,6 +696,10 @@ async function ensureVisualHost(options: InstallerOptions): Promise<(() => Promi
       .replace("      </Switch>", `      </Switch>${newline}      </pluginRuntime.Slot>`)
     await commitConfigurations([{ ...session, text: session.source.slice(0, start) + replaced + session.source.slice(end) }], (file) => output(options, `Backup: ${file}`))
   }
+  const registry = await readSnapshot(path.join(host, "packages", "opencode", "src", "tool", "registry.ts"))
+  if (!registry) throw new Error("Missing OpenCode tool registry.")
+  const registryText = patchHostToolSelection(registry.source)
+  if (registryText !== registry.source) await commitConfigurations([{ ...registry, text: registryText }], (file) => output(options, `Backup: ${file}`))
   output(options, "Installing/updating the OpenCode conversation UI host (this may take several minutes).")
   const upgradeFile = await readSnapshot(path.join(host, "packages", "opencode", "src", "installation", "index.ts"))
   if (!upgradeFile) throw new Error("Missing OpenCode upgrade adapter.")

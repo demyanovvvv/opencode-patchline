@@ -4,22 +4,28 @@ Status: Accepted
 
 `read` accepts `filePath`, `offset`, and `limit`. Supplied `offset` and `limit`
 values must be positive integers; invalid direct service calls are rejected
-instead of silently clamped. `limit` is capped by the configured
-`maxInitialReadLines` bound. For files it returns a snapshot
-tag and numbered source lines. For directories it returns sorted entries and no
-snapshot; an empty directory accepts only its initial offset of 1. Empty files
-report zero source lines. `edit` accepts `filePath`, `snapshot`, and either
+instead of silently clamped. `maxInitialReadLines` controls the default file page
+and directory page cap. Explicit file limits may request up to 2,000 lines.
+File reads return a snapshot tag and numbered source lines. Directory reads
+return sorted entries without a snapshot; empty directories accept offset 1.
+Empty files report zero source lines. File pages are bounded to 20,000 characters
+and include only complete source lines. Responses expose `requestedLimit`,
+`truncated`, and `nextOffset`; only rendered lines become observed anchors.
+`edit` accepts `filePath`, `snapshot`, and either
 `oldString`/`newString` or a Hashline patch. `write` accepts `filePath` and
 `content`, creating only new files. `patchline_execute` accepts a list of
 snapshot-anchored operations and selects exact, Hashline, recoverable batch, or
-standard-tool fallback execution when `strategy` is `auto`. Every operation
-must include the snapshot returned by `read`. Large replacements are never
-applied through Hashline; the tool returns bounded `fallback_required` metadata
-with `strategy: "standard"` and asks the caller to use the standard OpenCode
-edit or apply_patch tool. The
-standalone `apply_patch` tool remains responsible for Hashline sections and
-new-file fallback handling. The adaptive tool never bypasses the existing
-edit/write safety services. Additional tools are `patchline_grep`,
+standard-tool fallback execution when `strategy` is `auto`. Precision mutations
+require a snapshot returned by `read`; explicit `strategy: "standard"` routes
+without a snapshot or a precision payload. Large replacements return metadata
+with `strategy: "standard"`, `nextTool: "apply_patch"`, and zero writes.
+The ordinary OpenCode `apply_patch` is not overridden or blocked by precision
+mode. Use it for large files, large changes, or unsupported precision operations.
+`patchline_apply_patch` handles snapshot-tagged Hashline sections and optional
+classic new-file fallback. Native patch attempts conservatively invalidate
+Patchline snapshots before and after execution, including partial failures.
+The adaptive tool never bypasses the existing edit/write safety services.
+Additional tools are `patchline_grep`,
 `patchline_lsp`, `ast_search`, `patchline_edit_batch`, and
 `patchline_diagnostics`.
 
@@ -77,7 +83,7 @@ truncated with an actionable narrowing hint. Grep results report skipped-file
 counts and bounded reasons for unreadable, unsupported-encoding, binary, or
 oversized files.
 
-`apply_patch` accepts snapshot-tagged Hashline sections for existing files. It
+`patchline_apply_patch` accepts snapshot-tagged Hashline sections for existing files. It
 rejects non-whitespace content before the first Hashline section before asking
 for edit permission. It
 also accepts classic `*** Add File` sections after preflighting that every path

@@ -5,6 +5,124 @@ import { PatchlinePlugin } from "../src/plugin.js"
 import { temporaryWorkspace } from "./helpers/workspace.js"
 
 describe("OpenCode plugin", () => {
+  it("routes explicit standard operations without requiring a Patchline snapshot", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const result = await hooks.tool!.patchline_execute!.execute({ strategy: "standard", operations: [{ filePath: "large.ts", snapshot: "" }] }, context)
+      expect(result).toMatchObject({ metadata: { status: "fallback_required", nextTool: "apply_patch", writes: 0 } })
+      expect(context.ask).not.toHaveBeenCalled()
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+  it("accepts unused empty exact fields for Hashline and no longer advertises patch strategy", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "hash.ts"), "one\ntwo\n")
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const first = await hooks.tool!.read!.execute({ filePath: "hash.ts" }, context) as unknown as { metadata: { snapshot: string; tag: string } }
+      const result = await hooks.tool!.patchline_execute!.execute({ strategy: "hashline", operations: [{ filePath: "hash.ts", snapshot: first.metadata.snapshot, oldString: "", newString: "", hashlinePatch: `[hash.ts#${first.metadata.tag}]\nPUT 1.=1:\n+changed` }] }, context)
+      expect(result).toMatchObject({ metadata: { status: "applied", writes: 1, files: expect.any(Array) } })
+      const strategy = hooks.tool!.patchline_execute!.args.strategy as unknown as { safeParse(value: string): { success: boolean } }
+      expect(strategy.safeParse("patch").success).toBe(false)
+      expect(await readFile(path.join(workspace.path, "hash.ts"), "utf8")).toBe("changed\ntwo\n")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+  it("rejects adaptive Hashline targets different from the declared operation", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "declared.ts"), "one\n")
+      await writeFile(path.join(workspace.path, "other.ts"), "two\n")
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const declared = await hooks.tool!.read!.execute({ filePath: "declared.ts" }, context) as unknown as { metadata: { snapshot: string } }
+      const other = await hooks.tool!.read!.execute({ filePath: "other.ts" }, context) as unknown as { metadata: { tag: string } }
+      await expect(hooks.tool!.patchline_execute!.execute({ strategy: "hashline", operations: [{ filePath: "declared.ts", snapshot: declared.metadata.snapshot, hashlinePatch: `[other.ts#${other.metadata.tag}]\nPUT 1.=1:\n+changed` }] }, context)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+      expect(await readFile(path.join(workspace.path, "other.ts"), "utf8")).toBe("two\n")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+  it("authorizes external file creation and search", async () => {
+    const workspace = await temporaryWorkspace()
+    const outside = await temporaryWorkspace()
+    try {
+      const filePath = path.join(outside.path, "nested", "source.ts")
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      await hooks.tool!.write!.execute({ filePath, content: "const external = true\n" }, context)
+      const result = await hooks.tool!.patchline_grep!.execute({ path: filePath, pattern: "external" }, context)
+      expect(typeof result === "string" ? result : result.output).toContain("external")
+      expect(await readFile(filePath, "utf8")).toBe("const external = true\n")
+    } finally {
+      await outside.cleanup()
+      await workspace.cleanup()
+    }
+  })
+  it("invalidates observed snapshots before a native patch can partially change files", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "native.ts"), "before\n")
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const first = await hooks.tool!.read!.execute({ filePath: "native.ts" }, context) as unknown as { metadata: { snapshot: string } }
+      await hooks["tool.execute.before"]?.({ tool: "apply_patch", sessionID: "s", callID: "c" }, { args: { patchText: "*** Begin Patch\n*** Update File: native.ts\n-before\n+after\n*** End Patch" } })
+      await expect(hooks.tool!.edit!.execute({ filePath: "native.ts", snapshot: first.metadata.snapshot, oldString: "before", newString: "after" }, context)).rejects.toMatchObject({ code: "SNAPSHOT_NOT_FOUND" })
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+  it("authorizes external reads and edits without changing the snapshot worktree scope", async () => {
+    const workspace = await temporaryWorkspace()
+    const outside = await temporaryWorkspace()
+    try {
+      const filePath = path.join(outside.path, "config.json")
+      await writeFile(filePath, "{\n  \"value\": 1\n}\n")
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const ask = vi.fn(async () => undefined)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask }
+      const first = await hooks.tool!.read!.execute({ filePath }, context) as unknown as { metadata: { snapshot: string } }
+      await hooks.tool!.edit!.execute({ filePath, snapshot: first.metadata.snapshot, oldString: "1", newString: "2" }, context)
+      expect(await readFile(filePath, "utf8")).toContain("\"value\": 2")
+      expect(ask).toHaveBeenCalledWith(expect.objectContaining({ permission: "external_directory" }))
+      const denied = { ...context, ask: vi.fn(async (request: { permission: string }) => { if (request.permission === "external_directory") throw new Error("denied") }) }
+      await expect(hooks.tool!.read!.execute({ filePath }, denied)).rejects.toThrow("denied")
+    } finally {
+      await outside.cleanup()
+      await workspace.cleanup()
+    }
+  })
+  it("leaves the native apply_patch available for existing files in precision mode", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "native.ts"), "before\n")
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      expect(hooks.tool).not.toHaveProperty("apply_patch")
+      expect(hooks.tool).toHaveProperty("patchline_apply_patch")
+      await expect(hooks["tool.execute.before"]?.({ tool: "apply_patch", sessionID: "s", callID: "c" }, { args: { patchText: "*** Begin Patch\n*** Update File: native.ts\n-before\n+after\n*** End Patch" } })).resolves.toBeUndefined()
+    } finally {
+      await workspace.cleanup()
+    }
+  })
+  it("accepts an exact deletion with an empty unused Hashline field", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "empty-field.ts"), "keep\nremove\nkeep too\nend\n")
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
+      const first = await hooks.tool!.read!.execute({ filePath: "empty-field.ts" }, context) as unknown as { metadata: { snapshot: string } }
+      const result = await hooks.tool!.patchline_execute!.execute({ strategy: "exact", operations: [{ filePath: "empty-field.ts", snapshot: first.metadata.snapshot, oldString: "remove\n", newString: "", hashlinePatch: "" }] }, context)
+      expect(result).toMatchObject({ metadata: { status: "applied", writes: 1 } })
+      expect(await readFile(path.join(workspace.path, "empty-field.ts"), "utf8")).toBe("keep\nkeep too\nend\n")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
   it.each([
     "cat input.txt > output.txt",
     "printf 'bad' > output.txt",
@@ -27,7 +145,7 @@ describe("OpenCode plugin", () => {
     const workspace = await temporaryWorkspace()
     try {
       const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
-      expect(Object.keys(hooks.tool ?? {})).toEqual(expect.arrayContaining(["read", "edit", "write", "apply_patch", "patchline_execute", "ast_search", "patchline_lsp"]))
+      expect(Object.keys(hooks.tool ?? {})).toEqual(expect.arrayContaining(["read", "edit", "write", "patchline_apply_patch", "patchline_execute", "ast_search", "patchline_lsp"]))
       await expect(hooks["tool.execute.before"]?.(
         { tool: "bash", sessionID: "s", callID: "c" },
         { args: { command: "Set-Content -Path a.ts -Value bad" } },
@@ -379,7 +497,7 @@ describe("OpenCode plugin", () => {
         ask: vi.fn(async () => undefined),
       }
 
-      const output = await hooks.tool!.apply_patch!.execute({ patchText }, context)
+      const output = await hooks.tool!.patchline_apply_patch!.execute({ patchText }, context)
       expect(typeof output === "string" ? output : output.output).toHaveLength(20_000)
       expect(typeof output === "string" ? output : output.output).toContain("Output truncated")
       expect(await readFile(path.join(workspace.path, files.at(-1)!), "utf8")).toBe("")
@@ -404,7 +522,7 @@ describe("OpenCode plugin", () => {
         ask,
       }
 
-      await expect(hooks.tool!.apply_patch!.execute({ patchText: `*** Begin Patch\n*** Add File: oversized.ts\n+${"x".repeat(8 * 1024 * 1024)}\n*** End Patch` }, context)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+      await expect(hooks.tool!.patchline_apply_patch!.execute({ patchText: `*** Begin Patch\n*** Add File: oversized.ts\n+${"x".repeat(8 * 1024 * 1024)}\n*** End Patch` }, context)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
       expect(ask).not.toHaveBeenCalled()
     } finally {
       await workspace.cleanup()
@@ -452,7 +570,7 @@ describe("OpenCode plugin", () => {
     try {
       const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
       const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
-      const created = await hooks.tool!.apply_patch!.execute({ patchText: "*** Begin Patch\n*** Add File: blank.ts\n+first\n+\n+last\n*** End Patch" }, context)
+      const created = await hooks.tool!.patchline_apply_patch!.execute({ patchText: "*** Begin Patch\n*** Add File: blank.ts\n+first\n+\n+last\n*** End Patch" }, context)
       expect(created).toMatchObject({ metadata: { writes: 1, files: [{ additions: 3, deletions: 0 }] } })
       const observed = await hooks.tool!.read!.execute({ filePath: "blank.ts" }, context)
       const edited = await hooks.tool!.edit!.execute({ filePath: "blank.ts", snapshot: String(typeof observed === "string" ? "" : observed.metadata?.snapshot), oldString: "first", newString: "x".repeat(25_000) }, context)
@@ -477,10 +595,10 @@ describe("OpenCode plugin", () => {
         metadata: vi.fn(),
         ask: vi.fn(async () => undefined),
       }
-      const result = await hooks.tool!.apply_patch!.execute({ patchText: "*** Begin Patch\n*** Add File: created.ts\n+export {}\n*** End Patch" }, context)
+      const result = await hooks.tool!.patchline_apply_patch!.execute({ patchText: "*** Begin Patch\n*** Add File: created.ts\n+export {}\n*** End Patch" }, context)
       expect(typeof result === "string" ? result : result.output).toContain("Created: created.ts")
       expect(result).toMatchObject({ metadata: { files: [expect.objectContaining({ type: "add", relativePath: "created.ts", patch: expect.stringContaining("+export {}") })] } })
-      await expect(hooks.tool!.apply_patch!.execute({ patchText: "*** Begin Patch\n*** Update File: created.ts\n-old\n+new\n*** End Patch" }, context)).rejects.toMatchObject({ code: "FALLBACK_REJECTED" })
+      await expect(hooks.tool!.patchline_apply_patch!.execute({ patchText: "*** Begin Patch\n*** Update File: created.ts\n-old\n+new\n*** End Patch" }, context)).rejects.toMatchObject({ code: "FALLBACK_REJECTED" })
       expect(context.metadata).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ status: "failed", code: "FALLBACK_REJECTED", stage: "preflight" }) }))
     } finally {
       await workspace.cleanup()
@@ -503,7 +621,7 @@ describe("OpenCode plugin", () => {
       }
       const patchText = "*** Begin Patch\n*** Add File: accepted.ts\n+export {}\n*** End Patch\n*** Add File: trailing.ts\n+export {}"
 
-      await expect(hooks.tool!.apply_patch!.execute({ patchText }, context)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+      await expect(hooks.tool!.patchline_apply_patch!.execute({ patchText }, context)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
       await expect(readFile(path.join(workspace.path, "accepted.ts"), "utf8")).rejects.toMatchObject({ code: "ENOENT" })
       await expect(readFile(path.join(workspace.path, "trailing.ts"), "utf8")).rejects.toMatchObject({ code: "ENOENT" })
     } finally {
@@ -527,7 +645,7 @@ describe("OpenCode plugin", () => {
         ask,
       }
 
-      await expect(hooks.tool!.apply_patch!.execute({ patchText: "ignored prefix\n[missing.ts#ABCD]\nPUT 1:1\n+value" }, context)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+      await expect(hooks.tool!.patchline_apply_patch!.execute({ patchText: "ignored prefix\n[missing.ts#ABCD]\nPUT 1:1\n+value" }, context)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
       expect(ask).not.toHaveBeenCalled()
     } finally {
       await workspace.cleanup()
@@ -661,7 +779,7 @@ describe("OpenCode plugin", () => {
     const workspace = await temporaryWorkspace()
     try {
       const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { applyPatchFallback: false })
-      await expect(hooks.tool!.apply_patch!.execute({ patchText: "*** Begin Patch\n*** Add File: created.ts\n+export {}\n*** End Patch" }, {
+      await expect(hooks.tool!.patchline_apply_patch!.execute({ patchText: "*** Begin Patch\n*** Add File: created.ts\n+export {}\n*** End Patch" }, {
         sessionID: "s",
         messageID: "m",
         agent: "build",
@@ -740,14 +858,14 @@ describe("OpenCode plugin", () => {
       const context = { sessionID: "s", messageID: "m", agent: "build", directory: workspace.path, worktree: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) }
       let result
       if (kind === "write") result = await hooks.tool!.write!.execute({ filePath: "a.ts", content: "before\n" }, context)
-      else if (kind === "classic") result = await hooks.tool!.apply_patch!.execute({ patchText: "*** Begin Patch\n*** Add File: a.ts\n+before\n*** End Patch" }, context)
+      else if (kind === "classic") result = await hooks.tool!.patchline_apply_patch!.execute({ patchText: "*** Begin Patch\n*** Add File: a.ts\n+before\n*** End Patch" }, context)
       else {
         await writeFile(path.join(workspace.path, "a.ts"), "before\n")
         const read = await hooks.tool!.read!.execute({ filePath: "a.ts" }, context)
         const snapshot = typeof read === "string" ? "" : String(read.metadata?.snapshot)
         const tag = typeof read === "string" ? "" : String(read.metadata?.tag)
         result = kind === "hashline"
-          ? await hooks.tool!.apply_patch!.execute({ patchText: `[a.ts#${tag}]\nPUT 1.=1:\n+after` }, context)
+          ? await hooks.tool!.patchline_apply_patch!.execute({ patchText: `[a.ts#${tag}]\nPUT 1.=1:\n+after` }, context)
           : await hooks.tool!.patchline_edit_batch!.execute({ edits: [{ filePath: "a.ts", snapshot, oldString: "before", newString: "after" }] }, context)
       }
       expect(result).toMatchObject({ metadata: { status: "applied", writes: 1, validation: "failed" } })

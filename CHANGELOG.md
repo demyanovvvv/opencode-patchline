@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Kept native OpenCode `apply_patch` available in precision mode; moved Hashline
+  editing to `patchline_apply_patch` and invalidate snapshots around native patches.
+- Accepted empty unused adaptive fields without rejecting exact deletions.
+- Added adaptive and Hashline conversation slots and bounded Hashline diffs.
+- Honored explicit file read ranges up to 2,000 lines with bounded continuation.
+- Authorized absolute external read/edit paths through OpenCode permissions while
+  preserving traversal, workspace symlink escape, identity and stale guards.
 - Added compensating installer rollback for plugin registration, owned local/global
   dependencies, LSP configuration, and runtime state after partial failures.
 - Added versioned installer state metadata and repository ignores for machine-local

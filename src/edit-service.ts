@@ -156,7 +156,7 @@ export class EditService {
 
   private async assertDestination(prepared: PreparedEdit): Promise<void> {
     const destination = prepared.destination!
-    const current = await resolveWorkspacePath(prepared.request.worktree, destination.relative)
+    const current = await resolveWorkspacePath(prepared.request.worktree, destination.relative, prepared.request.authorizePath)
     if (normalizedIdentity(current.canonical) !== normalizedIdentity(destination.canonical) || current.exists) throw new PatchlineError("STALE_SNAPSHOT", `Move destination changed: ${destination.relative}.`, { path: destination.relative, retryable: true })
     await this.assertParent(destination.absolute, destination.parentIdentity)
   }
@@ -187,7 +187,7 @@ export class EditService {
       const identity = await readFileIdentity(prepared.backupPath)
       if (identity.device !== prepared.committedIdentity?.device || identity.inode !== prepared.committedIdentity?.inode || digestBytes(await readFile(prepared.backupPath)) !== prepared.snapshot.rawDigest) throw new PatchlineError("STALE_SNAPSHOT", "Removal backup changed.")
       await this.assertParent(prepared.absolutePath, prepared.parentIdentity)
-      const current = await resolveWorkspacePath(prepared.request.worktree, prepared.request.filePath)
+      const current = await resolveWorkspacePath(prepared.request.worktree, prepared.request.filePath, prepared.request.authorizePath)
       if (current.exists || normalizedIdentity(current.canonical) !== normalizedIdentity(prepared.canonicalPath)) throw new PatchlineError("STALE_SNAPSHOT", "Removal source was replaced.")
       if (prepared.destinationIdentity) {
         const destination = prepared.destination!
@@ -205,7 +205,7 @@ export class EditService {
     }
     const expectedIdentity = prepared.committedIdentity
     if (!expectedIdentity) throw new PatchlineError("TRANSACTION_FAILED", `Missing landed identity for ${prepared.snapshot.relativePath}.`)
-    const currentPath = await resolveWorkspacePath(prepared.request.worktree, prepared.request.filePath)
+    const currentPath = await resolveWorkspacePath(prepared.request.worktree, prepared.request.filePath, prepared.request.authorizePath)
     if (!currentPath.exists || normalizedIdentity(currentPath.canonical) !== normalizedIdentity(prepared.canonicalPath)) {
       throw new PatchlineError("STALE_SNAPSHOT", `Rollback target changed: ${prepared.snapshot.relativePath}.`, {
         path: prepared.snapshot.relativePath,
@@ -242,7 +242,7 @@ export class EditService {
   }
 
   protected async prepareResult(request: EditRequest, transform: (snapshot: FileSnapshot) => Promise<{ text: string; warnings: string[] }>, allowUnchanged = false): Promise<PreparedEdit> {
-    const resolved = await resolveWorkspacePath(request.worktree, request.filePath)
+    const resolved = await resolveWorkspacePath(request.worktree, request.filePath, request.authorizePath)
     if (!resolved.exists) throw new PatchlineError("FILE_NOT_FOUND", `File not found: ${request.filePath}`, { path: request.filePath })
     const snapshot = this.snapshots.get(request, resolved.canonical, request.snapshot)
     if (!snapshot) {
@@ -291,7 +291,7 @@ export class EditService {
   }
 
   protected async assertPreparedCurrent(prepared: PreparedEdit): Promise<void> {
-    const currentPath = await resolveWorkspacePath(prepared.request.worktree, prepared.request.filePath)
+    const currentPath = await resolveWorkspacePath(prepared.request.worktree, prepared.request.filePath, prepared.request.authorizePath)
     if (!currentPath.exists) {
       throw new PatchlineError("FILE_NOT_FOUND", `Edit target disappeared after preflight: ${prepared.snapshot.relativePath}`, {
         path: prepared.snapshot.relativePath,
@@ -343,7 +343,7 @@ export class EditService {
     const occupied = new Set<string>()
     for (const section of sections) {
       signal?.throwIfAborted()
-      const resolved = await resolveWorkspacePath(scope.worktree, section.path)
+      const resolved = await resolveWorkspacePath(scope.worktree, section.path, scope.authorizePath)
       const key = normalizedIdentity(resolved.canonical)
       if (occupied.has(key)) throw new PatchlineError("INVALID_ARGUMENT", `Duplicate Hashline target: ${section.path}`)
       occupied.add(key)
@@ -377,7 +377,7 @@ export class EditService {
       if (removing && snapshot.text.split("\n").some((line, row) => (line.length > 0 || row < snapshot.text.split("\n").length - 1) && !snapshot.seenLines.has(row + 1))) throw new PatchlineError("INVALID_ANCHOR", `Read all lines before removing ${snapshot.relativePath}.`)
       if (removing) item.removed = false
       if (result.moveDest) {
-        const destination = await resolveWorkspacePath(scope.worktree, result.moveDest)
+        const destination = await resolveWorkspacePath(scope.worktree, result.moveDest, scope.authorizePath)
         if (destination.exists) throw new PatchlineError("WRITE_PROTECTED", `Move destination already exists: ${result.moveDest}`)
         if (this.config.protectGeneratedFiles && isGeneratedFile(destination.relative, this.config.generatedPatterns)) throw new PatchlineError("GENERATED_FILE", `Generated move destination: ${destination.relative}`)
         if (occupied.has(normalizedIdentity(destination.canonical))) throw new PatchlineError("INVALID_ARGUMENT", `Move destination overlaps another section: ${destination.relative}`)

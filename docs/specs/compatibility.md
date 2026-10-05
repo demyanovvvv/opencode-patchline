@@ -13,3 +13,14 @@ Current verified dependencies are `@opencode-ai/plugin@1.18.30` and
 runtime targets Bun. Node installations retain exact edits and linear PUT/CUT
 Hashline edits through the guarded fallback; structural blocks, registers, and
 file operations remain capability-gated and report through doctor.
+
+The integrated conversation host preserves native `apply_patch`, `edit`, and
+`write` availability for every model. Its installer recognizes the pinned
+upstream model-selection branches, applies an idempotent replacement, and
+rejects unknown source shapes before installing a new binary. Stock hosts may
+still filter native `apply_patch` by model; restart/rebuild the integrated host
+after this migration to enable the fallback for non-GPT models.
+The integrated build carries a `.tools1` revision suffix so an older binary
+with the same package version is migrated instead of skipped. `smoke:host`
+copies the installed executable into an isolated PATH and builds/installs there;
+the default lifecycle smoke checks registration and removal via command injection.

@@ -8,6 +8,15 @@ workflow while enforcing correctness in deterministic tooling instead of relying
 only on model instructions.
 
 **Package version: `1.2.0`** — see `CHANGELOG.md` for release details.
+### Working-version migration
+
+OpenCode's ordinary `apply_patch` remains available for large files, large changes,
+and operations beyond Patchline's capabilities. Hashline calls now use
+`patchline_apply_patch`; migrate previous Hashline `apply_patch` calls accordingly.
+Explicit file reads may request up to 2,000 lines; bounded pages expose the next
+offset and observe only displayed lines. Absolute external read/edit targets
+require OpenCode `external_directory` and operation-specific permissions.
+Fully restart OpenCode after updating the plugin.
 
 ## What it provides
 
@@ -21,7 +30,7 @@ only on model instructions.
 - Literal text search, AST structural search and an OpenCode LSP bridge.
 - Permission-aware diagnostics and configured post-edit validation.
 - OpenCode-native unified diff metadata for edits and patch batches, with bounded computation and previews.
-- Themed conversation cards for all eleven tools: animated status, footer disclosure, progressive output and independently expandable native diffs.
+- Themed conversation cards, including `patchline_execute` and `patchline_apply_patch`, with progress, disclosures and bounded diffs.
 - `precision`, `compatibility` and `disabled` runtime modes.
 - A doctor command, benchmark, package smoke test and OpenCode plugin smoke test.
 

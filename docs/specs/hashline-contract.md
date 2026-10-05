@@ -2,8 +2,8 @@
 
 Status: Accepted
 
-Patchline uses the current `@oh-my-pi/hashline` section format for existing
-files:
+`patchline_apply_patch` uses the current `@oh-my-pi/hashline` section format for
+existing files. Ordinary OpenCode `apply_patch` retains its classic patch format:
 
 ```text
 [path/to/file.ts#TAG]

@@ -44,14 +44,19 @@ function boundedMutationOutput(output: string): string {
 const POLICY = `PATCHLINE EDITING POLICY
 - Locate before broad reads; use LSP for symbols, grep for text, and AST for structure.
 - Read the smallest useful source range.
-- Existing files require snapshot-anchored edit; never rewrite one for a local change.
-- Use Hashline sections: [PATH#TAG], PUT ranges or blocks, PUT gaps, CUT, registers, REM, and MV.
+- Existing files edited through Patchline require a snapshot; preserve unrelated code.
+- Use patchline_apply_patch for Hashline: [PATH#TAG] followed by PUT N.=M: and +TEXT payload rows, CUT N.=M, or PUT <N:/PUT >N: insertions.
+- Use the ordinary apply_patch tool for large files, large changes, or operations unsupported by Patchline. Native patches do not require a Patchline snapshot.
+- After a native patch, read changed files again before using Patchline snapshots.
 - Line numbers refer to the original snapshot; every section requires the tag returned by read.
 - Preserve unrelated code and formatting. If a snapshot is stale, reread before retrying.
 - Run relevant diagnostics and proportional validation after edits.`
 
-function scope(context: ToolContext) {
-  return { sessionId: context.sessionID, worktree: context.worktree }
+function scope(context: ToolContext, permission = "edit") {
+  return { sessionId: context.sessionID, worktree: context.worktree, authorizePath: async (filePath: string) => {
+    await context.ask({ permission: "external_directory", patterns: [filePath], always: [filePath], metadata: { path: filePath, worktree: context.worktree } })
+    await context.ask({ permission, patterns: [filePath], always: [filePath], metadata: { path: filePath } })
+  } }
 }
 
 function publishMetadata(context: ToolContext, update: Parameters<ToolContext["metadata"]>[0]): void {
@@ -94,11 +99,6 @@ function toolError(error: unknown): Error {
   })
 }
 
-function parseApplyPatchPaths(patchText: string): string[] {
-  const paths: string[] = []
-  for (const match of patchText.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)) paths.push(match[1]!.trim())
-  return paths
-}
 
 async function splitHashlineSections(patchText: string) {
   if (!/^\[/m.test(patchText)) return []
@@ -172,7 +172,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             progress(context, "permission", args.filePath, { kind: "read", path: args.filePath })
             await context.ask({ permission: "read", patterns: [args.filePath], always: ["*"] , metadata: { path: args.filePath } })
             progress(context, "reading", args.filePath, { kind: "read", path: args.filePath })
-            const result = await reads.read({ ...scope(context), ...args })
+            const result = await reads.read({ ...scope(context, "read"), ...args })
             const lines = result.kind === "file" ? Math.max(0, result.endLine - result.offset + 1) : 0
             metrics.record({ name: "read", path: result.path, lines, bytes: result.output.length, durationMs: Date.now() - started, details: { totalLines: result.kind === "file" ? result.totalLines : result.totalEntries, selectedLines: lines, ...(result.kind === "file" ? { lineIndexReused: result.lineIndexReused } : {}) } })
             return result.kind === "file"
@@ -186,6 +186,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
                     snapshot: result.snapshot,
                     tag: result.tag,
                     lines,
+                    requestedLimit: result.requestedLimit, nextOffset: result.nextOffset, truncated: result.truncated, endLine: result.endLine,
                     bytesRendered: Buffer.byteLength(result.output, "utf8"),
                   },
                 }
@@ -220,7 +221,8 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
       hashlinePatch: tool.schema.string().optional(),
     },
     async execute(args, context) {
-      const exact = args.hashlinePatch === undefined && args.oldString !== undefined && args.newString !== undefined
+      const hashlinePatch = args.hashlinePatch?.trim() ? args.hashlinePatch : undefined
+      const exact = args.oldString !== undefined && args.newString !== undefined && !(hashlinePatch && args.oldString === "" && args.newString === "")
         ? { oldString: args.oldString, newString: args.newString, replaceAll: args.replaceAll }
         : undefined
       let stage = "permission"
@@ -230,7 +232,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         await context.ask({ permission: "edit", patterns: [args.filePath], always: ["*"] , metadata: { path: args.filePath } })
         stage = "preflight"
         progress(context, stage, args.filePath, { path: args.filePath })
-        const result = await edits.edit({ ...scope(context), filePath: args.filePath, snapshot: args.snapshot, exact, hashlinePatch: args.hashlinePatch }, (nextStage) => {
+        const result = await edits.edit({ ...scope(context), filePath: args.filePath, snapshot: args.snapshot, exact, hashlinePatch }, (nextStage) => {
           stage = nextStage
           progress(context, stage, args.filePath, { path: args.filePath })
         }, context.abort)
@@ -268,7 +270,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         await context.ask({ permission: "edit", patterns: [args.filePath], always: ["*"] , metadata: { path: args.filePath } })
         stage = "preflight"
         progress(context, stage, args.filePath, { path: args.filePath })
-        const result = await writes.write({ worktree: context.worktree, ...args }, context.abort)
+        const result = await writes.write({ ...scope(context), ...args }, context.abort)
         metrics.record({ name: "write", path: result.path, bytes: result.bytesWritten })
         stage = "validation"
         progress(context, stage, result.path, { writes: 1, path: result.path })
@@ -299,7 +301,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         patchline_execute: tool({
           description: "Execute snapshot-safe edits with automatic exact, Hashline, batch, or standard-tool fallback selection.",
           args: {
-            strategy: tool.schema.enum(["auto", "exact", "hashline", "batch", "patch", "standard"]).optional(),
+            strategy: tool.schema.enum(["auto", "exact", "hashline", "batch", "standard"]).optional(),
             operations: tool.schema.array(tool.schema.object({
               filePath: tool.schema.string(),
               snapshot: tool.schema.string().describe("Snapshot ID or Hashline tag returned by read"),
@@ -310,7 +312,16 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             })).min(1).max(500),
           },
           async execute(args, context) {
-            const operations = args.operations
+            if (args.strategy === "standard") return {
+              title: "Patchline · standard tool required",
+              output: "Use the ordinary apply_patch tool with a classic *** Begin Patch payload.",
+              metadata: { status: "fallback_required", stage: "fallback", strategy: "standard", nextTool: "apply_patch", requestedStrategy: "standard", paths: [...new Set(args.operations.map((operation) => operation.filePath))], writes: 0, recoveryAction: "Use ordinary apply_patch, then re-read changed files before further Patchline edits." },
+            }
+            const operations = args.operations.map((operation) => {
+              const hashlinePatch = operation.hashlinePatch?.trim() ? operation.hashlinePatch : undefined
+              const unusedExact = hashlinePatch !== undefined && operation.oldString === "" && operation.newString === ""
+              return { ...operation, hashlinePatch, oldString: unusedExact ? undefined : operation.oldString, newString: unusedExact ? undefined : operation.newString }
+            })
             if (operations.some((operation) => operation.snapshot === undefined || operation.snapshot.length === 0)) {
               throw new PatchlineError("INVALID_ARGUMENT", "Each adaptive mutation operation requires the snapshot returned by read.")
             }
@@ -323,18 +334,20 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
               const hasHashline = operation.hashlinePatch !== undefined
               return hasExactField !== hasExact || hasExact === hasHashline
             })) {
-              throw new PatchlineError("INVALID_ARGUMENT", "Each adaptive operation must provide exactly one complete exact or Hashline representation.")
+              const error = new PatchlineError("INVALID_ARGUMENT", "Provide oldString/newString OR hashlinePatch, never both. Omit unused fields; an empty newString is a valid deletion.")
+              failure(context, error, "preflight", paths[0], { paths, writes: 0 })
+              throw toolError(error)
             }
             if (hashlineOperations.length > 0 && hashlineOperations.length !== operations.length) {
               throw new PatchlineError("INVALID_ARGUMENT", "Adaptive execution cannot mix exact and Hashline operations.")
             }
-            if (args.strategy === "patch") {
+            if (String(args.strategy) === "patch") {
               throw new PatchlineError("INVALID_ARGUMENT", "Adaptive patch strategy is not supported; use apply_patch directly.")
             }
             const routingSnapshots = new Map<string, { text: string; totalLines: number }>()
             let changedLines = 0
             for (const operation of exactOperations) {
-              const resolved = await resolveWorkspacePath(context.worktree, operation.filePath)
+              const resolved = await resolveWorkspacePath(context.worktree, operation.filePath, scope(context).authorizePath)
               const snapshot = snapshots.get(scope(context), resolved.canonical, operation.snapshot!)
               if (!snapshot) continue
               routingSnapshots.set(resolved.canonical, { text: snapshot.text, totalLines: snapshot.lineIndex.totalLines })
@@ -358,26 +371,38 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             const selected = args.strategy === "auto" || args.strategy === undefined ? route.strategy : args.strategy
             progress(context, "planning", "Patchline · planning", { paths, strategy: selected, requestedStrategy: args.strategy ?? "auto", routeReason: route.reason, confidence: route.confidence })
             if (selected === "standard" || route.strategy === "standard") {
-              if (args.strategy !== undefined && args.strategy !== "auto" && args.strategy !== "standard") {
+              if (args.strategy !== undefined && args.strategy !== "auto" && String(args.strategy) !== "standard") {
                 throw new PatchlineError("STANDARD_TOOL_REQUIRED", "This change is too large for Patchline precision editing.", { details: { strategy: route.strategy, routeReason: route.reason, paths } })
               }
               return {
                 title: "Patchline · standard tool required",
-                output: "Large change detected. Use the standard OpenCode edit or apply_patch tool.",
-                metadata: { status: "fallback_required", stage: "fallback", strategy: "standard", requestedStrategy: args.strategy ?? "auto", confidence: route.confidence, routeReason: route.reason, paths, writes: 0, recoveryAction: "Use the standard OpenCode edit or apply_patch tool." },
+                output: "This operation exceeds Patchline precision limits. Use the ordinary apply_patch tool with a classic *** Begin Patch payload.",
+                metadata: { status: "fallback_required", stage: "fallback", strategy: "standard", nextTool: "apply_patch", requestedStrategy: args.strategy ?? "auto", confidence: route.confidence, routeReason: route.reason, paths, writes: 0, recoveryAction: "Use ordinary apply_patch, then re-read changed files before further Patchline edits." },
               }
             }
             if (selected === "hashline") {
               if (hashlineOperations.length !== 1 || operations.length !== 1) throw new PatchlineError("INVALID_ARGUMENT", "Hashline adaptive execution currently accepts exactly one hashlinePatch operation.")
               let stage = "permission"
               try {
+                const operation = hashlineOperations[0]!
+                const sections = await splitHashlineSections(operation.hashlinePatch!)
+                const declared = await resolveWorkspacePath(context.worktree, operation.filePath, scope(context).authorizePath)
+                const declaredSnapshot = snapshots.get(scope(context), declared.canonical, operation.snapshot)
+                for (const section of sections) {
+                  const target = await resolveWorkspacePath(context.worktree, section.path, scope(context).authorizePath)
+                  const targetSnapshot = snapshots.get(scope(context), target.canonical, section.tag)
+                  if (!declaredSnapshot || declaredSnapshot !== targetSnapshot || declared.canonical !== target.canonical) throw new PatchlineError("INVALID_ARGUMENT", "Adaptive Hashline sections must match the declared filePath and snapshot. Use patchline_apply_patch for multiple files.", { path: section.path })
+                }
+                const actualPaths = [...new Set(sections.flatMap((section) => [section.path, ...(section.fileOp?.kind === "move" ? [section.fileOp.dest] : [])]))]
+                await context.ask({ permission: "edit", patterns: actualPaths, always: ["*"], metadata: { paths: actualPaths, strategy: selected } })
                 await context.ask({ permission: "edit", patterns: paths, always: ["*"], metadata: { paths, strategy: selected } })
                 const result = await edits.applyHashline(scope(context), hashlineOperations[0]!.hashlinePatch!, (nextStage) => {
                   stage = nextStage
                   progress(context, stage, "Patchline · adaptive Hashline", { paths, strategy: selected })
                 }, context.abort)
+                const files = editFiles(result, context.worktree, "diff")
                 const validation = await validateMutation(context, result.map((item) => item.path))
-                return { title: "Patchline · adaptive Hashline", output: boundedMutationOutput(result.map((item) => item.output).join("\n\n")), metadata: { status: "applied", stage: "completed", strategy: selected, confidence: route.confidence, routeReason: route.reason, writes: result.length, paths: result.map((item) => item.path), ...validation } }
+                return { title: "Patchline · adaptive Hashline", output: boundedMutationOutput(result.map((item) => item.output).join("\n\n")), metadata: { status: "applied", stage: "completed", strategy: selected, confidence: route.confidence, routeReason: route.reason, writes: result.length, files, paths: result.map((item) => item.path), ...validation } }
               } catch (error) {
                 failure(context, error, stage, paths[0], { paths, strategy: selected })
                 throw toolError(error)
@@ -410,7 +435,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         read: readTool,
         edit: editTool,
         write: writeTool,
-        apply_patch: tool({
+        patchline_apply_patch: tool({
         description: "Apply one or more upstream Hashline sections linked to snapshots returned by read. Supports PUT ranges/gaps/structural blocks, CUT and named registers, same-path merges, REM, and MV. Existing files require [PATH#TAG]; line numbers refer to the original snapshot.",
         args: { patchText: tool.schema.string() },
         async execute(args, context) {
@@ -446,7 +471,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
               remaining -= preview.patch.length
               return { type: "add", path: file.path, relativePath: file.path, filePath: path.resolve(context.worktree, file.path), patch: preview.patch, diffTruncated: preview.truncated, additions: diffStats("", file.content).added, deletions: 0 }
             })
-            const created = await writes.createBatch(files.map((file) => ({ worktree: context.worktree, filePath: file.path, content: file.content })), observe, context.abort)
+            const created = await writes.createBatch(files.map((file) => ({ ...scope(context), filePath: file.path, content: file.content })), observe, context.abort)
             for (const result of created) metrics.record({ name: "write", path: result.path })
             applied = { writes: created.length, files: previews, added: previews.reduce((sum, file) => sum + file.additions, 0), deleted: 0 }
             stage = "validation"
@@ -489,7 +514,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             progress(context, "permission", "Patchline · literal search", { kind: "search", pattern: args.pattern, path: args.path })
             await context.ask({ permission: "grep", patterns: [args.pattern], always: ["*"] , metadata: { pattern: args.pattern, path: args.path } })
             progress(context, "searching", "Patchline · literal search", { kind: "search", pattern: args.pattern, path: args.path })
-            const result = await grepWorkspace({ worktree: context.worktree, pattern: args.pattern, path: args.path, include: args.include, maxResults: args.maxResults ?? config.maxSearchResults })
+            const result = await grepWorkspace({ ...scope(context, "read"), pattern: args.pattern, path: args.path, include: args.include, maxResults: args.maxResults ?? config.maxSearchResults })
             metrics.record({ name: "grep", lines: result.matches.length, durationMs: Date.now() - started, details: { skipped: result.skippedCount, truncated: result.truncated } })
             const skipped = result.skippedCount > 0 ? `\nSkipped ${result.skippedCount} file(s): ${[...new Set(result.skipped.map((item) => item.reason))].join(", ")}.` : ""
             const output = boundedSearchOutput(result.matches.length === 0 ? "No matches found." : `${result.matches.map((match) => `${path.relative(context.worktree, match.path)}:${match.line}: ${match.text}`).join("\n")}${result.truncated ? "\nResults truncated." : ""}`, skipped)
@@ -514,7 +539,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             progress(context, "permission", "Patchline · structural search", { kind: "search", pattern: args.pattern, path: args.filePath })
             await context.ask({ permission: "read", patterns: [args.filePath], always: ["*"] , metadata: { path: args.filePath } })
             progress(context, "searching", "Patchline · structural search", { kind: "search", pattern: args.pattern, path: args.filePath })
-            const result = await astSearchFile({ worktree: context.worktree, filePath: args.filePath, pattern: args.pattern, language: args.language, maxResults: args.maxResults ?? config.maxSearchResults })
+            const result = await astSearchFile({ ...scope(context, "read"), filePath: args.filePath, pattern: args.pattern, language: args.language, maxResults: args.maxResults ?? config.maxSearchResults })
             metrics.record({ name: "ast_search", lines: result.matches.length, durationMs: Date.now() - started, details: { truncated: result.truncated } })
             const output = result.matches.length === 0 ? "No structural matches found." : boundedSearchOutput(`${result.matches.map((match) => `${match.path}:${match.startLine}-${match.endLine}: ${match.text}`).join("\n")}${result.truncated ? "\nResults truncated." : ""}`)
             return { title: `Patchline · ${result.matches.length} structural matches`, output, metadata: { kind: "search", status: "observed", stage: "completed", path: args.filePath, pattern: args.pattern, language: args.language, resultCount: result.matches.length, truncated: result.truncated || output.includes("Results truncated") } }
@@ -643,18 +668,13 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
       output.system.push(POLICY)
     },
     async "tool.execute.before"(hookInput, output) {
-      if (config.mode === "precision" && hookInput.tool === "apply_patch" && typeof output.args?.patchText === "string" && output.args.patchText.includes("*** ")) {
-        for (const patchPath of parseApplyPatchPaths(output.args.patchText)) {
-          const resolved = await resolveWorkspacePath(input.worktree, patchPath)
-          if (resolved.exists) {
-            metrics.record({ name: "write_prevented", path: resolved.relative })
-            throw new PatchlineError("FALLBACK_REJECTED", `apply_patch cannot modify existing files while Patchline precision mode is active: ${resolved.relative}. Use read and edit.`)
-          }
-        }
-      }
+      if (hookInput.tool === "apply_patch") snapshots.clear()
       if (config.mode === "precision" && hookInput.tool === "bash" && config.guardShellWrites && typeof output.args?.command === "string" && looksLikeDirectShellWrite(output.args.command)) {
         throw new PatchlineError("FALLBACK_REJECTED", "Direct shell file writes are blocked in Patchline precision mode. Use write for new files or snapshot-anchored edit for existing files.")
       }
+    },
+    async "tool.execute.after"(hookInput) {
+      if (hookInput.tool === "apply_patch") snapshots.clear()
     },
     async dispose() {
       snapshots.clear()

@@ -22,6 +22,7 @@ export type WriteRequest = {
   worktree: string
   filePath: string
   content: string
+  authorizePath?: ((path: string) => Promise<void>) | undefined
 }
 
 export type PreparedWrite = WriteRequest & {
@@ -53,8 +54,8 @@ export class WriteService {
 
   protected async writeCreatedFile(item: PreparedWrite, onCreated?: (file: CreatedFile) => void): Promise<CreatedFile> {
     item.signal?.throwIfAborted()
-    item.directories = await ensureParents(item.worktree, item.filePath, item.signal)
-    const currentPath = await resolveWorkspacePath(item.worktree, item.filePath)
+    item.directories = await ensureParents(item.worktree, item.filePath, item.signal, item.authorizePath)
+    const currentPath = await resolveWorkspacePath(item.worktree, item.filePath, item.authorizePath)
     if (currentPath.exists || normalizedIdentity(currentPath.canonical) !== normalizedIdentity(item.canonicalPath)) {
       throw new PatchlineError("STALE_SNAPSHOT", `Create target changed after preflight: ${item.relativePath}.`, {
         path: item.relativePath,
@@ -100,7 +101,7 @@ export class WriteService {
 
   protected async removeCreatedFile(item: CreatedWrite): Promise<void> {
     if (!item.identity) throw new PatchlineError("STALE_SNAPSHOT", `Create rollback identity is unavailable: ${item.relativePath}.`, { path: item.relativePath, retryable: true })
-    const currentPath = await resolveWorkspacePath(item.worktree, item.filePath)
+    const currentPath = await resolveWorkspacePath(item.worktree, item.filePath, item.authorizePath)
     if (!currentPath.exists || normalizedIdentity(currentPath.canonical) !== normalizedIdentity(item.canonicalPath)) {
       throw new PatchlineError("STALE_SNAPSHOT", `Create rollback target changed: ${item.relativePath}.`, {
         path: item.relativePath,
@@ -122,13 +123,13 @@ export class WriteService {
       })
     }
     await rm(currentPath.absolute, { force: true })
-    await cleanupParents(item.worktree, item.directories ?? [])
+    await cleanupParents(item.worktree, item.directories ?? [], item.authorizePath)
   }
 
   async write(request: WriteRequest, signal?: AbortSignal): Promise<{ path: string; created: boolean; bytesWritten: number; output: string }> {
     signal?.throwIfAborted()
     assertWriteSize(request.content, request.filePath)
-    const resolved = await resolveWorkspacePath(request.worktree, request.filePath)
+    const resolved = await resolveWorkspacePath(request.worktree, request.filePath, request.authorizePath)
     if (resolved.exists && this.config.protectExistingWrites) {
       const allowed = matchesAllowedPath(resolved.relative, this.config.allowedFullReplacements)
       if (!allowed) {
@@ -156,7 +157,7 @@ export class WriteService {
         await this.writeCreatedFile(item, (file) => { created = { ...item, ...file } })
         signal?.throwIfAborted()
       } catch (cause) {
-        if (!created) { await cleanupParents(item.worktree, item.directories ?? []); throw cause }
+        if (!created) { await cleanupParents(item.worktree, item.directories ?? [], item.authorizePath); throw cause }
         const restored: string[] = []
         const conflicts: string[] = []
         try {
@@ -193,7 +194,7 @@ export class WriteService {
       if (totalBytes > MAX_WRITE_CONTENT_BYTES) {
         throw new PatchlineError("INVALID_ARGUMENT", "Create batch content exceeds the 8 MiB aggregate limit.")
       }
-      const resolved = await resolveWorkspacePath(request.worktree, request.filePath)
+      const resolved = await resolveWorkspacePath(request.worktree, request.filePath, request.authorizePath)
       if (resolved.exists) {
         throw new PatchlineError("WRITE_PROTECTED", `Existing file cannot be created through apply_patch: ${resolved.relative}. Use snapshot-anchored edit.`, {
           path: resolved.relative,
@@ -232,7 +233,7 @@ export class WriteService {
           conflicts.push(item.relativePath)
         }
       }
-      for (const item of [...prepared].reverse()) await cleanupParents(item.worktree, item.directories ?? [])
+      for (const item of [...prepared].reverse()) await cleanupParents(item.worktree, item.directories ?? [], item.authorizePath)
       const conflictMessage = conflicts.length > 0 ? ` Preserved external changes in: ${conflicts.join(", ")}.` : ""
       throw new PatchlineError("TRANSACTION_FAILED", `Create batch failed; removed ${restored.length} of ${created.size} partially created files.${conflictMessage}`, {
         cause,

@@ -3,6 +3,7 @@ import { testRender } from "@opentui/solid"
 import { createSignal } from "solid-js"
 import { PatchlineTui } from "../dist/tui.js"
 import { RGBA } from "@opentui/core"
+import { PatchlinePlugin } from "../dist/plugin.js"
 
 const [parts, setParts] = createSignal([])
 let slot
@@ -14,9 +15,12 @@ const api = {
   slots: { register: (value) => { registration = value; slot = value.slots.sidebar_content } },
 }
 await PatchlineTui(api)
+const server = await PatchlinePlugin({ directory: process.cwd(), worktree: process.cwd() })
+for (const tool of Object.keys(server.tool)) assert.equal(typeof registration.slots[`tool_${tool}`], "function", `${tool} must have a conversation renderer`)
+await server.dispose()
 Object.assign(api.theme.current, { warning: "#ffaa00", success: "#00cc66", error: "#ee3344", diffAdded: "#00cc66", diffRemoved: "#ee3344", diffAddedBg: "#113322", diffRemovedBg: "#331122", backgroundElement: "#222222", backgroundMenu: "#333333" })
 const borderColor = () => screen.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("│"))?.fg
-for (const tool of ["read", "edit", "write", "apply_patch", "patchline_edit_batch", "patchline_grep", "ast_search", "patchline_route_search", "patchline_lsp", "patchline_diagnostics", "patchline_summary"]) {
+for (const tool of ["read", "edit", "write", "apply_patch", "patchline_execute", "patchline_apply_patch", "patchline_edit_batch", "patchline_grep", "ast_search", "patchline_route_search", "patchline_lsp", "patchline_diagnostics", "patchline_summary"]) {
   assert.equal(typeof registration.slots[`tool_${tool}`], "function", `${tool} must have a conversation renderer`)
 }
 const screen = await testRender(() => slot({}, { session_id: "session" }), { width: 100, height: 40 })
