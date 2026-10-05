@@ -71,12 +71,33 @@ try {
         await new Promise((resolve) => setTimeout(resolve, 500))
       }
       assert.ok(ready, "Isolated host must start")
-      for (const model of ["gpt-5", "claude-sonnet-4", "gemini-2.5-pro"]) {
-        const response = await fetch(`http://127.0.0.1:${port}/experimental/tool?provider=anthropic&model=${model}`)
+      const matrix = [
+        ["openai", "gpt-5"], ["anthropic", "claude-sonnet-4"], ["google", "gemini-2.5-pro"],
+        ["zai", "glm-4.7"], ["deepseek", "deepseek-chat"], ["deepseek", "deepseek-reasoner"],
+        ["minimax", "MiniMax-M2.1"], ["alibaba", "qwen3-coder-plus"], ["moonshotai", "kimi-k2.5"],
+        ["openrouter", "z-ai/glm-4.7"], ["openrouter", "deepseek/deepseek-chat"],
+        ["openrouter", "minimax/minimax-m2.1"], ["openrouter", "qwen/qwen3-coder"],
+        ["omniroute", "glm-4.7"], ["omniroute", "deepseek-chat"],
+        ["omniroute", "MiniMax-M2.1"], ["omniroute", "qwen3-coder-plus"],
+      ]
+      let reference
+      for (const [provider, model] of matrix) {
+        const query = new URLSearchParams({ provider, model })
+        const response = await fetch(`http://127.0.0.1:${port}/experimental/tool?${query}`)
         if (!response.ok) assert.fail(await response.text())
         const tools = await response.json()
-        for (const id of ["apply_patch", "edit", "write"]) assert.ok(tools.some((tool) => tool.id === id), `${model}: missing ${id}`)
+        const required = ["apply_patch", "edit", "write", "read", "patchline_apply_patch", "patchline_execute", "patchline_edit_batch", "patchline_grep", "ast_search", "patchline_lsp", "patchline_diagnostics"]
+        const schemas = {}
+        for (const id of required) {
+          const tool = tools.find((tool) => tool.id === id)
+          assert.ok(tool, `${provider}/${model}: missing ${id}`)
+          assert.equal(tool.parameters.type, "object", `${id}: JSON object schema required`)
+          schemas[id] = tool.parameters
+        }
+        if (reference) assert.deepEqual(schemas, reference, `${provider}/${model}: unexpected schema divergence`)
+        else reference = schemas
       }
+      console.log(`Host registry/schema matrix passed: ${matrix.length} provider/model pairs`)
     } finally {
       if (server.exitCode === null) {
         const closed = new Promise((resolve) => server.once("close", resolve))

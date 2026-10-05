@@ -24,3 +24,14 @@ The integrated build carries a `.tools1` revision suffix so an older binary
 with the same package version is migrated instead of skipped. `smoke:host`
 copies the installed executable into an isolated PATH and builds/installs there;
 the default lifecycle smoke checks registration and removal via command injection.
+
+Tool availability and Patchline policy are provider-neutral: GLM, DeepSeek,
+MiniMax, Qwen, Kimi and future tool-capable models receive the same guarded
+editing contract. The system hook inserts its exact policy at most once and
+includes concrete JSON/exact/Hashline guidance without changing host prompts.
+The host smoke verifies native and Patchline tool object schemas for 17
+provider/model identifiers spanning direct providers, OpenRouter and OmniRoute.
+These are offline registry checks, not provider connectivity or model quality
+claims; remote inference and provider-side schema acceptance require configured
+credentials and separate API runs. Provider reasoning/schema transformations
+remain owned by OpenCode; Patchline does not disable them or weaken guards.

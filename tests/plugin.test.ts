@@ -5,6 +5,24 @@ import { PatchlinePlugin } from "../src/plugin.js"
 import { temporaryWorkspace } from "./helpers/workspace.js"
 
 describe("OpenCode plugin", () => {
+  it("provides one provider-neutral policy with concrete tool-call guidance", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      const output = { system: ["Existing host instructions"] }
+      const transform = hooks["experimental.chat.system.transform"]!
+      await transform({} as never, output)
+      await transform({} as never, output)
+      expect(output.system.filter((text) => text.startsWith("PATCHLINE EDITING POLICY"))).toHaveLength(1)
+      expect(output.system[0]).toBe("Existing host instructions")
+      expect(output.system[1]).toContain('"strategy":"exact"')
+      expect(output.system[1]).toContain("Omit unused optional fields")
+      expect(output.system[1]).toContain("*** Begin Patch")
+      expect(output.system[1]).toContain("never invent a snapshot")
+    } finally {
+      await workspace.cleanup()
+    }
+  })
   it("routes explicit standard operations without requiring a Patchline snapshot", async () => {
     const workspace = await temporaryWorkspace()
     try {

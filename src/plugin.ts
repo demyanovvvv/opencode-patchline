@@ -50,6 +50,12 @@ const POLICY = `PATCHLINE EDITING POLICY
 - After a native patch, read changed files again before using Patchline snapshots.
 - Line numbers refer to the original snapshot; every section requires the tag returned by read.
 - Preserve unrelated code and formatting. If a snapshot is stale, reread before retrying.
+- Call tools using JSON arguments, not prose or XML. Omit unused optional fields; newString: "" is an intentional deletion.
+- Copy filePath and snapshot from the latest read; never invent a snapshot or tag. Use only the lines shown by read.
+- Exact example (replace placeholders with the latest read): {"strategy":"exact","operations":[{"filePath":"src/example.ts","snapshot":"<snapshot from read>","oldString":"<observed text>","newString":"<replacement text>"}]}.
+- Hashline example: patchline_apply_patch({"patchText":"[src/example.ts#<tag from read>]\\nPUT 1.=1:\\n+replacement"}). Choose an observed line number; the example is not a reusable anchor.
+- Native apply_patch uses *** Begin Patch / *** Update File: path / @@ / -old / +new / *** End Patch, not Hashline PUT/CUT sections.
+- Inspect tool results before the next call. On stale or invalid anchors, read again; on fallback_required, use the reported nextTool. Never bypass rejected edits with shell writes.
 - Run relevant diagnostics and proportional validation after edits.`
 
 function scope(context: ToolContext, permission = "edit") {
@@ -665,7 +671,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
       }) } : {}),
     },
     async "experimental.chat.system.transform"(_hookInput, output) {
-      output.system.push(POLICY)
+      if (!output.system.includes(POLICY)) output.system.push(POLICY)
     },
     async "tool.execute.before"(hookInput, output) {
       if (hookInput.tool === "apply_patch") snapshots.clear()
