@@ -1,3 +1,5 @@
+import { PatchlineError } from "../errors.js"
+
 export type DiffStats = {
   added: number
   deleted: number
@@ -9,7 +11,9 @@ export function analyzeDiff(before: string, after: string, seenBefore: ReadonlyS
   const seenAfter = new Set<number>()
   let beforeLine = 1
   let afterLine = 1
-  for (const change of diffLines(before, after)) {
+  const changes = diffLines(before, after, { timeout: 100, maxEditLength: 2_000 })
+  if (!changes) throw new PatchlineError("STANDARD_TOOL_REQUIRED", "Diff analysis exceeded its budget; use the standard tool for this large change.")
+  for (const change of changes) {
     const count = chunkLineCount(change.value)
     if (change.added) {
       added += count

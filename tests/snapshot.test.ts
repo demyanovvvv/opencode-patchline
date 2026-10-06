@@ -4,29 +4,29 @@ import { ScopedSnapshotStore } from "../src/snapshot/store.js"
 
 describe("ScopedSnapshotStore", () => {
   it("evicts least-recently-used snapshots within a byte quota", () => {
-    const store = new ScopedSnapshotStore({ maxBytes: 30 })
+    const store = new ScopedSnapshotStore({ maxBytes: 50 })
     const scope = { sessionId: "s", worktree: "/w" }
     const first = store.record(scope, "/w/a.ts", "a.ts", decodeUtf8(Buffer.from("aaaa")), [])
     store.record(scope, "/w/b.ts", "b.ts", decodeUtf8(Buffer.from("bbbb")), [])
     store.get(scope, "/w/a.ts", first.id)
     store.record(scope, "/w/c.ts", "c.ts", decodeUtf8(Buffer.from("cccc")), [])
     expect(store.size).toBe(2)
-    expect(store.bytes).toBeLessThanOrEqual(30)
+    expect(store.bytes).toBeLessThanOrEqual(60)
     expect(store.get(scope, "/w/a.ts", first.id)).toBeDefined()
     store.clear()
     expect(store.bytes).toBe(0)
   })
 
   it("shares identical documents across snapshots without merging observation scopes", () => {
-    const store = new ScopedSnapshotStore({ maxBytes: 30 })
+    const store = new ScopedSnapshotStore({ maxBytes: 60 })
     const scope = { sessionId: "s", worktree: "/w" }
     const first = store.record(scope, "/w/a.ts", "a.ts", decodeUtf8(Buffer.from("same")), [1])
     const second = store.record({ ...scope, sessionId: "other" }, "/w/b.ts", "b.ts", decodeUtf8(Buffer.from("same")), [])
     expect(second.document).toBe(first.document)
     expect(second.seenLines.size).toBe(0)
-    expect(store.bytes).toBe(12)
+    expect(store.bytes).toBe(52)
     store.invalidate("/w/a.ts")
-    expect(store.bytes).toBe(12)
+    expect(store.bytes).toBe(20)
     store.invalidate("/w/b.ts")
     expect(store.bytes).toBe(0)
   })

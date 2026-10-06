@@ -152,7 +152,7 @@ export class ReadService {
     const snapshot = this.snapshots.record(request, resolved.canonical, resolved.relative, document, seenLines, {
       device: fileInfo.dev,
       inode: fileInfo.ino,
-    }, lineIndex)
+    }, lineIndex, lineIndexResult.rawDigest)
     const output = [
       `Path: ${displayPath}`,
       `Snapshot: ${snapshot.id}`,

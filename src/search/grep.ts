@@ -26,8 +26,10 @@ export async function grepWorkspace(input: {
   path?: string | undefined
   include?: string | undefined
   maxResults: number
+  signal?: AbortSignal | undefined
   authorizePath?: ((path: string) => Promise<void>) | undefined
 }): Promise<{ matches: GrepMatch[]; truncated: boolean; skipped: Array<{ path: string; reason: string }>; skippedCount: number }> {
+  input.signal?.throwIfAborted()
   if (!input.pattern) throw new PatchlineError("INVALID_ARGUMENT", "Search pattern is required.")
   if (!Number.isInteger(input.maxResults) || input.maxResults < 1 || input.maxResults > 500) {
     throw new PatchlineError("INVALID_ARGUMENT", "Search result limit must be an integer between 1 and 500.")
@@ -41,7 +43,7 @@ export async function grepWorkspace(input: {
   const scanFile = async (absolute: string): Promise<{ matches: GrepMatch[]; skipped?: { path: string; reason: string } }> => {
     const name = path.basename(absolute)
     const relative = path.relative(root.absolute, absolute).replaceAll("\\", "/")
-    const displayPath = path.resolve(input.worktree, relative || input.path || ".")
+    const displayPath = absolute
     if (include && !include.test(relative) && !include.test(name)) return { matches: [] }
     try {
       const document = decodeUtf8(await readBoundedUtf8Bytes(absolute, relative, MAX_SEARCH_FILE_BYTES), relative)
@@ -49,21 +51,26 @@ export async function grepWorkspace(input: {
       const lines = document.text.split(/\r?\n/)
       const fileMatches: GrepMatch[] = []
       for (let index = 0; index < lines.length; index++) {
+        input.signal?.throwIfAborted()
         if (lines[index]!.includes(input.pattern)) fileMatches.push({ path: displayPath, line: index + 1, text: matchPreview(lines[index]!) })
+        if (fileMatches.length > input.maxResults) break
       }
       return { matches: fileMatches }
     } catch (error) {
+      input.signal?.throwIfAborted()
       return { matches: [], skipped: { path: path.relative(input.worktree, displayPath).replaceAll("\\", "/"), reason: error instanceof PatchlineError ? error.code : "UNREADABLE" } }
     }
   }
   const files: string[] = []
   const collect = async (entryPath: string): Promise<void> => {
+    input.signal?.throwIfAborted()
     const directory = await opendir(entryPath)
     const entries: { name: string; absolute: string; isDirectory: boolean; isFile: boolean }[] = []
     let entryCount = 0
     try {
       while (true) {
         const entry = await directory.read()
+        input.signal?.throwIfAborted()
         if (entry === null) break
         entryCount++
         if (entryCount > MAX_DIRECTORY_ENTRIES) {
@@ -91,40 +98,28 @@ export async function grepWorkspace(input: {
     if (/[A-Za-z]/.test(character)) return `2${character}`
     return `0${character}`
   }).join("")
-  const comparePaths = (left: string, right: string): number => {
-    const leftKey = sortKey(path.relative(root.absolute, left).replaceAll("\\", "/"))
-    const rightKey = sortKey(path.relative(root.absolute, right).replaceAll("\\", "/"))
-    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0
-  }
   const fileInfo = await stat(root.absolute).catch(() => undefined)
   if (!fileInfo) throw new PatchlineError("FILE_NOT_FOUND", `Search path not found: ${root.relative}`, { path: root.relative })
   if (fileInfo.isDirectory()) await collect(root.absolute)
   else if (fileInfo.isFile()) files.push(root.absolute)
   else throw new PatchlineError("INVALID_ARGUMENT", `Search path must be a file or directory: ${root.relative}`)
-  files.sort(comparePaths)
-  const results = new Array<Awaited<ReturnType<typeof scanFile>>>(files.length)
-  let nextIndex = 0
-  const worker = async (): Promise<void> => {
-    while (true) {
-      const index = nextIndex++
-      if (index >= files.length) return
-      results[index] = await scanFile(files[index]!)
+  const ordered = files.map((file) => ({ file, key: sortKey(path.relative(root.absolute, file).replaceAll("\\", "/")) }))
+    .sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0)
+  search: for (let offset = 0; offset < ordered.length; offset += 8) {
+    input.signal?.throwIfAborted()
+    const results = await Promise.all(ordered.slice(offset, offset + 8).map(({ file }) => scanFile(file)))
+    for (const result of results) {
+      if (result.skipped) {
+        skippedCount++
+        if (skipped.length < 30) skipped.push(result.skipped)
+      }
+      const remaining = input.maxResults - matches.length
+      matches.push(...result.matches.slice(0, remaining))
+      if (result.matches.length > remaining) {
+        truncated = true
+        break search
+      }
     }
-  }
-  await Promise.all(Array.from({ length: Math.min(8, Math.max(1, files.length)) }, () => worker()))
-  for (const result of results) {
-    if (!result) continue
-    if (result.skipped) {
-      skippedCount++
-      if (skipped.length < 30) skipped.push(result.skipped)
-    }
-    if (matches.length >= input.maxResults) {
-      if (result.matches.length > 0) truncated = true
-      continue
-    }
-    const remaining = input.maxResults - matches.length
-    matches.push(...result.matches.slice(0, remaining))
-    if (result.matches.length > remaining) truncated = true
   }
   return { matches, truncated, skipped, skippedCount }
 }

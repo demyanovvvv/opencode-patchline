@@ -72,6 +72,7 @@ export class ScopedSnapshotStore {
     const snapshot = this.#snapshots.get(key)
     if (!snapshot) return
     this.#snapshots.delete(key)
+    this.#bytes -= snapshot.seenLines.size * 32
     const pooled = this.#documents.get(snapshot.rawDigest)
     if (pooled && --pooled.refs === 0) {
       this.#bytes -= pooled.bytes
@@ -86,11 +87,11 @@ export class ScopedSnapshotStore {
     }
   }
 
-  getOrBuildLineIndex(document: TextDocument): { index: LineIndex; reused: boolean } {
+  getOrBuildLineIndex(document: TextDocument): { index: LineIndex; reused: boolean; rawDigest: string } {
     const rawDigest = digestBytes(document.bytes)
     const pooled = this.#documents.get(rawDigest)
-    if (pooled) return { index: pooled.lineIndex, reused: true }
-    return { index: buildLineIndex(document.normalizedText), reused: false }
+    if (pooled) return { index: pooled.lineIndex, reused: true, rawDigest }
+    return { index: buildLineIndex(document.normalizedText), reused: false, rawDigest }
   }
 
   record(
@@ -101,16 +102,16 @@ export class ScopedSnapshotStore {
     seenLines: Iterable<number>,
     identity?: FileIdentity,
     lineIndex?: LineIndex,
+    rawDigest = digestBytes(document.bytes),
   ): FileSnapshot {
     this.cleanup()
     const tag = hashlineTag(document.normalizedText)
-    const rawDigest = digestBytes(document.bytes)
     const key = `${scopeKey(scope, canonicalPath, tag)}\0${rawDigest}`
     const existing = this.#snapshots.get(key)
     let pooled = this.#documents.get(rawDigest)
     if (!pooled) {
-      const pooledLineIndex = lineIndex ?? this.getOrBuildLineIndex(document).index
-      pooled = { document, lineIndex: pooledLineIndex, refs: 0, bytes: document.bytes.byteLength + 2 * document.text.length + (document.text === document.normalizedText ? 0 : 2 * document.normalizedText.length) }
+      const pooledLineIndex = lineIndex ?? buildLineIndex(document.normalizedText)
+      pooled = { document, lineIndex: pooledLineIndex, refs: 0, bytes: document.bytes.byteLength + 2 * document.text.length + (document.text === document.normalizedText ? 0 : 2 * document.normalizedText.length) + 8 * pooledLineIndex.starts.length }
       this.#documents.set(rawDigest, pooled)
       this.#bytes += pooled.bytes
     }
@@ -118,6 +119,7 @@ export class ScopedSnapshotStore {
     document = pooled.document
     const combined = new Set(existing?.seenLines ?? [])
     for (const line of seenLines) combined.add(line)
+    this.#bytes += (combined.size - (existing?.seenLines.size ?? 0)) * 32
     const snapshot: FileSnapshot = {
       ...scope,
       id: `${tag}-${rawDigest.slice(0, 12)}`,

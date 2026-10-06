@@ -19,9 +19,19 @@ import {
   integratedHostVersion,
   patchHostUpdates,
   patchHostToolSelection,
+  patchHostRenderer,
 } from "../src/installer.js"
 
 describe("Patchline installer", () => {
+  it("validates every host renderer anchor before patching", () => {
+    const source = 'function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMessage }) {\n  const ctx = use()\n  return (\n      <Switch>\n      </Switch>\n  )\n}\ntype ToolProps = {}'
+    const patched = patchHostRenderer(source)
+    expect(patched).toContain('name={`tool_${props.part.tool}`}')
+    expect(patchHostRenderer(patched)).toBe(patched)
+    for (const anchor of ["  const ctx = use()", "<Switch>", "</Switch>", "type ToolProps ="]) {
+      expect(() => patchHostRenderer(source.replace(anchor, "changed"))).toThrow(/Unsupported OpenCode/)
+    }
+  })
   it("keeps ordinary apply_patch visible across models in the integrated host", () => {
     const original = 'if (tool.id === ApplyPatchTool.id) return usePatch\nif (tool.id === EditTool.id || tool.id === WriteTool.id) return !usePatch'
     const result = patchHostToolSelection(original)

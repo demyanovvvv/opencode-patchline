@@ -520,7 +520,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             progress(context, "permission", "Patchline · literal search", { kind: "search", pattern: args.pattern, path: args.path })
             await context.ask({ permission: "grep", patterns: [args.pattern], always: ["*"] , metadata: { pattern: args.pattern, path: args.path } })
             progress(context, "searching", "Patchline · literal search", { kind: "search", pattern: args.pattern, path: args.path })
-            const result = await grepWorkspace({ ...scope(context, "read"), pattern: args.pattern, path: args.path, include: args.include, maxResults: args.maxResults ?? config.maxSearchResults })
+            const result = await grepWorkspace({ ...scope(context, "read"), pattern: args.pattern, path: args.path, include: args.include, maxResults: args.maxResults ?? config.maxSearchResults, signal: context.abort })
             metrics.record({ name: "grep", lines: result.matches.length, durationMs: Date.now() - started, details: { skipped: result.skippedCount, truncated: result.truncated } })
             const skipped = result.skippedCount > 0 ? `\nSkipped ${result.skippedCount} file(s): ${[...new Set(result.skipped.map((item) => item.reason))].join(", ")}.` : ""
             const output = boundedSearchOutput(result.matches.length === 0 ? "No matches found." : `${result.matches.map((match) => `${path.relative(context.worktree, match.path)}:${match.line}: ${match.text}`).join("\n")}${result.truncated ? "\nResults truncated." : ""}`, skipped)

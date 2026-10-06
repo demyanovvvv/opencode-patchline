@@ -8,6 +8,7 @@ import { isFileReadResult, ReadService } from "./read-service.js"
 import { ScopedSnapshotStore } from "./snapshot/store.js"
 import { WriteService } from "./write-service.js"
 import { DEFAULT_CONFIG } from "./config.js"
+import { supportsOpenCodeVersion } from "./opencode-version.js"
 
 export type CapabilityCheck = {
   name: string
@@ -16,18 +17,33 @@ export type CapabilityCheck = {
   severity?: "required" | "optional" | undefined
 }
 
-async function commandVersion(command: string, args: string[]): Promise<string | undefined> {
+export async function commandVersion(command: string, args: string[], timeoutMs = 10_000): Promise<string | undefined> {
   return new Promise((resolve) => {
     const child = spawn(command, args, { windowsHide: true, shell: process.platform === "win32" })
     let output = ""
-    child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+    let settled = false
+    const finish = (value?: string): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(value)
+    }
+    const stop = (): void => {
+      child.kill("SIGKILL")
+      child.stdout.destroy()
+      child.stderr.destroy()
+      finish()
+    }
+    const timer = setTimeout(stop, timeoutMs)
+    const append = (chunk: string): void => {
+      if (settled) return
+      if (output.length + chunk.length > 16_384) { stop(); return }
       output += chunk
-    })
-    child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
-      output += chunk
-    })
-    child.on("error", () => resolve(undefined))
-    child.on("close", (code) => resolve(code === 0 ? output.trim().split(/\s+/).at(-1) : undefined))
+    }
+    child.stdout.setEncoding("utf8").on("data", append)
+    child.stderr.setEncoding("utf8").on("data", append)
+    child.on("error", () => finish())
+    child.on("close", (code) => finish(code === 0 ? output.trim().split(/\s+/).at(-1) : undefined))
   })
 }
 
@@ -118,7 +134,7 @@ export async function inspectCapabilities(): Promise<CapabilityCheck[]> {
   await access(process.cwd())
   return [
     { name: "Node.js", severity: "required", ok: Number(process.versions.node.split(".")[0]) >= 20, detail: process.versions.node },
-    { name: "OpenCode", severity: "required", ok: opencode !== undefined, detail: opencode ?? "not found" },
+    { name: "OpenCode", severity: "required", ok: opencode !== undefined && supportsOpenCodeVersion(opencode), detail: opencode === undefined ? "not found" : supportsOpenCodeVersion(opencode) ? opencode : `Unsupported ${opencode}; expected >=1.18.0 <2` },
     { name: "OpenCode plugin SDK", severity: "required", ...plugin },
     { ...(await hashlineCheck()), severity: "optional" },
     { name: "AST search", severity: "optional", ...ast },

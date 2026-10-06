@@ -6,6 +6,7 @@ import { applyEdits, createScanner, findNodeAtLocation, modify, parse, parseTree
 import { executeCommand, type CommandResult } from "./installation/process.js"
 import { assertCurrent, backup, commitConfigurations, configurationFiles, globalConfigDirectory, installHostBinary, projectDirectory, readSnapshot, removeState, saveState, type FileChange, type FileSnapshot } from "./installation/files.js"
 import { configureLsp, removeOwnedLsp, type OwnedLsp } from "./installation/lsp.js"
+import { supportsOpenCodeVersion } from "./opencode-version.js"
 
 // jsonc-parser declares SyntaxKind as an ambient const enum, incompatible with verbatimModuleSyntax.
 const COMMA_TOKEN = 5
@@ -29,6 +30,23 @@ export function patchHostToolSelection(source: string): string {
   if (!source.includes(patchFilter) || !source.includes(editFilter)) throw new Error("Unsupported OpenCode tool selection; host not changed.")
   return source.replace(patchFilter, patchedPatch).replace(editFilter, patchedEdit)
 }
+export function patchHostRenderer(source: string): string {
+  if (source.includes('name={`tool_${props.part.tool}`}')) return source
+  const original = 'function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMessage }) {'
+  const start = source.indexOf(original)
+  const end = source.indexOf("type ToolProps =", start)
+  if (start < 0 || end < 0) throw new Error("Unsupported OpenCode tool renderer; UI host not changed.")
+  const block = source.slice(start, end)
+  const newline = source.includes("\r\n") ? "\r\n" : "\n"
+  for (const anchor of ["  const ctx = use()", "      <Switch>", "      </Switch>"]) {
+    if (block.split(anchor).length !== 2) throw new Error("Unsupported OpenCode tool renderer; UI host not changed.")
+  }
+  const replaced = block.replace("  const ctx = use()", `  const ctx = use()${newline}  const pluginRuntime = usePluginRuntime()`)
+    .replace("      <Switch>", `      <pluginRuntime.Slot name={\`tool_\${props.part.tool}\`} mode="replace" part={props.part} message={props.message} last={props.last}>${newline}      <Switch>`)
+    .replace("      </Switch>", `      </Switch>${newline}      </pluginRuntime.Slot>`)
+  return source.slice(0, start) + replaced + source.slice(end)
+}
+
 export type InstallerOptions = {
   cwd?: string
   global?: boolean
@@ -627,6 +645,7 @@ export function integratedHostVersion(upstream: string, plugin: string): string 
   const stable = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
   const packageVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
   if (!stable.test(upstream) || !packageVersion.test(plugin)) throw new Error("Invalid upstream or Patchline version.")
+  if (!supportsOpenCodeVersion(upstream)) throw new Error(`Unsupported OpenCode version: ${upstream}. Expected >=1.18.0 <2.`)
   return `${upstream}+patchline.${plugin}`
 }
 
@@ -685,16 +704,7 @@ async function ensureVisualHost(options: InstallerOptions): Promise<(() => Promi
   const session = await readSnapshot(path.join(host, "packages", "tui", "src", "routes", "session", "index.tsx"))
   if (!session) throw new Error("Missing OpenCode session renderer.")
   if (!session.source.includes('name={`tool_${props.part.tool}`}')) {
-    const original = 'function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMessage }) {'
-    const start = session.source.indexOf(original)
-    const end = session.source.indexOf("type ToolProps =", start)
-    if (start < 0 || end < 0) throw new Error("Unsupported OpenCode tool renderer; UI host not changed.")
-    const block = session.source.slice(start, end)
-    const newline = session.source.includes("\r\n") ? "\r\n" : "\n"
-    const replaced = block.replace("  const ctx = use()", `  const ctx = use()${newline}  const pluginRuntime = usePluginRuntime()`)
-      .replace("      <Switch>", `      <pluginRuntime.Slot name={\`tool_\${props.part.tool}\`} mode="replace" part={props.part} message={props.message} last={props.last}>${newline}      <Switch>`)
-      .replace("      </Switch>", `      </Switch>${newline}      </pluginRuntime.Slot>`)
-    await commitConfigurations([{ ...session, text: session.source.slice(0, start) + replaced + session.source.slice(end) }], (file) => output(options, `Backup: ${file}`))
+    await commitConfigurations([{ ...session, text: patchHostRenderer(session.source) }], (file) => output(options, `Backup: ${file}`))
   }
   const registry = await readSnapshot(path.join(host, "packages", "opencode", "src", "tool", "registry.ts"))
   if (!registry) throw new Error("Missing OpenCode tool registry.")
