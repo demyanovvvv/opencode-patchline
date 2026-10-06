@@ -627,7 +627,7 @@ export function integratedHostVersion(upstream: string, plugin: string): string 
   const stable = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
   const packageVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
   if (!stable.test(upstream) || !packageVersion.test(plugin)) throw new Error("Invalid upstream or Patchline version.")
-  return `${upstream}+patchline.${plugin}.tools1`
+  return `${upstream}+patchline.${plugin}`
 }
 
 export function patchHostUpdates(source: string, cli: string): string {

@@ -31,9 +31,9 @@ describe("Patchline installer", () => {
     expect(() => patchHostToolSelection("unsupported")).toThrow("Unsupported OpenCode")
   })
   it("derives integrated versions independently from upstream and plugin versions", () => {
-    expect(integratedHostVersion("1.18.34", "1.1.0")).toBe("1.18.34+patchline.1.1.0.tools1")
-    expect(integratedHostVersion("1.18.35", "1.1.0")).toBe("1.18.35+patchline.1.1.0.tools1")
-    expect(integratedHostVersion("1.18.35", "1.1.1-beta.1")).toBe("1.18.35+patchline.1.1.1-beta.1.tools1")
+    expect(integratedHostVersion("1.18.34", "1.1.0")).toBe("1.18.34+patchline.1.1.0")
+    expect(integratedHostVersion("1.18.35", "1.1.0")).toBe("1.18.35+patchline.1.1.0")
+    expect(integratedHostVersion("1.18.35", "1.1.1-beta.1")).toBe("1.18.35+patchline.1.1.1-beta.1")
     expect(() => integratedHostVersion("latest", "1.1.0")).toThrow()
     expect(() => integratedHostVersion("1.18.34", "broken")).toThrow()
   })

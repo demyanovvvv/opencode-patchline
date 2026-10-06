@@ -74,7 +74,8 @@ with guarded writes and backups. This prevents OpenCode's startup updater from
 replacing the custom version with stock. Integrated `opencode upgrade` delegates
 to the same local installer with the requested upstream version. Startup update
 comparison ignores integration build metadata to avoid repeated same-version
-notifications. Published artifact delivery, plugin-update coordination outside
+notifications. The integrated host version is `<upstream>+patchline.<package-version>`;
+it does not include private host revision markers such as `.tools1`. Published artifact delivery, plugin-update coordination outside
 the installer, global transaction journaling and managed cleanup remain pending.
 The preference is retained on uninstall. Existing global configuration is
 required for provisioning. Executable discovery canonicalizes the located path
