@@ -61,18 +61,20 @@
   and Bun lockfiles; allowed adapter modifications still require deeper ownership
   inspection. Host smoke separates plugin tools from the native host apply_patch.
 
-## Remaining work before full-plan completion
+## Verification evidence and remaining external gates
 
-- Native patch context recovery is implemented in policy/activity/TUI with
-  regressions and mounted smoke; see `native-patch-recovery.md`. Real-session
-  native multi-file matching, retry telemetry and recovery evaluation remain
-  integration gates; no host mutation behavior was weakened.
-- Native event telemetry has local malformed-event, deduplication and 1,000-entry
-  bound tests, including missing identity rejection. Real host event delivery still
-  requires a configured model session.
-- The clean-checkout native-host suite passed on Windows, Linux and macOS in
-  CI run 37673212265 for OpenCode v1.18.34. The older partial local checkout
-  remains incomplete; the CI result is the authoritative native-suite evidence.
+- Native patch context recovery has policy/activity/TUI regressions and mounted
+  smoke. `npm run smoke:native-session` additionally passes through the actual
+  installed host session loop with a controlled provider: multi-file mismatch
+  causes no writes, fresh read and corrected patch succeed, and event telemetry
+  counts one failure. This proves integration, not autonomous LLM recovery.
+- CI run 37679075845 passed all 18 OS/Node/OpenCode combinations and all three
+  native-host jobs at commit 9544c8f (Windows/Linux/macOS, Node 20/22,
+  OpenCode 1.18.0/1.18.30/1.18.35; native suite at 1.18.34).
+- Later installer-baseline, adaptive diff-budget and session-smoke changes pass
+  local Windows Node 22 verification. Their latest cross-platform CI jobs did
+  not start because GitHub account billing/spending limits block runners.
+  No full latest-commit cross-platform compatibility claim is made.
 
 - Structural Hashline and recovery clear next-snapshot observations when exact
   provenance cannot be proved, requiring a fresh read instead of guessing from
