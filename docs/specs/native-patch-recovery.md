@@ -45,10 +45,10 @@ Counts only reflect events actually received; they do not infer retries or succe
 Events without a valid session/call identity are ignored so malformed host payloads
 cannot inflate the counter. Deduplication is bounded and cleared on plugin dispose.
 
-Remaining work: verify event delivery and native multi-file mismatch/fresh-read
-recovery through real host sessions on the CI version matrix; measure repeated
-identical failures and recovery tool-call counts without retaining source text.
-`tool.execute.after` alone is not an error-delivery guarantee.
+- Remaining work: verify event delivery and native multi-file mismatch/fresh-read
+  recovery through real host sessions on the CI version matrix; measure repeated
+  identical failures and recovery tool-call counts without retaining source text.
+  `tool.execute.after` alone is not an error-delivery guarantee.
 
 The repository does not provide a direct host API for invoking an arbitrary tool
 without a model session/provider. The real-session smoke therefore remains a CI
@@ -57,7 +57,5 @@ the event contract, malformed payloads, deduplication and bounded state.
 
 A direct run of the v1.18.34 upstream `test/tool/apply_patch.test.ts` was attempted
 in an existing isolated host checkout. It failed before running tests because the
-checkout lacks `@babel/core`; importing the patch module separately also failed on
-`effect`. The reproducible CI gate now clones the exact upstream tag into a clean
-directory, performs frozen Bun installation, and runs this suite on Windows,
-Linux and macOS before claiming native execution evidence.
+checkout lacked host dependencies; the clean-checkout CI job subsequently passed
+the exact suite on Windows, Linux and macOS.

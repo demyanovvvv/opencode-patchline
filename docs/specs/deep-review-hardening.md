@@ -94,11 +94,13 @@
 - `npm run audit:dependencies` reports vulnerable production paths and fails for
   high/critical advisories. After the compatible lockfile update, both this gate
   and the full `npm audit` report zero vulnerabilities locally.
-- Extend the five-case Node/Bun linear differential corpus and run cross-platform,
-  lower-bound/current OpenCode integration matrices. Local Bun Hashline, TUI and
-  isolated installer/package and live plugin smoke passed locally. A full isolated
-  host build was attempted with a 16-minute command allowance and failed; it is
-  not a verified compatibility gate.
+- Full isolated host installation now passes after preserving the installer's
+  own protected autoupdate baseline. The Windows x64 lifecycle verifies the
+  standalone version, server startup, 17 provider/model registry/schema pairs,
+  preview, uninstall and unrelated plugin preservation.
+- Adaptive routing treats bounded-diff exhaustion as a no-write standard-tool
+  fallback. A deterministic injected-budget regression covers this path; explicit
+  precision requests still reject oversized work instead of weakening budgets.
 - Expand performance reporting to large-repository/batch scenarios. The hidden
   whitespace benchmark reports p50/p95, sampled RSS, process peak RSS and queued
   lock cancellation latency. Those figures do not measure native parser or OS

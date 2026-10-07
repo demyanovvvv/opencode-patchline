@@ -375,8 +375,14 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
               const projected = operation.replaceAll
                 ? snapshot.text.split(oldString).join(newString)
                 : snapshot.text.replace(oldString, () => newString)
-              const stats = diffStats(snapshot.text, projected)
-              changedLines += Math.max(stats.added, stats.deleted)
+              try {
+                const stats = diffStats(snapshot.text, projected)
+                changedLines += Math.max(stats.added, stats.deleted)
+              } catch (error) {
+                if (!(error instanceof PatchlineError) || error.code !== "STANDARD_TOOL_REQUIRED") throw error
+                changedLines = Number.MAX_SAFE_INTEGER
+                break
+              }
             }
             const route = routeEdit({
               fileCount: paths.length,
