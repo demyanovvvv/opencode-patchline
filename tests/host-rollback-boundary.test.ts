@@ -45,7 +45,7 @@ it.skipIf(process.platform !== "win32" || process.arch !== "x64")("restores host
     await mkdir(state.config)
     process.env.OPENCODE_CONFIG_DIR = state.config
     await writeFile(path.join(state.config, "opencode.json"), '{"autoupdate":true}')
-    const result = await installPatchline({ cwd: w.path, yes: true, stdout() {}, stderr() {}, hasCommand: async () => true })
+    const result = await installPatchline({ cwd: w.path, global: true, yes: true, stdout() {}, stderr() {}, hasCommand: async () => true })
     expect(result).toBe(1)
     const { readFile } = await import("node:fs/promises")
     expect(JSON.parse(await readFile(path.join(state.config, "opencode.json"), "utf8")).autoupdate).toBe(true)

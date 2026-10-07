@@ -421,7 +421,12 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
   const previousStateSnapshot = await readSnapshot(stateFileOf(options))
   const previousPackageFiles = await capturePackageFiles(options)
   try {
-  if (!options.runCommand) rollbackVisualHost = await ensureVisualHost(options)
+  if (!options.runCommand) rollbackVisualHost = await ensureVisualHost(options, (before, landed) => {
+    const previous = previousConfigs.find((file) => file.path === before.path)
+    if (!previous) return
+    if (previous.source !== before.source || previous.identity.device !== before.identity.device || previous.identity.inode !== before.identity.inode) throw new Error(`Configuration changed; retry after inspecting it: ${before.path}`)
+    Object.assign(previous, landed)
+  })
   if (!options.runCommand || options.captureCommand) {
     const version = await capture(options, "opencode", ["--version"])
     if (version.code !== 0 || !supportsOpenCodeVersion(version.output.trim())) {
@@ -678,7 +683,7 @@ export async function uninstallPatchline(rawOptions: InstallerOptions = {}): Pro
   }
 }
 
-export async function protectVisualHostUpdates(file: string, onRollback?: (restore: () => Promise<void>) => void): Promise<void> {
+export async function protectVisualHostUpdates(file: string, onRollback?: (restore: () => Promise<void>) => void, onProtected?: (before: FileSnapshot, landed: FileSnapshot) => void): Promise<void> {
   const snapshot = await readSnapshot(file)
   if (!snapshot) throw new Error(`OpenCode global configuration not found: ${file}`)
   const bom = snapshot.source.startsWith("\uFEFF") ? "\uFEFF" : ""
@@ -696,6 +701,7 @@ export async function protectVisualHostUpdates(file: string, onRollback?: (resto
     await assertCurrent(landed)
     await commitConfigurations([{ ...landed, text: snapshot.source }], () => {})
   })
+  onProtected?.(snapshot, landed)
 }
 
 export function integratedHostVersion(upstream: string, plugin: string): string {
@@ -725,13 +731,13 @@ export function patchHostUpdates(source: string, cli: string): string {
   return source.replace(anchor, `${anchor}${newline}${block}`)
 }
 
-async function ensureVisualHost(options: InstallerOptions): Promise<(() => Promise<void>) | undefined> {
+async function ensureVisualHost(options: InstallerOptions, onProtected?: (before: FileSnapshot, landed: FileSnapshot) => void): Promise<(() => Promise<void>) | undefined> {
   if (process.platform !== "win32" || process.arch !== "x64") throw new Error("Automatic conversation UI host installation currently requires Windows x64.")
   const globalFiles = await configurationFiles({ ...options, cwd: options.cwd!, global: true })
   const serverConfig = globalFiles.find((file) => /^opencode\.jsonc?$/.test(path.basename(file.path)))
   if (!serverConfig) throw new Error("An OpenCode global configuration is required to protect the custom UI host from automatic replacement.")
   let rollbackVisualConfig: (() => Promise<void>) | undefined
-  await protectVisualHostUpdates(serverConfig.path, (restore) => { rollbackVisualConfig = restore })
+  await protectVisualHostUpdates(serverConfig.path, (restore) => { rollbackVisualConfig = restore }, onProtected)
   let rollbackHost: (() => Promise<void>) | undefined
   let rollbackSources: (() => Promise<void>) | undefined
   try {
