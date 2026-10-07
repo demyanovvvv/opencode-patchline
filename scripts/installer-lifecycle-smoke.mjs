@@ -44,8 +44,8 @@ try {
       ? await run(["install", "--local", "--global", "--yes", "--lang", "ru", "--opencode-version", "1.18.34"])
       : await execute(process.execPath, ["--input-type=module", "-e", `import { installPatchline } from ${JSON.stringify(installer)}; import { executeCommand } from ${JSON.stringify(new URL("../dist/installation/process.js", import.meta.url).href)}; process.exitCode = await installPatchline({ global: true, packageName: ${JSON.stringify(fileURLToPath(new URL("..", import.meta.url)))}, language: "ru", runCommand: async (command, args) => (await executeCommand(command, args, process.cwd(), true)).code });`], { cwd: temporary, env: environment, windowsHide: true, timeout: 120_000, maxBuffer: 5_000_000 })
   } catch (error) {
-    console.error(error.stdout ?? "", error.stderr ?? "")
-    throw error
+    console.error((error.stdout ?? "").slice(-8000), (error.stderr ?? "").slice(-8000))
+    throw new Error(`Installer smoke failed (code=${error.code ?? "unknown"}, signal=${error.signal ?? "none"}). See bounded output above.`, { cause: { code: error.code, signal: error.signal } })
   }
   assert.match(installed.stdout, /Установка/)
   if (verifyHost) {

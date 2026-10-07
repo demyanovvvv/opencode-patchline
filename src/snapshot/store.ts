@@ -38,7 +38,11 @@ export type SnapshotStoreOptions = {
 }
 
 function hashlineTag(text: string): string {
-  const normalized = text.replace(/[ \t\r]+(?=\n|$)/g, "")
+  const normalized = text.replace(/[^\n]+/g, (line) => {
+    let end = line.length
+    while (end > 0 && (line[end - 1] === " " || line[end - 1] === "\t" || line[end - 1] === "\r")) end--
+    return line.slice(0, end)
+  })
   return (xxh32(normalized, 0) & 0xffff).toString(16).padStart(4, "0").toUpperCase()
 }
 
@@ -107,7 +111,11 @@ export class ScopedSnapshotStore {
     this.cleanup()
     const tag = hashlineTag(document.normalizedText)
     const key = `${scopeKey(scope, canonicalPath, tag)}\0${rawDigest}`
-    const existing = this.#snapshots.get(key)
+    let existing = this.#snapshots.get(key)
+    if (existing && identity && existing.identity && (identity.device !== existing.identity.device || identity.inode !== existing.identity.inode)) {
+      this.#remove(key)
+      existing = undefined
+    }
     let pooled = this.#documents.get(rawDigest)
     if (!pooled) {
       const pooledLineIndex = lineIndex ?? buildLineIndex(document.normalizedText)
@@ -142,6 +150,10 @@ export class ScopedSnapshotStore {
     if (!this.#ids.has(idKey)) this.#ids.set(idKey, new Set())
     this.#tags.get(tagKey)!.add(key)
     this.#ids.get(idKey)!.add(key)
+    if ((pooled.bytes + combined.size * 32) > this.#maxBytes) {
+      this.#remove(key)
+      throw new PatchlineError("STANDARD_TOOL_REQUIRED", "Snapshot exceeds the memory budget; use the standard tool for this file.", { path: relativePath })
+    }
     while (this.#snapshots.size > this.#maxSnapshots || this.#bytes > this.#maxBytes) {
       const oldest = this.#snapshots.keys().next().value as string | undefined
       if (oldest === undefined) break

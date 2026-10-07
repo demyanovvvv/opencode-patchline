@@ -31,7 +31,10 @@ export function patchHostToolSelection(source: string): string {
   return source.replace(patchFilter, patchedPatch).replace(editFilter, patchedEdit)
 }
 export function patchHostRenderer(source: string): string {
-  if (source.includes('name={`tool_${props.part.tool}`}')) return source
+  if (source.includes('name={`tool_${props.part.tool}`}')) {
+    if (!source.includes("const pluginRuntime = usePluginRuntime()") || !source.includes("</pluginRuntime.Slot>") || !source.includes("type ToolProps =")) throw new Error("Unsupported OpenCode partial tool renderer integration.")
+    return source
+  }
   const original = 'function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMessage }) {'
   const start = source.indexOf(original)
   const end = source.indexOf("type ToolProps =", start)
@@ -45,6 +48,57 @@ export function patchHostRenderer(source: string): string {
     .replace("      <Switch>", `      <pluginRuntime.Slot name={\`tool_\${props.part.tool}\`} mode="replace" part={props.part} message={props.message} last={props.last}>${newline}      <Switch>`)
     .replace("      </Switch>", `      </Switch>${newline}      </pluginRuntime.Slot>`)
   return source.slice(0, start) + replaced + source.slice(end)
+}
+
+export async function assertHostCheckout(host: string, upstream: string, execute = executeCommand): Promise<void> {
+  const tag = await execute("git", ["describe", "--tags", "--exact-match", "HEAD"], host)
+  if (tag.code !== 0 || tag.output.trim() !== `v${upstream}`) throw new Error("Host checkout version mismatch; existing source retained.")
+  const status = await execute("git", ["status", "--porcelain", "--untracked-files=all"], host)
+  if (status.code !== 0) throw new Error("Host checkout ownership inspection failed.")
+  const allowed = new Set(["packages/tui/src/routes/session/index.tsx", "packages/opencode/src/tool/registry.ts", "packages/opencode/src/installation/index.ts", "packages/opencode/src/cli/upgrade.ts", "bun.lock", "bun.lockb"])
+  for (const line of status.output.split(/\r?\n/).filter(Boolean)) {
+    const file = line.replace(/^\s*[ MADRCU?!]{1,2}\s+/, "").trim()
+    if (line.startsWith("??") && /\.patchline-backup-[0-9a-f-]+$/.test(file)) continue
+    if (file === "bun.lock" || file === "bun.lockb") throw new Error("Host dependency lockfile changed without ownership evidence; checkout retained.")
+    if (!allowed.has(file)) throw new Error("Host checkout has unowned tracked changes; existing source retained.")
+    if (file !== "bun.lock" && file !== "bun.lockb") {
+      const pristine = await execute("git", ["show", `HEAD:${file}`], host)
+      if (pristine.code !== 0) throw new Error("Host adapter ownership inspection failed.")
+      const current = await readSnapshot(path.join(host, file))
+      if (!current) throw new Error("Host adapter disappeared during ownership inspection.")
+      assertOwnedHostAdapter(file, pristine.output, current.source, fileURLToPath(new URL("../dist/cli.js", import.meta.url)))
+    }
+  }
+}
+
+export function assertOwnedHostAdapter(file: string, pristine: string, current: string, cli: string): void {
+  let expected: string
+  if (file.endsWith("routes/session/index.tsx")) expected = patchHostRenderer(pristine)
+  else if (file.endsWith("tool/registry.ts")) expected = patchHostToolSelection(pristine)
+  else if (file.endsWith("installation/index.ts")) expected = patchHostUpdates(pristine, cli)
+  else if (file.endsWith("cli/upgrade.ts")) expected = pristine.replace('if (InstallationVersion === latest) return', 'if (InstallationVersion.split("+")[0] === latest) return')
+  else throw new Error("Unowned host adapter path.")
+  if (current.replace(/\r\n/g, "\n").trimEnd() !== expected.replace(/\r\n/g, "\n").trimEnd()) throw new Error(`Unowned modifications in host adapter: ${file}; source retained.`)
+}
+
+export async function applyHostSourceChanges(changes: readonly FileChange[], log: Output): Promise<() => Promise<void>> {
+  await commitConfigurations([...changes], log)
+  const landed = await Promise.all(changes.map(async (change) => {
+    const current = await readSnapshot(change.path)
+    if (!current) throw new Error(`Host source disappeared: ${change.path}`)
+    return { ...current, text: change.source }
+  }))
+  return async () => { await commitConfigurations(landed, log) }
+}
+
+export function prepareHostSourceChanges(source: { renderer: string; registry: string; upgrade: string; startup: string }, cli: string) {
+  const renderer = patchHostRenderer(source.renderer)
+  const registry = patchHostToolSelection(source.registry)
+  const upgrade = patchHostUpdates(source.upgrade, cli)
+  const anchor = 'if (InstallationVersion === latest) return'
+  const patched = 'if (InstallationVersion.split("+")[0] === latest) return'
+  if (!source.startup.includes(anchor) && !source.startup.includes(patched)) throw new Error("Unsupported OpenCode startup update policy.")
+  return { renderer, registry, upgrade, startup: source.startup.replace(anchor, patched) }
 }
 
 export type InstallerOptions = {
@@ -363,16 +417,18 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
   output(options, text.starting(packageName))
   output(options, text.scope(scope))
   let rollbackVisualHost: (() => Promise<void>) | undefined
-  if (!options.runCommand) rollbackVisualHost = await ensureVisualHost(options)
-  if (!options.runCommand || options.captureCommand) {
-    const version = await capture(options, "opencode", ["--version"])
-    if (version.code !== 0 || !/^1\.(?:18|19|[2-9]\d|\d{3,})\./.test(version.output)) {
-      throw new Error(language === "ru" ? "Требуется OpenCode >=1.18.0 и <2. Установите совместимую версию OpenCode." : "OpenCode >=1.18.0 and <2 is required. Install a compatible OpenCode version.")
-    }
-  }
   const previousConfigs = await configurationFiles({ cwd: options.cwd!, ...(options.configDirectory ? { configDirectory: options.configDirectory } : {}), ...(options.global !== undefined ? { global: options.global } : {}) })
   const previousStateSnapshot = await readSnapshot(stateFileOf(options))
   const previousPackageFiles = await capturePackageFiles(options)
+  try {
+  if (!options.runCommand) rollbackVisualHost = await ensureVisualHost(options)
+  if (!options.runCommand || options.captureCommand) {
+    const version = await capture(options, "opencode", ["--version"])
+    if (version.code !== 0 || !supportsOpenCodeVersion(version.output.trim())) {
+      throw new Error(language === "ru" ? "Требуется OpenCode >=1.18.0 и <2. Установите совместимую версию OpenCode." : "OpenCode >=1.18.0 and <2 is required. Install a compatible OpenCode version.")
+    }
+  }
+  } catch (error) { await rollbackVisualHost?.(); throw error }
   let expectedPackageFiles: FileSnapshot[] = []
   let expectedState = previousStateSnapshot
   const saveOwnedState = async (language: InstallerLanguage, packages: string[], addons: string[], lsp?: OwnedLsp): Promise<void> => {
@@ -435,7 +491,8 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
   if (options.global) pluginArgs.push("--global")
   const pluginCode = await runCommand("opencode", pluginArgs)
   if (pluginCode !== 0) {
-    await rollbackPluginRegistration(options, previousConfigs, packageName, (file) => output(options, text.backup(file)))
+    pluginRegistered = true
+    await rollback()
     errorOutput(options, text.error(language === "ru" ? `Регистрация плагина завершилась с кодом ${pluginCode}.` : `OpenCode plugin registration failed with exit code ${pluginCode}.`))
     return pluginCode
   }
@@ -676,6 +733,7 @@ async function ensureVisualHost(options: InstallerOptions): Promise<(() => Promi
   let rollbackVisualConfig: (() => Promise<void>) | undefined
   await protectVisualHostUpdates(serverConfig.path, (restore) => { rollbackVisualConfig = restore })
   let rollbackHost: (() => Promise<void>) | undefined
+  let rollbackSources: (() => Promise<void>) | undefined
   try {
   const version = await executeCommand("opencode", ["--version"], options.cwd!)
   const packageRoot = fileURLToPath(new URL("..", import.meta.url))
@@ -684,7 +742,7 @@ async function ensureVisualHost(options: InstallerOptions): Promise<(() => Promi
   if (latest && latest.code !== 0) throw new Error("Could not resolve the upstream OpenCode version; existing host retained.")
   const upstream = options.opencodeVersion ?? latest!.output.trim()
   const desiredVersion = integratedHostVersion(upstream, manifest.version)
-  if (version.code === 0 && version.output.trim() === desiredVersion) return undefined
+  if (version.code === 0 && version.output.trim() === desiredVersion) return rollbackVisualConfig
   if (!options.yes && !await (options.confirm ?? confirmPrompt)("Install the Patchline-compatible OpenCode UI host and replace the opencode executable (with a backup)?")) throw new Error("Conversation UI host installation was declined; installation is incomplete.")
   if ((await executeCommand("bun", ["--version"], options.cwd!).catch(() => ({ code: 1, output: "" }))).code !== 0) {
     if ((await executeCommand("npm", ["install", "--global", "bun"], options.cwd!, true)).code !== 0) throw new Error("Bun is required to build the UI host.")
@@ -701,25 +759,20 @@ async function ensureVisualHost(options: InstallerOptions): Promise<(() => Promi
     try { await access(path.join(host, "package.json")) }
     catch { if ((await executeCommand("git", ["clone", "--depth", "1", "--branch", `v${upstream}`, "https://github.com/anomalyco/opencode.git", host], options.cwd!, true)).code !== 0) throw new Error("Could not prepare the OpenCode UI host.") }
   }
+  await assertHostCheckout(host, upstream)
   const session = await readSnapshot(path.join(host, "packages", "tui", "src", "routes", "session", "index.tsx"))
   if (!session) throw new Error("Missing OpenCode session renderer.")
-  if (!session.source.includes('name={`tool_${props.part.tool}`}')) {
-    await commitConfigurations([{ ...session, text: patchHostRenderer(session.source) }], (file) => output(options, `Backup: ${file}`))
-  }
   const registry = await readSnapshot(path.join(host, "packages", "opencode", "src", "tool", "registry.ts"))
   if (!registry) throw new Error("Missing OpenCode tool registry.")
-  const registryText = patchHostToolSelection(registry.source)
-  if (registryText !== registry.source) await commitConfigurations([{ ...registry, text: registryText }], (file) => output(options, `Backup: ${file}`))
   output(options, "Installing/updating the OpenCode conversation UI host (this may take several minutes).")
   const upgradeFile = await readSnapshot(path.join(host, "packages", "opencode", "src", "installation", "index.ts"))
   if (!upgradeFile) throw new Error("Missing OpenCode upgrade adapter.")
-  const upgradeText = patchHostUpdates(upgradeFile.source, path.join(packageRoot, "dist", "cli.js"))
-  if (upgradeText !== upgradeFile.source) await commitConfigurations([{ ...upgradeFile, text: upgradeText }], () => {})
   const startupFile = await readSnapshot(path.join(host, "packages", "opencode", "src", "cli", "upgrade.ts"))
   if (!startupFile) throw new Error("Missing OpenCode startup update policy.")
-  const policyText = startupFile.source.replace('if (InstallationVersion === latest) return', 'if (InstallationVersion.split("+")[0] === latest) return')
-  if (policyText !== startupFile.source) await commitConfigurations([{ ...startupFile, text: policyText }], () => {})
-  if ((await executeCommand("bun", ["install", "--ignore-scripts"], host, true)).code !== 0) throw new Error("UI host dependencies failed to install.")
+  const patched = prepareHostSourceChanges({ renderer: session.source, registry: registry.source, upgrade: upgradeFile.source, startup: startupFile.source }, path.join(packageRoot, "dist", "cli.js"))
+  const changes = [{ ...session, text: patched.renderer }, { ...registry, text: patched.registry }, { ...upgradeFile, text: patched.upgrade }, { ...startupFile, text: patched.startup }].filter((file) => file.text !== file.source)
+  rollbackSources = await applyHostSourceChanges(changes, (file) => output(options, `Backup: ${file}`))
+  if ((await executeCommand("bun", ["install", "--ignore-scripts", "--frozen-lockfile"], host, true)).code !== 0) throw new Error("UI host dependencies failed to install with the upstream frozen lockfile.")
   const buildDirectory = path.join(host, "packages", "opencode")
   if ((await executeCommand("bun", ["run", "script/build.ts", "--single", "--skip-install", "--skip-embed-web-ui"], buildDirectory, true, { OPENCODE_VERSION: desiredVersion })).code !== 0) throw new Error("UI host build failed.")
   const binary = path.join(buildDirectory, "dist", "opencode-windows-x64", "bin", "opencode.exe")
@@ -730,10 +783,13 @@ async function ensureVisualHost(options: InstallerOptions): Promise<(() => Promi
   if (installed.code !== 0 || installed.output.trim() !== desiredVersion) throw new Error("The opencode command does not resolve to the installed UI host.")
   return async () => {
     await rollbackHost?.()
+    await rollbackSources?.()
     await rollbackVisualConfig?.()
   }
   } catch (error) {
-    try { await rollbackHost?.() } finally { await rollbackVisualConfig?.() }
+    try { await rollbackHost?.() } finally {
+      try { await rollbackSources?.() } finally { await rollbackVisualConfig?.() }
+    }
     throw error
   }
 }

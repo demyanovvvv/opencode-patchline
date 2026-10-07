@@ -9,8 +9,9 @@ permissions:
 
 jobs:
   verify:
-    name: Verify (${{ matrix.os }})
+    name: Verify (${{ matrix.os }}, Node ${{ matrix.node }}, OpenCode ${{ matrix.opencode }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -21,6 +22,10 @@ jobs:
         node:
           - 20.x
           - 22.x
+        opencode:
+          - 1.18.0
+          - 1.18.30
+          - 1.18.35
 
     steps:
       - uses: actions/checkout@v4
@@ -30,7 +35,10 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Install OpenCode CLI
-        run: npm install --global opencode-ai@1.18.30
+        run: npm install --global opencode-ai@${{ matrix.opencode }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
       - run: opencode --version
       - run: npm run typecheck
       - run: npm test -- --run --testTimeout=30000
@@ -39,12 +47,49 @@ jobs:
       - run: npm run build
       - run: npm run doctor
       - run: npm run bench
+      - run: npx tsx benchmarks/hardening.ts
+      - run: node scripts/hashline-linear-cross-runtime.mjs
+      - run: bun --conditions=browser scripts/hashline-differential.mjs
+      - run: bun --conditions=browser scripts/hashline-smoke.mjs
+      - run: bun --conditions=browser scripts/tui-smoke.mjs
       - name: Run OpenCode plugin smoke
         if: matrix.os != 'windows-2022'
         run: npm run smoke:plugin
       - name: Run Windows direct plugin smoke
         if: matrix.os == 'windows-2022'
         run: npm run build; $env:PATCHLINE_PLUGIN_SMOKE_DIRECT = '1'; node scripts/plugin-smoke.mjs
-      - run: npm audit --audit-level=high
+      - run: npm run audit:dependencies
       - name: Run package contents and public API smoke
         run: npm run smoke:package
+
+  native-host:
+    name: Native apply_patch (${{ matrix.os }}, OpenCode 1.18.34)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: npm ci
+      - uses: actions/checkout@v4
+        with:
+          repository: anomalyco/opencode
+          ref: v1.18.34
+          path: upstream-host
+      - name: Install frozen upstream dependencies
+        working-directory: upstream-host
+        run: bun install --ignore-scripts --frozen-lockfile
+      - name: Run native apply_patch suite
+        env:
+          OPENCODE_PATCHLINE_HOST_SOURCE: ${{ github.workspace }}/upstream-host
+          PATCHLINE_TEST_OPENCODE_VERSION: 1.18.34
+        run: npm run smoke:native-host

@@ -8,14 +8,29 @@ import { resolveWorkspacePath } from "../workspace/paths.js"
 export type LspBridgeOperation = "workspaceSymbol" | "documentSymbol" | "diagnostics"
 
 export type LspBridgeClient = {
-  find?: { symbols(input: { query: { query: string; directory?: string } }): Promise<unknown> }
+  find?: { symbols(input: { query: { query: string; directory?: string }; signal?: AbortSignal }): Promise<unknown> }
   lsp?: { status(input?: { query?: { directory?: string } }): Promise<unknown> }
 }
 
-export async function runOpenCodeLspClient(client: LspBridgeClient, input: { worktree: string; query: string }): Promise<string> {
+export async function runOpenCodeLspClient(client: LspBridgeClient, input: { worktree: string; query: string; signal?: AbortSignal; timeoutMs?: number }): Promise<string> {
+  input.signal?.throwIfAborted()
   if (!client.find?.symbols) throw new PatchlineError("CAPABILITY_UNAVAILABLE", "The active OpenCode SDK does not expose workspace symbols; use the CLI bridge or ast_search.")
-  const result = await client.find.symbols({ query: { query: input.query, directory: input.worktree } })
-  return JSON.stringify(result)
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let abort!: () => void
+  const deadline = new Promise<never>((_resolve, reject) => {
+    abort = () => { controller.abort(input.signal?.reason); reject(input.signal?.reason ?? new DOMException("Aborted", "AbortError")) }
+    input.signal?.addEventListener("abort", abort, { once: true })
+    timer = setTimeout(() => { controller.abort(); reject(new PatchlineError("DIAGNOSTICS_UNAVAILABLE", "OpenCode SDK LSP request timed out.")) }, input.timeoutMs ?? LSP_TIMEOUT_MS)
+  })
+  let result: unknown
+  try {
+    result = await Promise.race([client.find.symbols({ query: { query: input.query, directory: input.worktree }, signal: controller.signal }), deadline])
+  } finally { clearTimeout(timer); input.signal?.removeEventListener("abort", abort) }
+  input.signal?.throwIfAborted()
+  if (result && typeof result === "object" && "error" in result && result.error) throw new PatchlineError("DIAGNOSTICS_UNAVAILABLE", `OpenCode SDK symbols failed: ${boundedErrorDetail(JSON.stringify(result.error))}`)
+  const output = JSON.stringify(result)
+  return output.length <= MAX_OUTPUT_CHARS ? output : `${output.slice(0, MAX_OUTPUT_CHARS)}\n... LSP result truncated; narrow the query.`
 }
 
 const MAX_OUTPUT_CHARS = 200_000

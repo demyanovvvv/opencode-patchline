@@ -12,6 +12,10 @@ External snapshots remain scoped to the originating session and worktree;
 the worktree is never expanded to a drive or common ancestor. Commit and
 rollback repeat path authorization and existing identity/digest checks.
 
+Authorization callbacks also receive canonical internal targets. Operation
+permission patterns are worktree-relative internally; path aliases cannot change
+the authorized resource. LSP file requests follow the same canonical checks.
+
 Parent creation traverses relative components from the caller's workspace root;
 it never computes a traversal between canonical and lexical path spellings.
 Caller root aliases are supported, while each nested target is still checked

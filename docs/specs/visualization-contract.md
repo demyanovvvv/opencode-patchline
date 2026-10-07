@@ -2,6 +2,11 @@
 
 Status: Accepted
 
+Native patch context mismatches follow `native-patch-recovery.md`. Route reasons
+and failure reasons have separate fields; the failure is shown once, with native
+details disclosed on demand. Single native context failures are patch rejections,
+not generic batch failures. Unknown native write counts remain unknown.
+
 Patchline ships both the server (`./server`) and OpenCode TUI (`./tui`) entrypoints
 in one npm package. The OpenCode package installer discovers both entrypoints.
 After installation or configuration changes, restart OpenCode.
@@ -37,7 +42,8 @@ error metadata. Hashline batch metadata includes all source and move paths;
 `REM`/`MV` failures expose the same landed-write and rollback conflict fields.
 Both are shown as applied changes with failed validation.
 
-The sidebar uses the active OpenCode theme for every Patchline tool. Mutation
+Patchline does not register a sidebar activity slot. Tool activity cards appear
+in the conversation and use the active OpenCode theme. Mutation
 operations (`edit`, `write`, `apply_patch`, `patchline_edit_batch`) show writes,
 validation, additions, deletions and bounded file previews. Read, search, route,
 LSP, diagnostics and summary tools expose the same activity card with a

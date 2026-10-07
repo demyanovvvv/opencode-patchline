@@ -6,6 +6,10 @@ export type DiffStats = {
 }
 
 export function analyzeDiff(before: string, after: string, seenBefore: ReadonlySet<number>): { stats: DiffStats; seenLinesAfter: Set<number> } {
+  if (!before || !after) {
+    const added = chunkLineCount(after)
+    return { stats: { added, deleted: chunkLineCount(before) }, seenLinesAfter: new Set(Array.from({ length: added }, (_, index) => index + 1)) }
+  }
   let added = 0
   let deleted = 0
   const seenAfter = new Set<number>()
@@ -34,6 +38,7 @@ export function analyzeDiff(before: string, after: string, seenBefore: ReadonlyS
 }
 
 export function diffStats(before: string, after: string): DiffStats {
+  if (!before || !after) return { added: chunkLineCount(after), deleted: chunkLineCount(before) }
   return analyzeDiff(before, after, new Set()).stats
 }
 
@@ -44,7 +49,7 @@ export function lineRangeForSubstring(text: string, start: number, length: numbe
   }
   let end = startLine
   const matchEnd = Math.min(text.length, start + length)
-  for (let index = start; index < matchEnd; index++) {
+  for (let index = start; index < matchEnd - 1; index++) {
     if (text.charCodeAt(index) === 10) end++
   }
   return { start: startLine, end }

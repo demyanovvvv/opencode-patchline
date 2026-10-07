@@ -26,3 +26,20 @@ it("terminates a capability probe that exceeds the output budget", async () => {
   expect(child.kill).toHaveBeenCalledWith("SIGKILL")
   await expect(pending).resolves.toBeUndefined()
 })
+
+it("terminates the Windows probe process tree", async () => {
+  if (process.platform !== "win32") return
+  vi.useFakeTimers()
+  const child = Object.assign(new EventEmitter(), { pid: 12345, stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn() })
+  const killer = new EventEmitter()
+  mocks.spawn.mockImplementation((command: string) => command === "taskkill.exe" ? killer : child)
+  const pending = commandVersion("probe", ["--version"], 50)
+  await vi.advanceTimersByTimeAsync(50)
+  expect(mocks.spawn).toHaveBeenCalledWith("taskkill.exe", ["/pid", "12345", "/T", "/F"], expect.anything())
+  let settled = false
+  void pending.then(() => { settled = true })
+  await Promise.resolve()
+  expect(settled).toBe(false)
+  killer.emit("close", 0)
+  await expect(pending).resolves.toBeUndefined()
+})

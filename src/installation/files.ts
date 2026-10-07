@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto"
 import { atomicReplace, readFileIdentity } from "../writing/atomic.js"
 import { decodeUtf8 } from "../preservation/text.js"
 import type { FileIdentity } from "../snapshot/store.js"
+import { digestBytes } from "../snapshot/store.js"
 
 export type FileSnapshot = { path: string; source: string; identity: FileIdentity; parent: FileIdentity }
 export type FileChange = FileSnapshot & { text: string }
@@ -116,7 +117,7 @@ export async function commitConfigurations(changes: FileChange[], log: (file: st
   try {
     for (const change of changes) {
       await assertCurrent(change)
-      const identity = await atomicReplace(change.path, Buffer.from(change.text), { expectedParent: change.parent, expectedTarget: change.identity })
+      const identity = await atomicReplace(change.path, Buffer.from(change.text), { expectedParent: change.parent, expectedTarget: change.identity, expectedDigest: digestBytes(Buffer.from(change.source)) })
       committed.push({ ...change, source: change.text, text: change.source, identity })
     }
   } catch (error) {
@@ -124,7 +125,7 @@ export async function commitConfigurations(changes: FileChange[], log: (file: st
     for (const change of committed.reverse()) {
       try {
         await assertCurrent(change)
-        await atomicReplace(change.path, Buffer.from(change.text), { expectedParent: change.parent, expectedTarget: change.identity })
+        await atomicReplace(change.path, Buffer.from(change.text), { expectedParent: change.parent, expectedTarget: change.identity, expectedDigest: digestBytes(Buffer.from(change.source)) })
       } catch { conflicts.push(change.path) }
     }
     if (conflicts.length) throw new Error(`Rollback conflicts: ${conflicts.join(", ")}. Backups retained.`, { cause: error })
@@ -137,7 +138,7 @@ export async function saveState(file: string, state: unknown): Promise<void> {
   const snapshot = await readSnapshot(file)
   if (snapshot) {
     await assertCurrent(snapshot)
-    await atomicReplace(file, Buffer.from(text), { expectedParent: snapshot.parent, expectedTarget: snapshot.identity })
+    await atomicReplace(file, Buffer.from(text), { expectedParent: snapshot.parent, expectedTarget: snapshot.identity, expectedDigest: digestBytes(Buffer.from(snapshot.source)) })
   } else {
     await mkdir(path.dirname(file), { recursive: true })
     if (path.normalize(await realpath(path.dirname(file))) !== path.normalize(path.resolve(path.dirname(file)))) throw new Error(`Symlink state directory: ${file}`)
@@ -165,6 +166,8 @@ export async function installHostBinary(source: string, target: string, onRollba
   if ((await readFile(source)).equals(before)) return previous
   const retired = `${temporary}-previous`
   await copyFile(source, temporary, constants.COPYFILE_EXCL)
+  const staged = await readBinarySnapshot(temporary)
+  let replaced = false
   try {
     const current = await readFileIdentity(target)
     const directory = await readFileIdentity(parent)
@@ -172,14 +175,24 @@ export async function installHostBinary(source: string, target: string, onRollba
     if (previousSnapshot) { await assertBinaryCurrent(previousSnapshot); await rename(previous, retired) }
     try {
       await rename(target, previous)
-      try { await rename(temporary, target) }
+      try { await rename(temporary, target); replaced = true }
       catch (error) { await rename(previous, target); throw error }
     } catch (error) {
       if (previousSnapshot) await rename(retired, previous)
       throw error
     }
     const committed = await lstat(target)
-    if (!committed.isFile() || committed.isSymbolicLink() || !(await readFile(target)).equals(await readFile(source))) throw new Error("Committed host binary does not match the source.")
+    if (!committed.isFile() || committed.isSymbolicLink() || !(await readFile(target)).equals(await readFile(source))) {
+      const current = await readBinarySnapshot(target)
+      if (staged && current && current.identity.device === staged.identity.device && current.identity.inode === staged.identity.inode && Buffer.from(current.bytes).equals(Buffer.from(staged.bytes))) {
+        const backup = await readBinarySnapshot(previous)
+        if (!backup || backup.identity.device !== identity.device || backup.identity.inode !== identity.inode || !Buffer.from(backup.bytes).equals(before)) throw new Error("Host rollback backup changed.")
+        await atomicReplace(target, before, { expectedParent: parentIdentity, expectedTarget: current.identity })
+        if (previousSnapshot) { await rm(previous); await rename(retired, previous) }
+        else await rm(previous)
+      }
+      throw new Error("Committed host binary does not match the source; inspected rollback attempted.")
+    }
     const landed = await readBinarySnapshot(target)
     const ownedBackup = await readBinarySnapshot(previous)
     if (!landed || !ownedBackup) throw new Error("Host rollback snapshots unavailable.")
@@ -192,5 +205,16 @@ export async function installHostBinary(source: string, target: string, onRollba
     })
     if (previousSnapshot) await rm(retired, { force: true })
     return previous
+  } catch (error) {
+    if (replaced && staged) {
+      const current = await readBinarySnapshot(target)
+      const ownedBackup = await readBinarySnapshot(previous)
+      if (current && ownedBackup && current.identity.device === staged.identity.device && current.identity.inode === staged.identity.inode && Buffer.from(current.bytes).equals(Buffer.from(staged.bytes)) && ownedBackup.identity.device === identity.device && ownedBackup.identity.inode === identity.inode && Buffer.from(ownedBackup.bytes).equals(before)) {
+        await atomicReplace(target, before, { expectedParent: parentIdentity, expectedTarget: current.identity })
+        if (previousSnapshot) { await rm(previous); await rename(retired, previous) }
+        else await rm(previous)
+      }
+    }
+    throw error
   } finally { await rm(temporary, { force: true }) }
 }

@@ -5,6 +5,7 @@ import { EditService } from "../src/edit-service.js"
 import { ReadService, isFileReadResult } from "../src/read-service.js"
 import { ScopedSnapshotStore } from "../src/snapshot/store.js"
 import { temporaryWorkspace } from "./helpers/workspace.js"
+import { PatchlineError } from "../src/errors.js"
 
 const restoreRace = vi.hoisted(() => ({ target: "" }))
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -40,6 +41,20 @@ vi.mock("../src/editing/hashline-adapter.js", () => ({
 }))
 
 describe("guarded Hashline file transactions", () => {
+  it("keeps a successful move when next snapshot bookkeeping exceeds quota", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "source.ts"), "before\n")
+      const store = new ScopedSnapshotStore()
+      const scope = { sessionId: "s", worktree: workspace.path }
+      const r = await new ReadService(store).read({ ...scope, filePath: "source.ts" })
+      if (!isFileReadResult(r)) throw new Error("file expected")
+      vi.spyOn(store, "record").mockImplementation(() => { throw new PatchlineError("STANDARD_TOOL_REQUIRED", "Snapshot budget") })
+      const [result] = await new EditService(store).applyHashline(scope, `[source.ts#${r.tag}]\nMV moved.ts`)
+      expect(result!.snapshot).toBe("")
+      expect(await readFile(path.join(workspace.path, "moved.ts"), "utf8")).toBe("before\n")
+    } finally { await workspace.cleanup() }
+  })
   it("preserves a source recreated after rollback preflight", async () => {
     const workspace = await temporaryWorkspace()
     try {
@@ -100,6 +115,7 @@ describe("guarded Hashline file transactions", () => {
       expect(await readFile(path.join(workspace.path, "first.ts"), "utf8")).toBe("first.ts\n")
       expect(await readFile(path.join(workspace.path, "second.ts"), "utf8")).toBe("second.ts\n")
       await expect(readFile(path.join(workspace.path, "moved.ts"))).rejects.toMatchObject({ code: "ENOENT" })
+      expect(store.size).toBe(1)
     } finally { await workspace.cleanup() }
   })
 

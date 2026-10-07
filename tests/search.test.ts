@@ -31,7 +31,7 @@ describe("search", () => {
     const calls: unknown[] = []
     const result = await runOpenCodeLspClient({ find: { symbols: async (input) => { calls.push(input); return [{ name: "value" }] } } }, { worktree: "C:/worktree", query: "value" })
     expect(JSON.parse(result)).toEqual([{ name: "value" }])
-    expect(calls).toEqual([{ query: { query: "value", directory: "C:/worktree" } }])
+    expect(calls).toEqual([{ query: { query: "value", directory: "C:/worktree" }, signal: expect.any(AbortSignal) }])
   })
 
   it("routes semantic, structural and literal queries", () => {

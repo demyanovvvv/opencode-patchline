@@ -1,4 +1,5 @@
 import { PatchlineError } from "../errors.js"
+import { diffLines } from "diff"
 
 export type LineEnding = "LF" | "CRLF" | "mixed" | "none"
 
@@ -62,6 +63,23 @@ function preferredEnding(text: string): "\n" | "\r\n" {
 }
 
 export function applyNormalizedTextPreservingShape(normalizedText: string, document: TextDocument): Uint8Array {
+  if (document.lineEnding === "mixed") {
+    const changes = diffLines(document.normalizedText, normalizedText, { timeout: 100, maxEditLength: 2_000 })
+    if (!changes) throw new PatchlineError("STANDARD_TOOL_REQUIRED", "Mixed-newline preservation exceeded its diff budget.")
+    let raw = 0
+    const output: string[] = []
+    const ending = preferredEnding(document.text)
+    for (const change of changes) {
+      if (change.added) {
+        output.push(ending === "\r\n" ? change.value.replace(/\n/g, "\r\n") : change.value)
+        continue
+      }
+      const start = raw
+      for (let index = 0; index < change.value.length; index++) raw += document.text[raw] === "\r" && document.text[raw + 1] === "\n" ? 2 : 1
+      if (!change.removed) output.push(document.text.slice(start, raw))
+    }
+    return encodeUtf8(output.join(""), document.bom)
+  }
   const ending = preferredEnding(document.text)
   const original = document.normalizedText
   let commonStart = 0

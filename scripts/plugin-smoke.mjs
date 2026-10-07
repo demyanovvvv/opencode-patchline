@@ -6,11 +6,12 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { execFile, spawn } from "node:child_process"
 import { promisify } from "node:util"
 import { createSmokeEnvironment } from "./smoke-environment.mjs"
+import { pluginTools, hostTools } from "./smoke-tools.mjs"
 
 const pluginPath = path.resolve(fileURLToPath(new URL("../dist/plugin.js", import.meta.url)))
 const worktree = await mkdtemp(path.join(os.tmpdir(), "patchline-plugin-smoke-"))
 const execute = promisify(execFile)
-const required = ["read", "edit", "write", "apply_patch", "patchline_apply_patch", "patchline_execute", "patchline_grep", "ast_search", "patchline_edit_batch", "patchline_diagnostics", "patchline_summary"]
+const required = hostTools
 const hashlineRequired = ["read", "edit", "write", "patchline_apply_patch"]
 
 async function freePort() {
@@ -112,9 +113,9 @@ if (process.platform === "win32" && process.env.PATCHLINE_PLUGIN_SMOKE_DIRECT ==
   const module = await import(pathToFileURL(pluginPath).href)
   const hooks = await module.PatchlinePlugin({ directory: worktree, worktree })
   const toolIds = Object.keys(hooks.tool ?? {})
-  const missing = required.filter((toolId) => !toolIds.includes(toolId))
+  const missing = pluginTools.filter((toolId) => !toolIds.includes(toolId))
   if (missing.length > 0) throw new Error(`Patchline plugin loaded without required tools: ${missing.join(", ")}`)
-  console.log(`Patchline plugin direct smoke passed (${required.length} tools registered)`)
+  console.log(`Patchline plugin direct smoke passed (${pluginTools.length} tools registered)`)
   await removeWorktree(worktree)
   process.exit(0)
 }

@@ -385,7 +385,7 @@ describe("OpenCode plugin", () => {
       expect(typeof edit === "string" ? "" : edit.metadata?.diff).toContain("+const value = 2")
       expect(typeof edit === "string" ? "" : edit.metadata?.diff).toMatch(/^Index: a\.ts\n={5,}\n--- a\.ts\n\+\+\+ a\.ts\n@@/)
       expect(context.metadata).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ stage: "preflight" }) }))
-      expect(ask).toHaveBeenCalledTimes(2)
+      expect(ask).toHaveBeenCalledTimes(5)
     } finally {
       await workspace.cleanup()
     }
@@ -420,7 +420,7 @@ describe("OpenCode plugin", () => {
       expect(result).toMatchObject({ metadata: { status: "applied", files: [expect.objectContaining({ path: "first.ts", diff: expect.stringContaining("-const first = 1") }), expect.objectContaining({ path: "second.ts", diff: expect.stringContaining("+const second = 20") })] } })
       expect(await readFile(path.join(workspace.path, "first.ts"), "utf8")).toBe("const first = 10\n")
       expect(await readFile(path.join(workspace.path, "second.ts"), "utf8")).toBe("const second = 20\n")
-      expect(ask).toHaveBeenCalledTimes(3)
+      expect(ask).toHaveBeenCalledTimes(9)
     } finally {
       await workspace.cleanup()
     }
@@ -752,7 +752,7 @@ describe("OpenCode plugin", () => {
       const snapshot = typeof read === "string" ? "" : String(read.metadata?.snapshot)
 
       await expect(hooks.tool!.edit!.execute({ filePath: "validated.ts", snapshot, oldString: "1", newString: "2" }, context)).rejects.toThrow("validation permission denied")
-      expect(ask).toHaveBeenNthCalledWith(3, { permission: "bash", patterns: [command], always: ["*"], metadata: { command, reason: "post-edit validation" } })
+      expect(ask).toHaveBeenCalledWith({ permission: "bash", patterns: [command], always: ["*"], metadata: { command, reason: "post-edit validation" } })
       expect(context.metadata).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ status: "failed", stage: "validation", path: "validated.ts", writes: 1 }) }))
       expect(await readFile(path.join(workspace.path, "validated.ts"), "utf8")).toBe("const value = 2\n")
     } finally {

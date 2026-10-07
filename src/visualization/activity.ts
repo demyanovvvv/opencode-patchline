@@ -18,6 +18,9 @@ export type ActivityView = {
   additions?: number | undefined
   deletions?: number | undefined
   reason?: string | undefined
+  routeReason?: string | undefined
+  failureCode?: string | undefined
+  failureDetail?: string | undefined
   recoveryAction?: string | undefined
   strategy?: string | undefined
   requestedStrategy?: string | undefined
@@ -126,6 +129,11 @@ export function patchlineActivity(calls: readonly ToolCall[]): ActivityView | un
     metadata.files = [{ path: call.input.filePath, diff: metadata.diff, diffTruncated: metadata.diffTruncated, additions: metadata.added, deletions: metadata.deleted }]
   }
   const paths = pathsFrom(metadata)
+  if (paths.length === 0 && call.tool === "apply_patch" && typeof call.input?.patchText === "string") {
+    for (const match of call.input.patchText.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)) {
+      if (!paths.includes(match[1]!)) paths.push(match[1]!)
+    }
+  }
   if (paths.length === 0 && typeof call.input?.filePath === "string") paths.push(call.input.filePath)
   const totalFiles = Array.isArray(metadata.files) ? metadata.files.length : paths.length
   const hiddenFiles = Math.max(0, totalFiles - 4)
@@ -159,7 +167,7 @@ export function patchlineActivity(calls: readonly ToolCall[]): ActivityView | un
     matchCount: numberValue(metadata.resultCount) ?? numberValue(metadata.matches), truncated: booleanValue(metadata.truncated),
     query: stringValue(metadata.query) ?? stringValue(call.input?.query), pattern: stringValue(metadata.pattern) ?? stringValue(call.input?.pattern),
     language: stringValue(metadata.language) ?? stringValue(call.input?.language), mechanism: stringValue(metadata.mechanism), operation: stringValue(metadata.operation) ?? stringValue(call.input?.operation),
-    strategy: stringValue(metadata.strategy), requestedStrategy: stringValue(metadata.requestedStrategy), confidence: numberValue(metadata.confidence),
+    strategy: stringValue(metadata.strategy), requestedStrategy: stringValue(metadata.requestedStrategy), confidence: numberValue(metadata.confidence), routeReason: stringValue(metadata.routeReason),
     exitCode: numberValue(metadata.exitCode), outputLines: numberValue(metadata.outputLines), command: stringValue(metadata.command), summary: recordValue(metadata.summary) ?? recordValue(metadata),
   }
   if (call.state.status === "running") {
@@ -175,9 +183,11 @@ export function patchlineActivity(calls: readonly ToolCall[]): ActivityView | un
   }
   if (call.state.status === "error" || metadata.validation === "failed" || (kind === "diagnostics" && metadata.ok === false)) {
     const batch = call.tool === "patchline_edit_batch" || call.tool === "apply_patch" || call.tool === "patchline_apply_patch"
+    const errorText = call.state.status === "error" ? call.state.error ?? "" : ""
+    const contextMismatch = call.tool === "apply_patch" && /failed to find expected lines|context does not match/i.test(errorText)
     const rejected = writes === 0 && (metadata.stage === "permission" || metadata.stage === "preflight")
     const strategy = stringValue(metadata.strategy)
-    let mutationLabel = metadata.validation === "failed" && writes !== undefined && writes > 0 ? "Changes applied · validation failed" : `${batch ? "Batch" : "Edit"} ${rejected ? "rejected" : "failed"}`
+    let mutationLabel = contextMismatch ? "Patch rejected · context mismatch" : metadata.validation === "failed" && writes !== undefined && writes > 0 ? "Changes applied · validation failed" : `${batch ? "Batch" : "Edit"} ${rejected ? "rejected" : "failed"}`
     if (strategy === "exact" && !batch) {
       if (rejected) mutationLabel = "Exact edit rejected"
       else if (metadata.validation === "failed" && writes !== undefined && writes > 0) mutationLabel = "Changes applied · validation failed"
@@ -189,8 +199,11 @@ export function patchlineActivity(calls: readonly ToolCall[]): ActivityView | un
       label: kind === "mutation" ? mutationLabel : activityLabel(call.tool, metadata, false),
       restored: Array.isArray(metadata.restored) ? metadata.restored.filter((item): item is string => typeof item === "string") : undefined,
       conflicts: Array.isArray(metadata.conflicts) ? metadata.conflicts.filter((item): item is string => typeof item === "string") : undefined,
-      reason: stringValue(metadata.reason) ?? call.state.error,
-      recoveryAction: stringValue(metadata.recoveryAction), validation: stringValue(metadata.validation),
+      reason: contextMismatch ? "Patch context does not match the current file." : stringValue(metadata.reason) ?? call.state.error,
+      routeReason: stringValue(metadata.routeReason),
+      failureCode: contextMismatch ? "NATIVE_PATCH_CONTEXT_MISMATCH" : stringValue(metadata.code),
+      failureDetail: contextMismatch ? errorText.slice(0, 2_000) : undefined,
+      recoveryAction: contextMismatch ? "Re-read the affected file and create a new patch from the current content." : stringValue(metadata.recoveryAction), validation: stringValue(metadata.validation),
     }
   }
   const completedLabel = metadata.status === "fallback_required" ? "Standard tool required" : kind === "mutation" ? (stringValue(metadata.strategy) === "exact" ? "Exact edit applied" : "Changes applied") : activityLabel(call.tool, metadata, false)

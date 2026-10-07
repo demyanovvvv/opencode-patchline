@@ -51,16 +51,14 @@ describe("review regressions", () => {
     const store = new ScopedSnapshotStore({ maxBytes: 1000 })
     const scope = { sessionId: "review", worktree: process.cwd() }
     const file = path.join(scope.worktree, "short-lines.txt")
-    const snapshot = store.record(scope, file, "short-lines.txt", decodeUtf8(Buffer.from("\n".repeat(200))), [])
-    expect(store.get(scope, file, snapshot.id)).toBeUndefined()
+    expect(() => store.record(scope, file, "short-lines.txt", decodeUtf8(Buffer.from("\n".repeat(200))), [])).toThrow(/budget/i)
   })
 
   it("accounts for seen-line sets in the snapshot budget", () => {
     const store = new ScopedSnapshotStore({ maxBytes: 1000 })
     const scope = { sessionId: "review", worktree: process.cwd() }
     const file = path.join(scope.worktree, "seen.txt")
-    const snapshot = store.record(scope, file, "seen.txt", decodeUtf8(Buffer.from("x\n".repeat(100))), Array.from({ length: 100 }, (_, i) => i + 1))
-    expect(store.get(scope, file, snapshot.id)).toBeUndefined()
+    expect(() => store.record(scope, file, "seen.txt", decodeUtf8(Buffer.from("x\n".repeat(100))), Array.from({ length: 100 }, (_, i) => i + 1))).toThrow(/budget/i)
   })
 
   it("rejects host versions outside the supported range", () => {
