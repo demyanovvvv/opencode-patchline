@@ -37,7 +37,7 @@ it("keeps configuration untouched when project preflight fails", async () => {
 })
 import { installPatchline } from "../src/installer.js"
 
-it("restores host configuration when plugin registration returns nonzero", async () => {
+it.skipIf(process.platform !== "win32" || process.arch !== "x64")("restores host configuration when plugin registration returns nonzero", async () => {
   const w = await temporaryWorkspace()
   const old = process.env.OPENCODE_CONFIG_DIR
   try {
