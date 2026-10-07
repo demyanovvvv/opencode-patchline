@@ -70,10 +70,9 @@
 - Native event telemetry has local malformed-event, deduplication and 1,000-entry
   bound tests, including missing identity rejection. Real host event delivery still
   requires a configured model session.
-- Direct upstream native `apply_patch` tests in the old partial checkout were
-  blocked by missing host dependencies (`@babel/core`, then `effect`). CI now has a
-  clean-checkout native-host job with frozen Bun install and the exact upstream
-  suite on Windows, Linux and macOS; results remain pending until CI runs.
+- The clean-checkout native-host suite passed on Windows, Linux and macOS in
+  CI run 37673212265 for OpenCode v1.18.34. The older partial local checkout
+  remains incomplete; the CI result is the authoritative native-suite evidence.
 
 - Structural Hashline and recovery clear next-snapshot observations when exact
   provenance cannot be proved, requiring a fresh read instead of guessing from
@@ -88,15 +87,13 @@
   lockfiles. Moves retain successful
   changes on budget-only next snapshot failure with an explicit warning.
 - Patch UI dependency advisories with compatible Solid/Babel versions and lockfile
-  updates. The attempted npm installation was rejected by the active shell policy.
-  Candidate patch updates are solid-js/babel-preset-solid 1.9.16 and a scoped
-  @opentui/solid override to @babel/core 7.29.7; they have not been installed or
-  verified and are deliberately absent from the manifest/lockfile.
-- `npm run audit:dependencies` now reports exact vulnerable production paths and
-  exits nonzero for high/critical advisories. The current lockfile still reports
-  three critical paths (`@opentui/solid`, `solid-js`, `seroval`); release remains
-  blocked until a compatible npm lockfile update is applied in an environment
-  that permits package-manager writes.
+  updates. `@opentui/solid` remains at 0.4.5 while the root Solid/Babel versions are
+  updated to 1.9.16 through scoped overrides; `@babel/core` is pinned to 7.29.7.
+  The dev-only `source-map-js` advisory is resolved at 1.2.2. `npm audit` and the
+  production-path audit gate report no high/critical advisories.
+- `npm run audit:dependencies` reports vulnerable production paths and fails for
+  high/critical advisories. After the compatible lockfile update, both this gate
+  and the full `npm audit` report zero vulnerabilities locally.
 - Extend the five-case Node/Bun linear differential corpus and run cross-platform,
   lower-bound/current OpenCode integration matrices. Local Bun Hashline, TUI and
   isolated installer/package and live plugin smoke passed locally. A full isolated
