@@ -64,7 +64,7 @@ export async function resolveWorkspacePath(worktree: string, inputPath: string, 
   const external = !isInside(canonicalWorkspace, canonical) || !isInside(lexicalWorkspace, lexical)
   if (external && !authorizePath) throw new PatchlineError("SYMLINK_ESCAPE", `Path resolves outside the worktree: ${inputPath}`, { path: inputPath, details: { worktree: lexicalWorkspace, canonicalWorktree: canonicalWorkspace, canonicalPath: canonical } })
   if (isGitInternalPath(canonicalWorkspace, canonical)) throw new PatchlineError("GIT_INTERNAL_PATH", `Editing .git internals is not allowed: ${inputPath}`, { path: inputPath })
-  if (external) await authorizePath!(canonical)
+  if (authorizePath) await authorizePath(canonical)
   return { absolute: canonical, canonical, workspace: canonicalWorkspace, relative: external ? canonical : path.relative(canonicalWorkspace, canonical) || lexicalRelative, exists: pathExists, symlink: lexicalInfo?.isSymbolicLink() === true }
 }
 

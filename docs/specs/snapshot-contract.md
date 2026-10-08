@@ -11,3 +11,9 @@ byte-identical documents. Pooled documents retain a normalized line index for
 range rendering without materializing a full line-string array on every read;
 the index is derived from the same snapshot content and does not change stale
 validation. Scope-specific observed lines remain independent.
+
+Byte accounting includes line indexes and observed sets. Same-content rereads
+merge observations only when the file identity remains the same. A snapshot that
+cannot fit its own quota rejects before an ID is published. Budget-only failure
+after a committed edit/move yields an applied result with no next snapshot and a
+warning. Tag whitespace normalization is linear in source length.

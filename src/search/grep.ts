@@ -27,6 +27,7 @@ export async function grepWorkspace(input: {
   include?: string | undefined
   maxResults: number
   signal?: AbortSignal | undefined
+  maxFiles?: number | undefined
   authorizePath?: ((path: string) => Promise<void>) | undefined
 }): Promise<{ matches: GrepMatch[]; truncated: boolean; skipped: Array<{ path: string; reason: string }>; skippedCount: number }> {
   input.signal?.throwIfAborted()
@@ -48,12 +49,19 @@ export async function grepWorkspace(input: {
     try {
       const document = decodeUtf8(await readBoundedUtf8Bytes(absolute, relative, MAX_SEARCH_FILE_BYTES), relative)
       if (document.text.includes("\0")) return { matches: [] }
-      const lines = document.text.split(/\r?\n/)
       const fileMatches: GrepMatch[] = []
-      for (let index = 0; index < lines.length; index++) {
+      const text = document.normalizedText
+      let offset = 0
+      let line = 1
+      while (offset < text.length) {
         input.signal?.throwIfAborted()
-        if (lines[index]!.includes(input.pattern)) fileMatches.push({ path: displayPath, line: index + 1, text: matchPreview(lines[index]!) })
+        const newline = text.indexOf("\n", offset)
+        const end = newline === -1 ? text.length : newline
+        const value = text.slice(offset, end)
+        if (value.includes(input.pattern)) fileMatches.push({ path: displayPath, line, text: matchPreview(value) })
         if (fileMatches.length > input.maxResults) break
+        offset = end + 1
+        line++
       }
       return { matches: fileMatches }
     } catch (error) {
@@ -62,7 +70,11 @@ export async function grepWorkspace(input: {
     }
   }
   const files: string[] = []
+  const maxFiles = input.maxFiles ?? 100_000
+  if (!Number.isSafeInteger(maxFiles) || maxFiles < 1) throw new PatchlineError("INVALID_ARGUMENT", "Search file budget must be a positive safe integer.")
+  let directories = 0
   const collect = async (entryPath: string): Promise<void> => {
+    if (++directories > 10_000) throw new PatchlineError("INVALID_ARGUMENT", "Search exceeds the 10,000-directory traversal budget; narrow the path.")
     input.signal?.throwIfAborted()
     const directory = await opendir(entryPath)
     const entries: { name: string; absolute: string; isDirectory: boolean; isFile: boolean }[] = []
@@ -82,15 +94,12 @@ export async function grepWorkspace(input: {
     } finally {
       await directory.close()
     }
-    entries.sort((left, right) => {
-      const compare = (value: string): string => value.replace(/[^0-9A-Za-z]/g, " ").replace(/[0-9]/g, "1").replace(/[A-Za-z]/g, "2")
-      const leftKey = compare(left.name)
-      const rightKey = compare(right.name)
-      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : left.name < right.name ? -1 : left.name > right.name ? 1 : 0
-    })
     for (const entry of entries) {
       if (entry.isDirectory) await collect(entry.absolute)
-      else if (entry.isFile) files.push(entry.absolute)
+      else if (entry.isFile) {
+        files.push(entry.absolute)
+        if (files.length > maxFiles) throw new PatchlineError("INVALID_ARGUMENT", `Search exceeds the ${maxFiles}-file traversal budget; narrow the path.`)
+      }
     }
   }
   const sortKey = (value: string): string => Array.from(value).map((character) => {

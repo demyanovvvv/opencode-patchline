@@ -1,0 +1,12 @@
+FROM node:22-bookworm
+WORKDIR /workspace
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts && npm install --global opencode-ai@1.18.35
+COPY . .
+RUN npm run typecheck \
+ && npm test -- --run --testTimeout=30000 \
+ && npm run lint \
+ && npm run build \
+ && npm run audit:dependencies \
+ && npm audit --audit-level=high
+CMD ["node", "scripts/native-session-smoke.mjs"]

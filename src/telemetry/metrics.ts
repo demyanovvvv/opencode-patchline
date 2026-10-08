@@ -8,6 +8,7 @@ export type MetricName =
   | "write_prevented"
   | "fallback"
   | "diagnostics"
+  | "native_patch_context_mismatch"
 
 export type MetricEvent = {
   name: MetricName
@@ -33,6 +34,7 @@ export class LocalMetrics {
     write_prevented: 0,
     fallback: 0,
     diagnostics: 0,
+    native_patch_context_mismatch: 0,
   }
   readonly #maxEvents: number
   readonly #enabled: boolean

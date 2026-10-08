@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { testRender } from "@opentui/solid"
-import { createSignal } from "solid-js"
+import { createMemo, createSignal } from "solid-js"
 import { PatchlineTui } from "../dist/tui.js"
 import { RGBA } from "@opentui/core"
 import { PatchlinePlugin } from "../dist/plugin.js"
@@ -12,7 +12,13 @@ const api = {
   state: { session: { messages: () => [{ id: "message" }] }, part: () => parts() },
   theme: { current: Object.fromEntries(["text", "textMuted", "primary", "success", "error", "borderSubtle", "borderActive", "backgroundPanel", "diffLineNumber", "diffAdded", "diffRemoved", "diffContext", "diffHunkHeader", "diffAddedBg", "diffRemovedBg", "diffContextBg", "diffAddedLineNumberBg", "diffRemovedLineNumberBg"].map((key) => [key, "#ffffff"])) },
   // Distinct theme colors make captured border/sign assertions meaningful.
-  slots: { register: (value) => { registration = value; slot = value.slots.sidebar_content } },
+  slots: { register: (value) => {
+    registration = value
+    slot = () => {
+      const part = createMemo(() => parts()[0] ?? { type: "tool", tool: "unknown", state: { status: "pending", input: {} } })
+      return value.slots.tool_edit({}, { get part() { return part() } })
+    }
+  } },
 }
 await PatchlineTui(api)
 const server = await PatchlinePlugin({ directory: process.cwd(), worktree: process.cwd() })
@@ -111,8 +117,15 @@ try {
     assert.doesNotMatch(resultScreen.captureCharFrame(), /result-line-13/)
     await resultScreen.mockMouse.click(5, resultScreen.captureCharFrame().split("\n").findIndex((line) => line.includes("more lines")))
     await resultScreen.renderOnce()
-    assert.match(resultScreen.captureCharFrame(), /result-line-24/)
-    assert.doesNotMatch(resultScreen.captureCharFrame(), /result-line-25/)
+  assert.match(resultScreen.captureCharFrame(), /result-line-24/)
+  assert.doesNotMatch(resultScreen.captureCharFrame(), /result-line-25/)
+  setParts([{ type: "tool", tool: "apply_patch", state: { status: "error", input: { patchText: "*** Begin Patch\n*** Update File: docs/example.md\n@@\n-old\n+new\n*** End Patch" }, error: "apply_patch verification failed: Error: Failed to find expected lines in docs/example.md", metadata: {} } }])
+  await screen.renderOnce()
+  assert.match(screen.captureCharFrame(), /Patch rejected · context mismatch/)
+  assert.match(screen.captureCharFrame(), /Patch context does not match the current file/)
+  assert.match(screen.captureCharFrame(), /Re-read the affected file/)
+  assert.equal((screen.captureCharFrame().match(/Re-read the affected file/g) ?? []).length, 1, "recovery guidance must be shown once")
+  assert.doesNotMatch(screen.captureCharFrame(), /Route: Patch context does not match/)
     await resultScreen.mockMouse.click(5, resultScreen.captureCharFrame().split("\n").findIndex((line) => line.includes("Show fewer lines")))
     await resultScreen.renderOnce()
     assert.doesNotMatch(resultScreen.captureCharFrame(), /result-line-13/)

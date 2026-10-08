@@ -48,6 +48,7 @@ const POLICY = `PATCHLINE EDITING POLICY
 - Use patchline_apply_patch for Hashline: [PATH#TAG] followed by PUT N.=M: and +TEXT payload rows, CUT N.=M, or PUT <N:/PUT >N: insertions.
 - Use the ordinary apply_patch tool for large files, large changes, or operations unsupported by Patchline. Native patches do not require a Patchline snapshot.
 - After a native patch, read changed files again before using Patchline snapshots.
+- If native apply_patch reports "Failed to find expected lines", re-read the smallest affected range and rebuild the patch from the exact current lines, including line breaks. Do not repeat the same patch, guess context, or overwrite the file to bypass rejection.
 - Line numbers refer to the original snapshot; every section requires the tag returned by read.
 - Preserve unrelated code and formatting. If a snapshot is stale, reread before retrying.
 - Call tools using JSON arguments, not prose or XML. Omit unused optional fields; newString: "" is an intentional deletion.
@@ -60,8 +61,11 @@ const POLICY = `PATCHLINE EDITING POLICY
 
 function scope(context: ToolContext, permission = "edit") {
   return { sessionId: context.sessionID, worktree: context.worktree, authorizePath: async (filePath: string) => {
-    await context.ask({ permission: "external_directory", patterns: [filePath], always: [filePath], metadata: { path: filePath, worktree: context.worktree } })
-    await context.ask({ permission, patterns: [filePath], always: [filePath], metadata: { path: filePath } })
+    const relative = path.relative(context.worktree, filePath)
+    const external = path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)
+    if (external) await context.ask({ permission: "external_directory", patterns: [filePath], always: [filePath], metadata: { path: filePath, worktree: context.worktree } })
+    const pattern = external ? filePath : relative
+    await context.ask({ permission, patterns: [pattern], always: [pattern], metadata: { path: filePath } })
   } }
 }
 
@@ -104,6 +108,14 @@ function toolError(error: unknown): Error {
     recoveryAction: error.recoveryAction,
   })
 }
+
+function nativePatchContextMismatch(event: unknown): boolean {
+  if (!event || typeof event !== "object") return false
+  const value = event as { type?: unknown; properties?: { part?: { type?: unknown; tool?: unknown; state?: { status?: unknown; error?: unknown } } } }
+  const part = value.properties?.part
+  return value.type === "message.part.updated" && part?.type === "tool" && part.tool === "apply_patch" && part.state?.status === "error" && typeof part.state.error === "string" && /failed to find expected lines|context does not match/i.test(part.state.error)
+}
+
 
 
 async function splitHashlineSections(patchText: string) {
@@ -151,6 +163,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
   const edits = new EditService(snapshots, config)
   const writes = new WriteService(config)
   const metrics = new LocalMetrics({ enabled: config.telemetry })
+  const nativeFailureCalls = new Set<string>()
 
   async function validateMutation(context: ToolContext, paths: readonly string[]) {
     const commands = [...new Set(paths.map((filePath) => validationCommand(filePath, config)).filter((command): command is string => command !== undefined))]
@@ -254,7 +267,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             ...applied,
             status: "applied",
             stage: "completed",
-            recoveryAction: "Use the returned snapshot for the next edit.",
+            recoveryAction: result.snapshot ? "Use the returned snapshot for the next edit." : "Changes applied without a retained snapshot. Re-read before the next edit.",
             ...validation,
           },
         }
@@ -357,11 +370,19 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
               const snapshot = snapshots.get(scope(context), resolved.canonical, operation.snapshot!)
               if (!snapshot) continue
               routingSnapshots.set(resolved.canonical, { text: snapshot.text, totalLines: snapshot.lineIndex.totalLines })
+              const oldString = operation.oldString!.replace(/\r\n?/g, "\n")
+              const newString = operation.newString!.replace(/\r\n?/g, "\n")
               const projected = operation.replaceAll
-                ? snapshot.text.split(operation.oldString!).join(operation.newString!)
-                : snapshot.text.replace(operation.oldString!, operation.newString!)
-              const stats = diffStats(snapshot.text, projected)
-              changedLines += Math.max(stats.added, stats.deleted)
+                ? snapshot.text.split(oldString).join(newString)
+                : snapshot.text.replace(oldString, () => newString)
+              try {
+                const stats = diffStats(snapshot.text, projected)
+                changedLines += Math.max(stats.added, stats.deleted)
+              } catch (error) {
+                if (!(error instanceof PatchlineError) || error.code !== "STANDARD_TOOL_REQUIRED") throw error
+                changedLines = Number.MAX_SAFE_INTEGER
+                break
+              }
             }
             const route = routeEdit({
               fileCount: paths.length,
@@ -545,7 +566,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             progress(context, "permission", "Patchline · structural search", { kind: "search", pattern: args.pattern, path: args.filePath })
             await context.ask({ permission: "read", patterns: [args.filePath], always: ["*"] , metadata: { path: args.filePath } })
             progress(context, "searching", "Patchline · structural search", { kind: "search", pattern: args.pattern, path: args.filePath })
-            const result = await astSearchFile({ ...scope(context, "read"), filePath: args.filePath, pattern: args.pattern, language: args.language, maxResults: args.maxResults ?? config.maxSearchResults })
+            const result = await astSearchFile({ ...scope(context, "read"), filePath: args.filePath, pattern: args.pattern, language: args.language, maxResults: args.maxResults ?? config.maxSearchResults, signal: context.abort })
             metrics.record({ name: "ast_search", lines: result.matches.length, durationMs: Date.now() - started, details: { truncated: result.truncated } })
             const output = result.matches.length === 0 ? "No structural matches found." : boundedSearchOutput(`${result.matches.map((match) => `${match.path}:${match.startLine}-${match.endLine}: ${match.text}`).join("\n")}${result.truncated ? "\nResults truncated." : ""}`)
             return { title: `Patchline · ${result.matches.length} structural matches`, output, metadata: { kind: "search", status: "observed", stage: "completed", path: args.filePath, pattern: args.pattern, language: args.language, resultCount: result.matches.length, truncated: result.truncated || output.includes("Results truncated") } }
@@ -574,15 +595,16 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
           const details = { kind: "lsp", operation: args.operation, query: args.query, path: args.filePath }
           try {
             progress(context, "permission", "Patchline · LSP", details)
+            const resolvedFile = args.filePath ? await resolveWorkspacePath(context.worktree, args.filePath, scope(context, "read").authorizePath) : undefined
             if (args.filePath) await context.ask({ permission: "read", patterns: [args.filePath], always: ["*"], metadata: { path: args.filePath } })
             progress(context, "searching", "Patchline · LSP", details)
             let output: string | undefined
             if (args.operation === "workspaceSymbol" && args.query !== undefined) {
-              try { output = await runOpenCodeLspClient(input.client, { worktree: context.worktree, query: args.query }) } catch (error) {
+              try { output = await runOpenCodeLspClient(input.client, { worktree: context.worktree, query: args.query, signal: context.abort }) } catch (error) {
                 if (!(error instanceof PatchlineError) || error.code !== "CAPABILITY_UNAVAILABLE") throw error
               }
             }
-            output ??= await runOpenCodeLspBridge({ worktree: context.worktree, operation: args.operation, query: args.query, filePath: args.filePath, signal: context.abort })
+            output ??= await runOpenCodeLspBridge({ worktree: context.worktree, operation: args.operation, query: args.query, filePath: resolvedFile?.canonical, signal: context.abort })
             return { title: `Patchline · ${args.operation}`, output, metadata: { ...details, status: "observed", stage: "completed" } }
           } catch (error) {
             failure(context, error, "searching", args.filePath, { ...details, writes: 0 })
@@ -655,7 +677,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         async execute() {
           if (!config.summary) throw new PatchlineError("CAPABILITY_UNAVAILABLE", "Patchline summary is disabled by configuration.")
           const summary = metrics.summary()
-          const counters = { reads: summary.read, edits: summary.edit, writes: summary.write, searches: summary.grep + summary.ast_search, diagnostics: summary.diagnostics, staleConflicts: summary.stale_conflict, writesPrevented: summary.write_prevented, fallbacks: summary.fallback }
+          const counters = { reads: summary.read, edits: summary.edit, writes: summary.write, searches: summary.grep + summary.ast_search, diagnostics: summary.diagnostics, staleConflicts: summary.stale_conflict, writesPrevented: summary.write_prevented, fallbacks: summary.fallback, nativePatchContextMismatches: summary.native_patch_context_mismatch }
           return { title: "Patchline · session summary", metadata: { kind: "summary", status: "observed", stage: "completed", summary: counters }, output: [
             "Patchline",
             `Reads: ${summary.read}`,
@@ -682,8 +704,20 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
     async "tool.execute.after"(hookInput) {
       if (hookInput.tool === "apply_patch") snapshots.clear()
     },
+    async event(input) {
+      if (!nativePatchContextMismatch(input.event)) return
+      const event = input.event as { properties: { part: { sessionID: string; callID: string; id: string } } }
+      const part = event.properties.part
+      if (typeof part.sessionID !== "string" || typeof (part.callID ?? part.id) !== "string") return
+      const key = `${part.sessionID}\0${part.callID ?? part.id}`
+      if (nativeFailureCalls.has(key)) return
+      nativeFailureCalls.add(key)
+      while (nativeFailureCalls.size > 1000) nativeFailureCalls.delete(nativeFailureCalls.values().next().value!)
+      metrics.record({ name: "native_patch_context_mismatch", details: { tool: "apply_patch" } })
+    },
     async dispose() {
       snapshots.clear()
+      nativeFailureCalls.clear()
     },
   }
 }

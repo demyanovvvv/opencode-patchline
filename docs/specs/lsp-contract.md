@@ -2,6 +2,10 @@
 
 Status: Accepted
 
+SDK symbols responses are inspected for error envelopes. Requests forward abort
+signals and have a 15-second deadline; output is bounded to 20,000 characters.
+File-specific plugin calls authorize the canonical target before CLI execution.
+
 The fallback order is the active OpenCode SDK symbol client, native OpenCode
 LSP, the CLI bridge, AST, then grep. Workspace-symbol requests use the active
 SDK client when available, avoiding an isolated process; document symbols and

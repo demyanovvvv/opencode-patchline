@@ -1,4 +1,4 @@
-import { link, lstat, mkdtemp, readFile, rename, rm, rmdir, stat, unlink } from "node:fs/promises"
+import { link, lstat, mkdtemp, rename, rm, rmdir, stat, unlink } from "node:fs/promises"
 import path from "node:path"
 import { diffPreview, DIFF_PREVIEW_BUDGET } from "./visualization/diff-preview.js"
 import { PatchlineError } from "./errors.js"
@@ -11,9 +11,19 @@ import { normalizedIdentity, resolveWorkspacePath } from "./workspace/paths.js"
 import { reportMutationStage, type MutationObserver } from "./writing/progress.js"
 import { isGeneratedFile } from "./guards/files.js"
 import { DEFAULT_CONFIG, type PatchlineConfig } from "./config.js"
+import { readBoundedUtf8Bytes } from "./io/bounded-file.js"
+import { withPathLocks } from "./writing/path-lock.js"
+import { ClipboardStore } from "./editing/clipboard-store.js"
 
 const MAX_EDIT_CONTENT_BYTES = 8 * 1024 * 1024
 const MAX_BATCH_ITEMS = 500
+const MAX_PREPARED_BYTES = 32 * 1024 * 1024
+
+const readFile = (file: string) => readBoundedUtf8Bytes(file, file, MAX_EDIT_CONTENT_BYTES)
+
+function preparedBytes(item: PreparedEdit): number {
+  return item.beforeBytes.byteLength + item.afterBytes.byteLength + 2 * (item.beforeText.length + item.afterText.length) + item.seenLinesAfter.size * 32
+}
 
 export type ExactEdit = {
   oldString: string
@@ -117,15 +127,38 @@ function applyExact(snapshot: FileSnapshot, edit: ExactEdit): string {
       }
     }
   }
-  const result = edit.replaceAll ? snapshot.text.split(edit.oldString).join(edit.newString) : snapshot.text.replace(edit.oldString, edit.newString)
+  const result = edit.replaceAll ? snapshot.text.split(edit.oldString).join(edit.newString) : snapshot.text.replace(edit.oldString, () => edit.newString)
   if (Buffer.byteLength(result, "utf8") > MAX_EDIT_CONTENT_BYTES) {
     throw new PatchlineError("INVALID_ARGUMENT", "Edit result exceeds the 8 MiB limit.", { path: snapshot.relativePath, snapshotId: snapshot.id })
   }
   return result
 }
 
+function exactSeenLines(snapshot: FileSnapshot, edit: ExactEdit): Set<number> {
+  const matches = occurrences(snapshot.text, edit.oldString)
+  const indexes = edit.replaceAll ? matches : matches.slice(0, 1)
+  const observed: boolean[] = []
+  let beforeLine = 1
+  let afterLine = 1
+  const consume = (text: string, inserted: boolean): void => {
+    for (const character of text) {
+      observed[afterLine - 1] = (observed[afterLine - 1] ?? true) && (inserted || snapshot.seenLines.has(beforeLine))
+      if (character === "\n") { afterLine++; if (!inserted) beforeLine++ }
+    }
+  }
+  let offset = 0
+  for (const index of indexes) {
+    consume(snapshot.text.slice(offset, index), false)
+    beforeLine += (edit.oldString.match(/\n/g) ?? []).length
+    consume(edit.newString.replace(/\r\n?/g, "\n"), true)
+    offset = index + edit.oldString.length
+  }
+  consume(snapshot.text.slice(offset), false)
+  return new Set(observed.flatMap((seen, index) => seen ? [index + 1] : []))
+}
+
 export class EditService {
-  private readonly clipboards = new Map<string, { named?: Map<string, readonly string[]> }>()
+  private readonly clipboards = new ClipboardStore()
   private readonly hashlineQueues = new Map<string, Promise<void>>()
   constructor(private readonly snapshots: ScopedSnapshotStore, private readonly config: PatchlineConfig = DEFAULT_CONFIG) {}
 
@@ -133,6 +166,7 @@ export class EditService {
     return atomicReplace(prepared.absolutePath, prepared.afterBytes, {
       expectedParent: prepared.parentIdentity,
       expectedTarget: prepared.snapshot.identity,
+      expectedDigest: digestBytes(prepared.beforeBytes),
     })
   }
 
@@ -229,21 +263,24 @@ export class EditService {
     await atomicReplace(currentPath.absolute, prepared.beforeBytes, {
       expectedParent: prepared.parentIdentity,
       expectedTarget: prepared.committedIdentity,
+      expectedDigest: digestBytes(prepared.afterBytes),
     })
   }
 
   async prepare(request: EditRequest): Promise<PreparedEdit> {
+    if (request.exact) request = { ...request, exact: { ...request.exact, oldString: request.exact.oldString.replace(/\r\n?/g, "\n"), newString: request.exact.newString.replace(/\r\n?/g, "\n") } }
     if ((request.exact === undefined) === (request.hashlinePatch === undefined)) {
       throw new PatchlineError("INVALID_ARGUMENT", "Provide exactly one of exact or hashlinePatch.")
     }
-    return this.prepareResult(request, async (snapshot) => request.exact
+    return this.prepareResult(request, async (snapshot, liveText) => request.exact
       ? { text: applyExact(snapshot, request.exact), warnings: [] }
-      : applyHashlineInMemory(snapshot, request.hashlinePatch!, this.config.hashlineRecovery ? decodeUtf8(await readFile(snapshot.canonicalPath), snapshot.relativePath).normalizedText : snapshot.text))
+      : applyHashlineInMemory(snapshot, request.hashlinePatch!, this.config.hashlineRecovery ? liveText : snapshot.text))
   }
 
-  protected async prepareResult(request: EditRequest, transform: (snapshot: FileSnapshot) => Promise<{ text: string; warnings: string[] }>, allowUnchanged = false): Promise<PreparedEdit> {
+  protected async prepareResult(request: EditRequest, transform: (snapshot: FileSnapshot, liveText: string) => Promise<{ text: string; warnings: string[]; seenLinesAfter?: ReadonlySet<number> }>, allowUnchanged = false): Promise<PreparedEdit> {
     const resolved = await resolveWorkspacePath(request.worktree, request.filePath, request.authorizePath)
     if (!resolved.exists) throw new PatchlineError("FILE_NOT_FOUND", `File not found: ${request.filePath}`, { path: request.filePath })
+    if (this.config.protectGeneratedFiles && isGeneratedFile(resolved.relative, this.config.generatedPatterns)) throw new PatchlineError("GENERATED_FILE", `Generated file cannot be patched: ${resolved.relative}`, { path: resolved.relative })
     const snapshot = this.snapshots.get(request, resolved.canonical, request.snapshot)
     if (!snapshot) {
       throw new PatchlineError("SNAPSHOT_NOT_FOUND", `No matching snapshot for ${resolved.relative}. Re-read the affected range.`, {
@@ -252,7 +289,7 @@ export class EditService {
         retryable: true,
       })
     }
-    const beforeBytes = await readFile(resolved.absolute)
+    const beforeBytes = await readBoundedUtf8Bytes(resolved.absolute, resolved.relative, MAX_EDIT_CONTENT_BYTES)
     const parentIdentity = await readFileIdentity(path.dirname(resolved.absolute))
     if (digestBytes(beforeBytes) !== snapshot.rawDigest && (request.hashlinePatch === undefined || !this.config.hashlineRecovery)) {
       throw new PatchlineError(
@@ -262,11 +299,12 @@ export class EditService {
       )
     }
     const beforeDocument = decodeUtf8(beforeBytes, resolved.relative)
-    const result = await transform(snapshot)
+    const result = await transform(snapshot, beforeDocument.normalizedText)
+    if (request.hashlinePatch && this.config.hashlineRecovery && digestBytes(await readBoundedUtf8Bytes(resolved.absolute, resolved.relative, MAX_EDIT_CONTENT_BYTES)) !== digestBytes(beforeBytes)) throw new PatchlineError("STALE_SNAPSHOT", `Recovery baseline changed: ${resolved.relative}.`, { path: resolved.relative, retryable: true })
     if (Buffer.byteLength(result.text, "utf8") > MAX_EDIT_CONTENT_BYTES) {
       throw new PatchlineError("INVALID_ARGUMENT", "Edit result exceeds the 8 MiB limit.", { path: snapshot.relativePath, snapshotId: snapshot.id })
     }
-    const normalizedAfter = result.text
+    const normalizedAfter = result.text.replace(/\r\n?/g, "\n")
     const warnings = result.warnings
     if (!allowUnchanged && normalizedAfter === snapshot.text) {
       throw new PatchlineError("PATCH_PREFLIGHT_FAILED", "The edit produced no changes.", { path: resolved.relative })
@@ -284,7 +322,7 @@ export class EditService {
       beforeText,
       afterText: normalizedAfter,
       stats: analysis.stats,
-      seenLinesAfter: analysis.seenLinesAfter,
+      seenLinesAfter: result.seenLinesAfter ?? (request.exact && beforeText === snapshot.text ? exactSeenLines(snapshot, request.exact) : request.hashlinePatch ? new Set<number>() : analysis.seenLinesAfter),
       warnings,
       parentIdentity,
     }
@@ -358,22 +396,30 @@ export class EditService {
       observed.push(snapshot)
     }
     const key = `${scope.sessionId}\0${normalizedIdentity(scope.worktree)}`
-    const clipboard = this.clipboards.get(key) ?? {}
+    const clipboard = this.clipboards.get(key)
     const normalizedPatch = sections.map((section, index) => section.patch.replace(/^\[[^\n]+\]/, `[${observed[index]!.relativePath}#${observed[index]!.tag}]`)).join("\n")
-    const liveTexts = await Promise.all(observed.map(async (snapshot) => decodeUtf8(await readFile(snapshot.canonicalPath), snapshot.relativePath).normalizedText))
+    const liveTexts: string[] = []
+    let liveBytes = 0
+    for (const snapshot of observed) {
+      signal?.throwIfAborted()
+      const bytes = await readBoundedUtf8Bytes(snapshot.canonicalPath, snapshot.relativePath, MAX_EDIT_CONTENT_BYTES)
+      liveBytes += bytes.byteLength
+      if (liveBytes > 4 * 1024 * 1024) throw new PatchlineError("INVALID_ARGUMENT", "Hashline live input exceeds the 4 MiB aggregate memory budget.")
+      liveTexts.push(decodeUtf8(bytes, snapshot.relativePath).normalizedText)
+    }
     const batch = await applyHashlineBatchInMemory(observed, normalizedPatch, clipboard, this.config.hashlineRecovery ? liveTexts : undefined)
     const prepared: PreparedEdit[] = []
+    let totalPreparedBytes = 0
     for (const [index, result] of batch.results.entries()) {
       const section = sections[index]!
       const snapshot = observed[index]!
       const request = { ...scope, filePath: snapshot.relativePath, snapshot: snapshot.id, hashlinePatch: section.patch }
       const removing = result.op === "delete"
-      if (this.config.hashlineRecovery && section.fileOp === undefined) {
-        const current = decodeUtf8(await readFile(snapshot.canonicalPath), snapshot.relativePath).normalizedText
-        if (current !== snapshot.text && !result.warnings.some((warning) => /recover|drift/i.test(warning))) throw new PatchlineError("STALE_SNAPSHOT", `Hashline recovery could not prove unchanged anchors for ${snapshot.relativePath}.`, { path: snapshot.relativePath, snapshotId: snapshot.id, retryable: true })
-      }
       if (this.config.protectGeneratedFiles && isGeneratedFile(snapshot.relativePath, this.config.generatedPatterns)) throw new PatchlineError("GENERATED_FILE", `Generated file cannot be patched: ${snapshot.relativePath}`)
-      const item = await this.prepareResult(request, async () => ({ text: removing ? "" : result.text, warnings: result.warnings }), removing || !!result.moveDest || result.op === "noop")
+      const item = await this.prepareResult(request, async (_snapshot, liveText) => {
+        if (liveText !== liveTexts[index]) throw new PatchlineError("STALE_SNAPSHOT", `Hashline baseline changed: ${snapshot.relativePath}.`, { path: snapshot.relativePath, retryable: true })
+        return { text: removing ? "" : result.text, warnings: result.warnings, ...(result.seenLinesAfter ? { seenLinesAfter: result.seenLinesAfter } : {}) }
+      }, removing || !!result.moveDest || result.op === "noop")
       if (removing && snapshot.text.split("\n").some((line, row) => (line.length > 0 || row < snapshot.text.split("\n").length - 1) && !snapshot.seenLines.has(row + 1))) throw new PatchlineError("INVALID_ANCHOR", `Read all lines before removing ${snapshot.relativePath}.`)
       if (removing) item.removed = false
       if (result.moveDest) {
@@ -384,13 +430,13 @@ export class EditService {
         occupied.add(normalizedIdentity(destination.canonical))
         item.destination = { ...destination, parentIdentity: await readFileIdentity(path.dirname(destination.absolute)) }
       }
+      totalPreparedBytes += preparedBytes(item)
+      if (totalPreparedBytes > MAX_PREPARED_BYTES) throw new PatchlineError("INVALID_ARGUMENT", "Edit batch exceeds the 32 MiB prepared memory budget.")
       if (result.op !== "noop" || result.moveDest) prepared.push(item)
     }
     if (prepared.length === 0) throw new PatchlineError("PATCH_PREFLIGHT_FAILED", "The patch produced no changes.")
     const results = await this.commitBatch(prepared, observer, signal)
     batch.publish()
-    this.clipboards.set(key, clipboard)
-    while (this.clipboards.size > 512) this.clipboards.delete(this.clipboards.keys().next().value!)
     return results
   }
 
@@ -408,7 +454,13 @@ export class EditService {
         if (digestBytes(prepared.afterBytes) !== prepared.snapshot.rawDigest) {
           prepared.destinationIdentity = await atomicReplace(destination.absolute, prepared.afterBytes, { expectedParent: destination.parentIdentity, expectedTarget: prepared.destinationIdentity })
         }
-        next = this.snapshots.record(prepared.request, destination.canonical, destination.relative, decodeUtf8(prepared.afterBytes), prepared.seenLinesAfter, prepared.destinationIdentity)
+        try {
+          next = this.snapshots.record(prepared.request, destination.canonical, destination.relative, decodeUtf8(prepared.afterBytes), prepared.seenLinesAfter, prepared.destinationIdentity)
+        } catch (cause) {
+          this.snapshots.invalidate(destination.canonical, prepared.request)
+          if (cause instanceof PatchlineError && cause.code === "STANDARD_TOOL_REQUIRED") prepared.warnings.push("Move applied without a retained next snapshot; re-read before editing.")
+          else throw cause
+        }
       }
       this.snapshots.invalidate(prepared.canonicalPath, prepared.request)
       const target = prepared.destination?.relative ?? prepared.snapshot.relativePath
@@ -421,7 +473,7 @@ export class EditService {
     const preview = budget > 0 ? diffPreview(prepared.snapshot.relativePath, prepared.snapshot.relativePath, prepared.beforeText, prepared.afterText, budget) : { patch: "", truncated: true }
     const nextIdentity = await this.writePreparedFile(prepared)
     prepared.committedIdentity = nextIdentity
-    let next: FileSnapshot
+    let next: FileSnapshot | undefined
     try {
       next = this.snapshots.record(
         prepared.request,
@@ -433,11 +485,12 @@ export class EditService {
       )
     } catch (cause) {
       this.snapshots.invalidate(prepared.canonicalPath, prepared.request)
-      throw new PatchlineError("TRANSACTION_FAILED", `File changed but snapshot bookkeeping failed: ${prepared.snapshot.relativePath}. Re-read before retrying.`, { cause, path: prepared.snapshot.relativePath, writes: 1 })
+      if (cause instanceof PatchlineError && cause.code === "STANDARD_TOOL_REQUIRED") prepared.warnings.push("Changes applied; next snapshot exceeded its memory budget. Re-read a smaller file or use the standard tool.")
+      else throw new PatchlineError("TRANSACTION_FAILED", `File changed but snapshot bookkeeping failed: ${prepared.snapshot.relativePath}. Re-read before retrying.`, { cause, path: prepared.snapshot.relativePath, writes: 1 })
     }
     return {
       path: prepared.snapshot.relativePath,
-      snapshot: next.id,
+      snapshot: next?.id ?? "",
       added: prepared.stats.added,
       deleted: prepared.stats.deleted,
       bytesWritten: prepared.afterBytes.byteLength,
@@ -448,7 +501,7 @@ export class EditService {
         `Changed: ${prepared.snapshot.relativePath}`,
         `Diff: +${prepared.stats.added} -${prepared.stats.deleted}`,
         "Snapshot verified. No stale conflict.",
-        `Next snapshot: ${next.id}`,
+        ...(next ? [`Next snapshot: ${next.id}`] : []),
         ...(prepared.warnings.length > 0 ? [`Warnings: ${prepared.warnings.join(" ")}`] : []),
       ].join("\n"),
     }
@@ -465,8 +518,12 @@ export class EditService {
     if (requests.length > MAX_BATCH_ITEMS) throw new PatchlineError("INVALID_ARGUMENT", `Batch must contain at most ${MAX_BATCH_ITEMS} edits.`)
     const prepared: PreparedEdit[] = []
     const paths = new Set<string>()
+    let totalPreparedBytes = 0
     for (const request of requests) {
+      signal?.throwIfAborted()
       const item = await this.prepare(request)
+      totalPreparedBytes += preparedBytes(item)
+      if (totalPreparedBytes > MAX_PREPARED_BYTES) throw new PatchlineError("INVALID_ARGUMENT", "Edit batch exceeds the 32 MiB prepared memory budget.")
       const canonicalIdentity = normalizedIdentity(item.canonicalPath)
       if (paths.has(canonicalIdentity)) {
         throw new PatchlineError("INVALID_ARGUMENT", `Batch contains duplicate target: ${item.snapshot.relativePath}`)
@@ -479,6 +536,10 @@ export class EditService {
   }
 
   protected async commitBatch(prepared: readonly PreparedEdit[], observer?: MutationObserver, signal?: AbortSignal): Promise<EditResult[]> {
+    return withPathLocks(prepared.flatMap((item) => [item.canonicalPath, ...(item.destination ? [item.destination.canonical] : [])]), () => this.commitBatchLocked(prepared, observer, signal), signal)
+  }
+
+  private async commitBatchLocked(prepared: readonly PreparedEdit[], observer?: MutationObserver, signal?: AbortSignal): Promise<EditResult[]> {
     const results: EditResult[] = []
     const landed: PreparedEdit[] = []
     let remainingPreview = DIFF_PREVIEW_BUDGET
@@ -511,6 +572,7 @@ export class EditService {
         try {
           await this.restorePreparedFile(item)
           this.snapshots.invalidate(item.canonicalPath, item.request)
+          if (item.destination) this.snapshots.invalidate(item.destination.canonical, item.request)
           restored.push(item.snapshot.relativePath)
         } catch {
           conflicts.push(item.snapshot.relativePath)

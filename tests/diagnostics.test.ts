@@ -14,7 +14,7 @@ async function temporaryDirectory(): Promise<string> {
 }
 
 afterEach(async () => {
-  await Promise.all(workspaces.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
+  await Promise.all(workspaces.splice(0).map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })))
 })
 
 describe("diagnostic commands", () => {

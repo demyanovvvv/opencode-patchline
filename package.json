@@ -59,6 +59,9 @@
     "lint": "eslint . --max-warnings 0",
     "doctor": "tsx src/cli.ts doctor",
     "check:release": "node scripts/check-release.mjs",
+    "audit:dependencies": "node scripts/dependency-audit.mjs",
+    "smoke:native-host": "npm run build && node scripts/native-host-smoke.mjs",
+    "smoke:native-session": "npm run build && node scripts/native-session-smoke.mjs",
     "bench": "tsx benchmarks/runner.ts",
     "smoke:plugin": "npm run build && node scripts/plugin-smoke.mjs",
     "smoke:hashline": "npm run build && npm exec --yes --package=bun -- bun --conditions=browser scripts/hashline-smoke.mjs",
@@ -80,7 +83,7 @@
     "@opentui/solid": "0.4.5",
     "diff": "^8.0.2",
     "jsonc-parser": "^3.3.1",
-    "solid-js": "1.9.12",
+    "solid-js": "1.9.16",
     "zod": "^4.1.8"
   },
   "devDependencies": {
@@ -89,11 +92,19 @@
     "@typescript-eslint/eslint-plugin": "^8.44.0",
     "@typescript-eslint/parser": "^8.44.0",
     "@vitest/coverage-v8": "^5.0.1",
-    "babel-preset-solid": "1.9.12",
+    "babel-preset-solid": "1.9.16",
     "eslint": "^9.36.0",
+    "source-map-js": "^1.2.2",
     "tsx": "^4.23.13",
     "typescript": "^5.9.2",
     "vitest": "^5.0.1"
+  },
+  "overrides": {
+    "@opentui/solid": {
+      "solid-js": "$solid-js",
+      "babel-preset-solid": "$babel-preset-solid",
+      "@babel/core": "$@babel/core"
+    }
   },
   "main": "./dist/index.js",
   "directories": {

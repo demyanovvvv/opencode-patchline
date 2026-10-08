@@ -8,6 +8,8 @@ import { normalizedIdentity, resolveWorkspacePath } from "./workspace/paths.js"
 import { digestBytes, type FileIdentity } from "./snapshot/store.js"
 import { reportMutationStage, type MutationObserver } from "./writing/progress.js"
 import { cleanupParents, ensureParents, type CreatedDirectory } from "./writing/parents.js"
+import { withPathLocks } from "./writing/path-lock.js"
+import { readBoundedUtf8Bytes } from "./io/bounded-file.js"
 
 const MAX_WRITE_CONTENT_BYTES = 8 * 1024 * 1024
 const MAX_BATCH_ITEMS = 500
@@ -48,8 +50,9 @@ export class WriteService {
     content: string,
     expectedTarget: FileIdentity,
     expectedParent: FileIdentity,
+    expectedDigest: string,
   ): Promise<void> {
-    await atomicReplace(filePath, Buffer.from(content, "utf8"), { expectedParent, expectedTarget })
+    await atomicReplace(filePath, Buffer.from(content, "utf8"), { expectedParent, expectedTarget, expectedDigest })
   }
 
   protected async writeCreatedFile(item: PreparedWrite, onCreated?: (file: CreatedFile) => void): Promise<CreatedFile> {
@@ -146,10 +149,13 @@ export class WriteService {
       })
     }
     if (resolved.exists) {
-      const targetIdentity = await readFileIdentity(resolved.absolute)
-      const parentIdentity = await readFileIdentity(path.dirname(resolved.absolute))
-      signal?.throwIfAborted()
-      await this.replaceExistingFile(resolved.absolute, request.content, targetIdentity, parentIdentity)
+      await withPathLocks([resolved.canonical], async () => {
+        const targetIdentity = await readFileIdentity(resolved.absolute)
+        const parentIdentity = await readFileIdentity(path.dirname(resolved.absolute))
+        const expectedDigest = digestBytes(await readBoundedUtf8Bytes(resolved.absolute, resolved.relative, MAX_WRITE_CONTENT_BYTES))
+        signal?.throwIfAborted()
+        await this.replaceExistingFile(resolved.absolute, request.content, targetIdentity, parentIdentity, expectedDigest)
+      }, signal)
     } else {
       const item: PreparedWrite = { ...request, absolutePath: resolved.absolute, canonicalPath: resolved.canonical, relativePath: resolved.relative, signal }
       let created: CreatedWrite | undefined

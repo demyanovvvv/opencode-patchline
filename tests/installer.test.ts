@@ -20,9 +20,33 @@ import {
   patchHostUpdates,
   patchHostToolSelection,
   patchHostRenderer,
+  assertHostCheckout,
+  assertOwnedHostAdapter,
 } from "../src/installer.js"
 
 describe("Patchline installer", () => {
+  it("rejects cached host checkouts that do not match the requested upstream", async () => {
+    await expect(assertHostCheckout("host", "1.18.34", async () => ({ code: 0, output: "v1.18.33" }))).rejects.toThrow(/mismatch/i)
+    await expect(assertHostCheckout("host", "1.18.34", async (_command, args) => ({ code: 0, output: args[0] === "describe" ? "v1.18.34" : "" }))).resolves.toBeUndefined()
+  })
+  it("rejects dirty host source outside integration-owned files", async () => {
+    await expect(assertHostCheckout("host", "1.18.34", async (_command, args) => ({ code: 0, output: args[0] === "describe" ? "v1.18.34" : " M packages/opencode/src/session/index.ts" }))).rejects.toThrow(/unowned/i)
+  })
+  it("rejects untracked executable build inputs in a host cache", async () => {
+    await expect(assertHostCheckout("host", "1.18.34", async (_command, args) => ({ code: 0, output: args[0] === "describe" ? "v1.18.34" : args.includes("--untracked-files=all") ? "?? packages/opencode/src/injected.ts" : "" }))).rejects.toThrow(/unowned/i)
+  })
+  it("rejects changed host dependency lockfiles without ownership evidence", async () => {
+    await expect(assertHostCheckout("host", "1.18.34", async (_command, args) => ({ code: 0, output: args[0] === "describe" ? "v1.18.34" : " M bun.lock" }))).rejects.toThrow(/lockfile/i)
+  })
+  it("rejects extra modifications even inside an integration adapter", () => {
+    const original = 'if (tool.id === ApplyPatchTool.id) return usePatch\nif (tool.id === EditTool.id || tool.id === WriteTool.id) return !usePatch'
+    const owned = patchHostToolSelection(original)
+    expect(() => assertOwnedHostAdapter("packages/opencode/src/tool/registry.ts", original, owned, "cli.js")).not.toThrow()
+    expect(() => assertOwnedHostAdapter("packages/opencode/src/tool/registry.ts", original, `${owned}\nexternal modification`, "cli.js")).toThrow(/unowned/i)
+  })
+  it("parses leading-trimmed porcelain output from the command runner", async () => {
+    await expect(assertHostCheckout("host", "1.18.34", async (_command, args) => ({ code: 0, output: args[0] === "describe" ? "v1.18.34" : "M bun.lock" }))).rejects.toThrow(/lockfile/i)
+  })
   it("validates every host renderer anchor before patching", () => {
     const source = 'function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMessage }) {\n  const ctx = use()\n  return (\n      <Switch>\n      </Switch>\n  )\n}\ntype ToolProps = {}'
     const patched = patchHostRenderer(source)
@@ -31,6 +55,9 @@ describe("Patchline installer", () => {
     for (const anchor of ["  const ctx = use()", "<Switch>", "</Switch>", "type ToolProps ="]) {
       expect(() => patchHostRenderer(source.replace(anchor, "changed"))).toThrow(/Unsupported OpenCode/)
     }
+  })
+  it("rejects a partially integrated renderer containing only the slot marker", () => {
+    expect(() => patchHostRenderer('name={`tool_${props.part.tool}`}')).toThrow(/Unsupported OpenCode/)
   })
   it("keeps ordinary apply_patch visible across models in the integrated host", () => {
     const original = 'if (tool.id === ApplyPatchTool.id) return usePatch\nif (tool.id === EditTool.id || tool.id === WriteTool.id) return !usePatch'

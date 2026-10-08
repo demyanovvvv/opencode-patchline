@@ -92,8 +92,8 @@ function Summary(props: { activity: ActivityView; api: TuiPluginApi }) {
     <Show when={props.activity.kind === "mutation"}>
       <Show when={props.activity.strategy}><text fg={theme().textMuted}>Strategy: {props.activity.strategy}{props.activity.requestedStrategy && props.activity.requestedStrategy !== props.activity.strategy ? ` · requested ${props.activity.requestedStrategy}` : ""}</text></Show>
       <Show when={confidence !== undefined && confidence !== null}><text fg={theme().textMuted}>Confidence: {Math.round(confidence! * 100)}%</text></Show>
-      <Show when={props.activity.reason}><text fg={theme().textMuted}>Route: {props.activity.reason}</text></Show>
-      <Show when={props.activity.recoveryAction}><text fg={theme().textMuted}>Recovery: {props.activity.recoveryAction}</text></Show>
+      <Show when={props.activity.routeReason}><text fg={theme().textMuted}>Route: {props.activity.routeReason}</text></Show>
+      <Show when={props.activity.recoveryAction && props.activity.status !== "failed"}><text fg={theme().textMuted}>Recovery: {props.activity.recoveryAction}</text></Show>
     </Show>
     <Show when={props.activity.kind === "read"}><text fg={theme().textMuted}>{props.activity.lines ?? 0} lines · {props.activity.bytes ?? 0} bytes</text><Show when={props.activity.snapshot}><text fg={theme().textMuted}>Snapshot: {props.activity.snapshot}</text></Show></Show>
     <Show when={props.activity.kind === "search"}><text fg={theme().textMuted}>{props.activity.matchCount ?? 0} matches{props.activity.language ? ` · ${props.activity.language}` : ""}</text><Show when={props.activity.pattern}><text fg={theme().textMuted}>Pattern: {props.activity.pattern}</text></Show></Show>
@@ -150,6 +150,7 @@ function Activity(props: { api: TuiPluginApi; session_id?: string; part?: ToolPa
           <Show when={activity().writes !== undefined || activity().validation !== undefined}><text marginTop={1} fg={activity().validation === "failed" ? theme().error : activity().validation === "passed" ? theme().success : theme().textMuted}>Validation: {activity().validation?.replaceAll("_", " ") ?? "pending"}</text></Show>
           <Show when={activity().status === "failed"}>
             <text fg={theme().error}>{activity().reason}</text>
+            <Show when={activity().failureDetail && expanded()}><text fg={theme().textMuted} wrapMode="word">{activity().failureDetail}</text></Show>
             <Show when={activity().writes === 0}><text fg={theme().textMuted}>No files changed</text></Show>
             <For each={activity().restored?.slice(0, 4)}>{(file) => <text fg={theme().textMuted}>Restored: {file}</text>}</For>
             <For each={activity().conflicts?.slice(0, 4)}>{(file) => <text fg={theme().error}>Preserved conflict: {file}</text>}</For>
@@ -160,7 +161,7 @@ function Activity(props: { api: TuiPluginApi; session_id?: string; part?: ToolPa
             <For each={activity().files?.slice(0, 4)}>{(file) => <FileDiff api={props.api} file={file} expanded={!collapsedFiles().has(file.path)} onToggle={() => toggleFile(file.path)} />}</For>
             <Show when={output() && !activity().files?.length}><ResultOutput api={props.api} output={output()} /></Show>
           </Show>
-          <Show when={activity().files?.length || output()}><Disclosure api={props.api} label={expanded() ? "Hide details ↑" : "Show details ↓"} onToggle={toggleAll} /></Show>
+          <Show when={activity().files?.length || output() || activity().failureDetail}><Disclosure api={props.api} label={expanded() ? "Hide details ↑" : "Show details ↓"} onToggle={toggleAll} /></Show>
         </box>
       )}
     </Show>
@@ -169,9 +170,7 @@ function Activity(props: { api: TuiPluginApi; session_id?: string; part?: ToolPa
 
 export const PatchlineTui: TuiPlugin = async (api) => {
   const slots = Object.fromEntries(PATCHLINE_ACTIVITY_TOOLS.map((tool) => [`tool_${tool}`, (_context: unknown, props: { part: ToolPart }) => <Activity api={api} part={props.part} />]))
-  api.slots.register({ order: 510, slots: { ...slots, sidebar_content(_context, props) {
-    return <Activity api={api} session_id={props.session_id} />
-  } } })
+  api.slots.register({ order: 510, slots })
 }
 
 const module: TuiPluginModule = { id: "opencode-patchline-tui", tui: PatchlineTui }

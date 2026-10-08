@@ -9,6 +9,7 @@ import { ScopedSnapshotStore } from "./snapshot/store.js"
 import { WriteService } from "./write-service.js"
 import { DEFAULT_CONFIG } from "./config.js"
 import { supportsOpenCodeVersion } from "./opencode-version.js"
+import { terminateProcessTree } from "./validation/diagnostics.js"
 
 export type CapabilityCheck = {
   name: string
@@ -22,6 +23,7 @@ export async function commandVersion(command: string, args: string[], timeoutMs 
     const child = spawn(command, args, { windowsHide: true, shell: process.platform === "win32" })
     let output = ""
     let settled = false
+    let stopping = false
     const finish = (value?: string): void => {
       if (settled) return
       settled = true
@@ -29,10 +31,12 @@ export async function commandVersion(command: string, args: string[], timeoutMs 
       resolve(value)
     }
     const stop = (): void => {
-      child.kill("SIGKILL")
-      child.stdout.destroy()
-      child.stderr.destroy()
-      finish()
+      if (stopping || settled) return
+      stopping = true
+      clearTimeout(timer)
+      const cleanup = (): void => { child.stdout.destroy(); child.stderr.destroy(); finish() }
+      if (child.pid !== undefined) void terminateProcessTree(child).finally(cleanup)
+      else { child.kill("SIGKILL"); cleanup() }
     }
     const timer = setTimeout(stop, timeoutMs)
     const append = (chunk: string): void => {
@@ -43,7 +47,7 @@ export async function commandVersion(command: string, args: string[], timeoutMs 
     child.stdout.setEncoding("utf8").on("data", append)
     child.stderr.setEncoding("utf8").on("data", append)
     child.on("error", () => finish())
-    child.on("close", (code) => finish(code === 0 ? output.trim().split(/\s+/).at(-1) : undefined))
+    child.on("close", (code) => { if (!stopping) finish(code === 0 ? output.trim().split(/\s+/).at(-1) : undefined) })
   })
 }
 

@@ -2,6 +2,10 @@
 
 Status: Accepted
 
+Cancellation is checked before native parsing and during traversal. Traversal
+rejects beyond 100,000 visited or pending nodes. Native synchronous parse itself
+cannot be interrupted by an event-loop callback.
+
 AST search is reserved for syntactic structure. It uses `@ast-grep/napi`,
 loads language support on demand, caps results, and reports parser failures.
 Literal text belongs to grep; symbol relationships belong to LSP.

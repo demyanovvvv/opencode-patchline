@@ -2,6 +2,31 @@ import { describe, expect, it } from "vitest"
 import { patchlineActivity } from "../src/visualization/activity.js"
 
 describe("Patchline activity presentation", () => {
+  it("classifies native context mismatch without claiming zero writes", () => {
+    const error = "apply_patch verification failed: Error: Failed to find expected lines in C:\\repo\\file.ts:\nold text"
+    expect(patchlineActivity([{ tool: "apply_patch", input: { patchText: "*** Begin Patch\n*** Update File: file.ts\n@@\n-old\n+new\n*** End Patch" }, state: { status: "error", error } }])).toMatchObject({
+      label: "Patch rejected · context mismatch", paths: ["file.ts"], failureCode: "NATIVE_PATCH_CONTEXT_MISMATCH", reason: "Patch context does not match the current file.", failureDetail: error, writes: undefined,
+      recoveryAction: expect.stringContaining("Re-read"),
+    })
+  })
+  it("keeps route reasons separate from mutation failure reasons", () => {
+    expect(patchlineActivity([{ tool: "patchline_execute", state: { status: "error", error: "anchor missing", metadata: { routeReason: "one small local replacement", stage: "preflight", writes: 0 } } }])).toMatchObject({ routeReason: "one small local replacement", reason: "anchor missing" })
+  })
+  it("does not classify successful native output or unrelated errors as mismatch", () => {
+    expect(patchlineActivity([{ tool: "apply_patch", state: { status: "error", error: "Permission denied" } }])?.failureCode).toBeUndefined()
+    expect(patchlineActivity([{ tool: "apply_patch", state: { status: "completed", metadata: { reason: "Failed to find expected lines" } } }])?.status).toBe("completed")
+  })
+  it("preserves native multi-file targets and trusted write metadata on mismatch", () => {
+    const view = patchlineActivity([{ tool: "apply_patch", input: { patchText: "*** Begin Patch\r\n*** Update File: first.ts\r\n*** Update File: second.ts\r\n*** End Patch" }, state: { status: "error", error: "Failed to find expected lines in second.ts", metadata: { writes: 0 } } }])
+    expect(view).toMatchObject({ paths: ["first.ts", "second.ts"], writes: 0, totalFiles: 2, failureCode: "NATIVE_PATCH_CONTEXT_MISMATCH" })
+  })
+  it("does not conflate malformed native patches with context mismatch", () => {
+    expect(patchlineActivity([{ tool: "apply_patch", state: { status: "error", error: "apply_patch verification failed: invalid envelope" } }])?.failureCode).toBeUndefined()
+  })
+  it("bounds native error details shown in the disclosure", () => {
+    const error = `Failed to find expected lines ${"x".repeat(10_000)}`
+    expect(patchlineActivity([{ tool: "apply_patch", state: { status: "error", error } }])?.failureDetail?.length).toBe(2_000)
+  })
   it("renders the dedicated Hashline tool as a mutation with file diffs", () => {
     expect(patchlineActivity([{ tool: "patchline_apply_patch", state: { status: "completed", metadata: { writes: 1, files: [{ path: "source.ts", diff: "@@ -1,1 +1,1 @@\n-before\n+after", additions: 1, deletions: 1 }] } } }])).toMatchObject({ kind: "mutation", writes: 1, additions: 1, deletions: 1 })
   })

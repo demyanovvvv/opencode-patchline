@@ -10,7 +10,7 @@ export type DiagnosticsResult = {
 
 const MAX_OUTPUT_CHARS = 20_000
 
-async function terminateProcessTree(child: ReturnType<typeof spawn>): Promise<void> {
+export async function terminateProcessTree(child: ReturnType<typeof spawn>): Promise<void> {
   if (child.pid === undefined) return
   if (process.platform === "win32") {
     await new Promise<void>((resolve) => {
@@ -18,11 +18,13 @@ async function terminateProcessTree(child: ReturnType<typeof spawn>): Promise<vo
         windowsHide: true,
         stdio: "ignore",
       })
+      const timer = setTimeout(() => { killer.kill(); child.kill(); resolve() }, 2000)
       killer.once("error", () => {
+        clearTimeout(timer)
         child.kill()
         resolve()
       })
-      killer.once("close", () => resolve())
+      killer.once("close", () => { clearTimeout(timer); resolve() })
     })
     return
   }

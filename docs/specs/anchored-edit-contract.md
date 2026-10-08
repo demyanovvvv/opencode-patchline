@@ -11,3 +11,8 @@ Snapshot IDs are exact-content identifiers. Four-character Hashline tags are
 display anchors only: if a tag maps to more than one recorded content version,
 Patchline rejects the edit instead of selecting a candidate. Live content must
 also retain the recorded raw digest and file identity through commit.
+
+Exact replacement text is literal. A terminal newline belongs to its source line,
+not a nonexistent next line. Exact and proven linear Hashline operations transfer
+observed-line provenance according to actual edits. Whole Hashline headers may
+use the full snapshot ID to resolve a short-tag collision safely.

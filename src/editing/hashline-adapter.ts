@@ -2,10 +2,21 @@ import type { FileSnapshot } from "../snapshot/store.js"
 import { PatchlineError } from "../errors.js"
 
 type Clipboard = { named?: Map<string, readonly string[]>; lines?: readonly string[] }
+
+export function assertClipboardBudget(clipboard: Clipboard): void {
+  if ((clipboard.named?.size ?? 0) > 256) throw new PatchlineError("INVALID_ARGUMENT", "Clipboard register limit exceeds 256.")
+  let bytes = 0
+  for (const lines of [clipboard.lines ?? [], ...clipboard.named?.values() ?? []]) {
+    for (const line of lines) {
+      bytes += 2 * line.length + 8
+      if (bytes > 8 * 1024 * 1024) throw new PatchlineError("INVALID_ARGUMENT", "Clipboard exceeds the 8 MiB memory budget.")
+    }
+  }
+}
 type BlockResolver = (request: { path: string; text: string; line: number }) => { start: number; end: number } | null
 type HashlineSection = { path: string; fileHash?: string; diff: string; parse(): { fileOp?: { kind: "rem" } | { kind: "move"; dest: string } } }
 type HashlinePatch = { sections: readonly HashlineSection[] }
-export type HashlineResult = { path: string; sourcePath: string; op: string; text: string; warnings: string[]; moveDest?: string }
+export type HashlineResult = { path: string; sourcePath: string; op: string; text: string; warnings: string[]; moveDest?: string; seenLinesAfter?: ReadonlySet<number> }
 type HashlineModule = {
   InMemoryFilesystem: new (initial?: Iterable<readonly [string, string]>) => unknown
   InMemorySnapshotStore: new () => { record(path: string, text: string, seenLines?: Iterable<number>): string }
@@ -61,12 +72,14 @@ function parseLinearFallback(snapshot: FileSnapshot, patchText: string): LinearO
     let before = false
     let after = false
     if (target === ">$") {
-      start = end = snapshot.text.length === 0 ? 0 : snapshot.text.split("\n").length - (snapshot.text.endsWith("\n") ? 1 : 0)
+      start = end = snapshot.lineIndex.totalLines
       after = true
     } else if (target.startsWith("<")) {
+      if (!/^<[1-9]\d*$/.test(target)) throw new PatchlineError("PATCH_PREFLIGHT_FAILED", `Invalid Hashline insertion: ${target}`)
       start = end = Number.parseInt(target.slice(1), 10)
       before = true
     } else if (target.startsWith(">")) {
+      if (!/^>[1-9]\d*$/.test(target)) throw new PatchlineError("PATCH_PREFLIGHT_FAILED", `Invalid Hashline insertion: ${target}`)
       start = end = Number.parseInt(target.slice(1), 10)
       after = true
     } else {
@@ -75,8 +88,8 @@ function parseLinearFallback(snapshot: FileSnapshot, patchText: string): LinearO
       start = Number.parseInt(range[1]!, 10)
       end = range[2] ? Number.parseInt(range[2], 10) : start
     }
-    if (!Number.isInteger(start) || start < (target === ">$" ? 0 : 1) || end < start) throw new PatchlineError("PATCH_PREFLIGHT_FAILED", `Invalid Hashline line range: ${target}`, { path: snapshot.relativePath, snapshotId: snapshot.id })
-    const lineCount = snapshot.text.length === 0 ? 0 : snapshot.text.split("\n").length - (snapshot.text.endsWith("\n") ? 1 : 0)
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < (target === ">$" ? 0 : 1) || end < start) throw new PatchlineError("PATCH_PREFLIGHT_FAILED", `Invalid Hashline line range: ${target}`, { path: snapshot.relativePath, snapshotId: snapshot.id })
+    const lineCount = snapshot.lineIndex.totalLines
     if (start > lineCount + (before ? 1 : 0) || (!before && !after && end > lineCount)) {
       throw new PatchlineError("PATCH_PREFLIGHT_FAILED", `Hashline range ${start}.${end} exceeds the observed file.`, { path: snapshot.relativePath, snapshotId: snapshot.id })
     }
@@ -108,36 +121,45 @@ function parseLinearFallback(snapshot: FileSnapshot, patchText: string): LinearO
   return operations
 }
 
-function applyLinearFallback(snapshot: FileSnapshot, patchText: string): { text: string; warnings: string[] } {
+function applyLinearFallback(snapshot: FileSnapshot, patchText: string): { text: string; warnings: string[]; seenLinesAfter: ReadonlySet<number> } {
   const operations = parseLinearFallback(snapshot, patchText)
   const source = snapshot.text.split("\n")
   if (source.length && source[source.length - 1] === "") source.pop()
+  const seen = source.map((_line, index) => snapshot.seenLines.has(index + 1))
   for (const operation of [...operations].sort((left, right) => right.start - left.start)) {
     if (operation.before || operation.after) {
       const index = operation.after ? operation.start : operation.start - 1
       source.splice(index, 0, ...operation.body)
+      seen.splice(index, 0, ...operation.body.map(() => true))
       continue
     }
     if (operation.end > source.length) throw new PatchlineError("PATCH_PREFLIGHT_FAILED", `Hashline range ${operation.start}.${operation.end} exceeds the observed file.`, { path: snapshot.relativePath, snapshotId: snapshot.id })
     source.splice(operation.start - 1, operation.end - operation.start + 1, ...(operation.deleteOnly ? [] : operation.body))
+    seen.splice(operation.start - 1, operation.end - operation.start + 1, ...(operation.deleteOnly ? [] : operation.body.map(() => true)))
   }
-  return { text: source.length ? `${source.join("\n")}${snapshot.text.endsWith("\n") ? "\n" : ""}` : "", warnings: ["Node fallback applied linear PUT/CUT operations; structural Hashline operations require Bun runtime."] }
+  return { text: source.length ? `${source.join("\n")}${snapshot.text.endsWith("\n") ? "\n" : ""}` : "", warnings: ["Node fallback applied linear PUT/CUT operations; structural Hashline operations require Bun runtime."], seenLinesAfter: new Set(seen.flatMap((value, index) => value ? [index + 1] : [])) }
 }
 
 export async function parseHashlinePatch(patchText: string): Promise<Array<{ path: string; tag: string; patch: string; fileOp?: { kind: "rem" } | { kind: "move"; dest: string } }>> {
+  const fullIds = new Map<string, string>()
+  const upstreamText = patchText.replace(/^\[([^\]\r\n]+)#([A-Fa-f0-9]{4}-[a-f0-9]{12})\]/gm, (_header, file: string, id: string) => {
+    if (fullIds.has(file) && fullIds.get(file) !== id) throw new PatchlineError("INVALID_ARGUMENT", `Conflicting full snapshot IDs for ${file}.`)
+    fullIds.set(file, id)
+    return `[${file}#${id.slice(0, 4)}]`
+  })
   let hashline: HashlineModule
   try { hashline = await loadHashline() } catch (cause) {
     if (!(cause instanceof PatchlineError) || cause.code !== "CAPABILITY_UNAVAILABLE") throw cause
-    const headers = [...patchText.matchAll(/^\[([^\]\r\n]+)#([A-Fa-f0-9]{4})\][ \t]*\r?$/gm)]
+    const headers = [...patchText.matchAll(/^\[([^\]\r\n]+)#([A-Fa-f0-9]{4}(?:-[a-f0-9]{12})?)\][ \t]*\r?$/gm)]
     if (headers.length === 0 || patchText.slice(0, headers[0]!.index).trim()) throw new PatchlineError("INVALID_ARGUMENT", "Hashline patch must begin with a snapshot-tagged section.")
-    return headers.map((header, index) => ({ path: header[1]!, tag: header[2]!.toUpperCase(), patch: patchText.slice(header.index, headers[index + 1]?.index ?? patchText.length).trim() }))
+    return headers.map((header, index) => ({ path: header[1]!, tag: header[2]!.length > 4 ? header[2]! : header[2]!.toUpperCase(), patch: patchText.slice(header.index, headers[index + 1]?.index ?? patchText.length).trim() }))
   }
   try {
-    const parsed = hashline.Patch.parse(patchText)
+    const parsed = hashline.Patch.parse(upstreamText)
     return parsed.sections.map((section) => {
       if (!section.fileHash) throw new PatchlineError("PATCH_PREFLIGHT_FAILED", "Every Hashline section requires a snapshot tag.")
       const fileOp = section.parse().fileOp
-      return { path: section.path, tag: section.fileHash.toUpperCase(), patch: `[${section.path}#${section.fileHash}]\n${section.diff}`, ...(fileOp ? { fileOp } : {}) }
+      return { path: section.path, tag: fullIds.get(section.path) ?? section.fileHash.toUpperCase(), patch: `[${section.path}#${section.fileHash}]\n${section.diff}`, ...(fileOp ? { fileOp } : {}) }
     })
   } catch (cause) {
     if (cause instanceof PatchlineError) throw cause
@@ -176,8 +198,16 @@ export async function applyHashlineBatchInMemory(observed: readonly FileSnapshot
     }
     const patcher = new hashline.Patcher({ fs, snapshots, enforceSeenLines: true, clipboard: working, blockResolver })
     const applied = await patcher.apply(patch)
+    assertClipboardBudget(working)
+    const linearSeen = observed.map((snapshot, index) => {
+      if (snapshot.text !== liveTexts[index]) return undefined
+      try {
+        const result = applyLinearFallback(snapshot, `[${snapshot.relativePath}#${snapshot.tag}]\n${patch.sections[index]!.diff}`)
+        return result.text === applied.sections[index]?.after ? result.seenLinesAfter : undefined
+      } catch { return undefined }
+    })
     return {
-      results: applied.sections.map((section, index) => ({ path: section.path, sourcePath: observed[index]!.relativePath, op: section.op, text: section.after, warnings: section.warnings, ...(section.moveDest ? { moveDest: section.moveDest } : {}) })),
+      results: applied.sections.map((section, index) => ({ path: section.path, sourcePath: observed[index]!.relativePath, op: section.op, text: section.after, warnings: section.warnings, ...(section.moveDest ? { moveDest: section.moveDest } : {}), ...(linearSeen[index] ? { seenLinesAfter: linearSeen[index] } : {}) })),
       publish() { clipboard.named = new Map(working.named) },
     }
   } catch (cause) {

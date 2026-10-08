@@ -23,3 +23,10 @@
   UI patching validates all replacement anchors before writing the renderer.
 - Doctor version probes have a 10-second deadline and a 16,384-character combined
   output cap. Exceeding either terminates the probe and reports it unavailable.
+
+Further implemented budgets and limitations are specified in
+`deep-review-hardening.md`: linear tag normalization, 32 MiB prepared edit data,
+4 MiB aggregate live Hashline data, clipboard quotas, search/AST traversal caps,
+SDK deadline and bounded process cleanup. RSS remains an estimate rather than a
+hard allocation ceiling. Hidden-whitespace measurements are reproducible with
+`npx tsx benchmarks/hardening.ts`.
