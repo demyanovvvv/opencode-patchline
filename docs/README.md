@@ -4,6 +4,10 @@ Patchline is a precision editing engine for OpenCode.
 
 - [Russian user guide](../README.ru.md)
 - [English user guide](../README.md)
+- [Working with Patchline — English](operations/usage.md)
+- [Работа с Patchline — Русский](operations/usage.ru.md)
+- [Releases](https://github.com/demyanovvvv/opencode-patchline/releases)
+- [Changelog](../CHANGELOG.md)
 
 ## Start here
 

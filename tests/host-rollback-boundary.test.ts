@@ -1,12 +1,12 @@
-import { mkdir, writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { expect, it, vi } from "vitest"
 import { temporaryWorkspace } from "./helpers/workspace.js"
 
-const state = vi.hoisted(() => ({ calls: 0, config: "", badVersion: false }))
+const state = vi.hoisted(() => ({ calls: 0, config: "", badVersion: false, version: "" }))
 vi.mock("../src/installation/process.js", () => ({
   async executeCommand(command: string, args: string[]) {
-    if (command === "opencode" && args[0] === "--version") return { code: 0, output: state.badVersion ? "2.0.0" : "1.18.34+patchline.1.2.0" }
+    if (command === "opencode" && args[0] === "--version") return { code: 0, output: state.badVersion ? "2.0.0" : `1.18.34+patchline.${state.version}` }
     if (command === "npm" && args[0] === "view") return { code: 0, output: "1.18.34" }
     if (command === "opencode" && args[0] === "plugin") { state.calls++; return { code: 1, output: "failed" } }
     return { code: 0, output: "" }
@@ -38,6 +38,8 @@ it("keeps configuration untouched when project preflight fails", async () => {
 import { installPatchline } from "../src/installer.js"
 
 it.skipIf(process.platform !== "win32" || process.arch !== "x64")("restores host configuration when plugin registration returns nonzero", async () => {
+  state.version = (JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version
+  state.calls = 0
   const w = await temporaryWorkspace()
   const old = process.env.OPENCODE_CONFIG_DIR
   try {

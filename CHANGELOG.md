@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.2.1 - 2026-10-08
+
+### Editing and preservation
 
 - Kept native OpenCode `apply_patch` available in precision mode; moved Hashline
   editing to `patchline_apply_patch` and invalidate snapshots around native patches.
@@ -19,10 +21,16 @@
 - Preserved dominant line endings for inserted content in mixed-ending documents
   and added regression coverage for suffix-boundary edits.
 
-## 1.2.1 - 2026-10-08
+### Documentation and distribution
 
-- Updated the package version to 1.2.1; the matching integrated OpenCode host
-  version is 1.18.34+patchline.1.2.1.
+- Updated English and Russian user guides with top navigation, release-archive
+  installation, usage instructions and the current precision-mode tool contract.
+- Moved update history out of the README introduction into this changelog and
+  bilingual release notes.
+- Prepared GitHub-only distribution with an installable package archive and
+  SHA-256 checksum; npm publication is not required by the release workflow.
+- Updated the documented OpenCode baseline to 1.18.35. Patchline remains 1.2.1;
+  the integrated version for this pair is `1.18.35+patchline.1.2.1`.
 
 ## 1.2.0 - 2026-10-01
 

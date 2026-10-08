@@ -23,9 +23,9 @@ validation commands. `hashlineRecovery` defaults to `false`; when enabled, only
 upstream-proven ordinary Hashline anchor recovery is allowed. `REM` and `MV`
 remain strict stale-safe operations. Invalid options fail during plugin load.
 
-`maxInitialReadLines` is a hard per-call bound for both file lines and
-directory entries. An explicit `read.limit` above this value is clamped rather
-than allowed to bypass the output bound.
+`maxInitialReadLines` sets the default file-read range and the hard directory
+entry bound. Explicit file `read.limit` values may request up to 2,000 lines;
+output remains bounded and continuation observes only displayed lines.
 
 `precision` (the default) overrides the editing tools and guards direct shell
 writes. `compatibility` leaves the built-in `read`, `edit`, `write`, and
@@ -34,8 +34,10 @@ additional discovery and diagnostic tools. The snapshot-dependent
 `patchline_edit_batch` tool is available only in `precision` mode. `disabled`
 registers no tools.
 
-`applyPatchFallback: false` rejects classic new-file `apply_patch` sections;
-snapshot-tagged Hashline sections remain the precision editing path.
+`applyPatchFallback: false` rejects classic `apply_patch` fallback sections.
+Use `patchline_apply_patch` for snapshot-tagged Hashline sections. Native
+OpenCode `apply_patch` remains available for large or unsupported operations and
+invalidates affected Patchline snapshots.
 `maxDiagnostics` bounds diagnostic output to that many lines, in addition to
 the hard 20,000-character safety cap. `telemetry: false` does not retain
 detailed local events; aggregate counters remain available to the optional

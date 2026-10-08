@@ -1,8 +1,8 @@
 # Development Progress
 
-Status: Stable release 1.1.0; continued hardening
+Status: Release 1.2.1; continued hardening
 
-Last updated: 2026-09-27
+Last updated: 2026-10-08
 
 ## Objective
 
@@ -13,7 +13,7 @@ tree state before optimizing convenience or speed.
 ## Environment
 
 - Node.js `22.22.2`
-- OpenCode `1.18.30`
+- OpenCode `1.18.35`
 - `@opencode-ai/plugin@1.18.30`
 - `@oh-my-pi/hashline@18.1.5`
 - Windows development environment
@@ -144,8 +144,8 @@ tree state before optimizing convenience or speed.
   statements, branches, functions, and lines.
 - Release metadata validation is covered by tests for matching and mismatched
   version tags.
-- The tag-triggered release workflow publishes through npm Trusted Publishing
-  and creates the matching GitHub Release after publication.
+- The tag-triggered release workflow creates a GitHub Release with a package
+  archive, SHA-256 checksum and bilingual notes; npm publication is not required.
 
 ## Regression coverage
 
