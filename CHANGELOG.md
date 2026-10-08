@@ -19,6 +19,11 @@
 - Preserved dominant line endings for inserted content in mixed-ending documents
   and added regression coverage for suffix-boundary edits.
 
+## 1.2.1 - 2026-10-08
+
+- Updated the package version to 1.2.1; the matching integrated OpenCode host
+  version is 1.18.34+patchline.1.2.1.
+
 ## 1.2.0 - 2026-10-01
 
 - Added themed conversation cards for all eleven Patchline tools, status-colored

@@ -7,7 +7,7 @@ stale-safe changes to existing source files. It keeps the familiar OpenCode
 workflow while enforcing correctness in deterministic tooling instead of relying
 only on model instructions.
 
-**Package version: `1.2.0`** — see `CHANGELOG.md` for release details.
+**Package version: `1.2.1`** — see `CHANGELOG.md` for release details.
 ### Working-version migration
 
 OpenCode's ordinary `apply_patch` remains available for large files, large changes,
@@ -116,7 +116,7 @@ Full styling currently requires a modified OpenCode host: stock OpenCode 1.18.34
 does not expose tool-card renderer slots. The installer prepares this integration
 automatically and replaces the executable with a guarded backup. Restart OpenCode
 after installation. With upstream 1.18.34 and this package, `opencode --version`
-reports `1.18.34+patchline.1.2.0`.
+reports `1.18.34+patchline.1.2.1`.
 
 The installer resolves the latest stable upstream version, or accepts
 `--opencode-version 1.18.34`. Plugin/upstream versions form the integrated version
