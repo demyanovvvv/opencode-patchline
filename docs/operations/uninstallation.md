@@ -1,12 +1,13 @@
 # Uninstallation
 
 ```bash
-npx --yes opencode-patchline@latest uninstall --dry-run
-npx --yes opencode-patchline@latest uninstall --lang ru
-npx --yes opencode-patchline@latest uninstall --global --yes
+node dist/cli.js uninstall --dry-run
+node dist/cli.js uninstall --lang ru
+node dist/cli.js uninstall --global --yes
 ```
 
-Use the same scope as installation. Normal removal asks for confirmation;
+Run from the extracted release package and use the same scope as installation.
+Normal removal asks for confirmation;
 `--dry-run` previews without writes or package-manager commands, and `--yes`
 accepts the confirmation for automation.
 

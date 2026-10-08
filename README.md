@@ -7,16 +7,19 @@ stale-safe changes to existing source files. It keeps the familiar OpenCode
 workflow while enforcing correctness in deterministic tooling instead of relying
 only on model instructions.
 
-**Package version: `1.2.1`** — see `CHANGELOG.md` for release details.
-### Working-version migration
+**Patchline `1.2.1` · OpenCode `1.18.35` · Integrated host `1.18.35+patchline.1.2.1`**
 
-OpenCode's ordinary `apply_patch` remains available for large files, large changes,
-and operations beyond Patchline's capabilities. Hashline calls now use
-`patchline_apply_patch`; migrate previous Hashline `apply_patch` calls accordingly.
-Explicit file reads may request up to 2,000 lines; bounded pages expose the next
-offset and observe only displayed lines. Absolute external read/edit targets
-require OpenCode `external_directory` and operation-specific permissions.
-Fully restart OpenCode after updating the plugin.
+[Русский](README.ru.md) · [Installation](#installation) · [Usage](docs/operations/usage.md) · [Tools](#tools) · [Documentation](docs/README.md) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/demyanovvvv/opencode-patchline/releases) · [Issues](https://github.com/demyanovvvv/opencode-patchline/issues)
+
+## Contents
+
+- [What it provides](#what-it-provides) and [requirements](#requirements)
+- [Installation, updates and removal](#installation)
+- [Working with Patchline](docs/operations/usage.md)
+- [Runtime modes](#runtime-modes) and [safety model](#safety-model)
+- [Tools](#tools) and [search capabilities](#search-and-optional-capabilities)
+- [Development and verification](#development-and-verification)
+- [Documentation](#documentation), [security](#security-and-privacy) and [license](#license)
 
 ## What it provides
 
@@ -40,7 +43,7 @@ Fully restart OpenCode after updating the plugin.
 - OpenCode >=1.18.0 and <2; the conversation UI host is currently provisioned on Windows x64.
 - A project opened as an OpenCode worktree.
 
-Local host verification uses OpenCode `1.18.34` and
+The release targets OpenCode `1.18.35` and
 `@opencode-ai/plugin@1.18.30`. OpenCode loads plugins through Bun, so the full upstream Hashline runtime is
 available there when the native adapter loads. Direct Node use remains supported
 with the bounded PUT/CUT fallback. The optional `hashlineRecovery` setting
@@ -50,28 +53,39 @@ entrypoints; full conversation styling requires the compatible host it provision
 
 ## Installation
 
-For manual tool registration (without provisioning the conversation UI host), install the package:
+### Quick start: GitHub release
+
+Download [`opencode-patchline-1.2.1.tgz`](https://github.com/demyanovvvv/opencode-patchline/releases/download/v1.2.1/opencode-patchline-1.2.1.tgz).
+Extract it to a permanent directory and install its runtime dependencies:
 
 ```bash
-npm install opencode-patchline
+mkdir patchline-1.2.1
+tar -xzf opencode-patchline-1.2.1.tgz -C patchline-1.2.1
+cd patchline-1.2.1/package
+npm install --omit=dev
+node dist/cli.js doctor
 ```
 
-Add it to the OpenCode configuration:
+For manual tool registration without provisioning the conversation UI host,
+add absolute file URLs to your OpenCode configuration:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-patchline"]
+  "plugin": ["file:///absolute/path/patchline-1.2.1/package/dist/plugin.js"],
+  "tui": { "plugin": ["file:///absolute/path/patchline-1.2.1/package/dist/tui.js"] }
 }
 ```
 
-Restart OpenCode after changing configuration. Check the local environment with:
+On Windows use a URL such as `file:///C:/tools/patchline-1.2.1/package/dist/plugin.js`.
+Keep the extracted directory in place while registration references it.
+Restart OpenCode after changing configuration. From that directory, run:
 
 ```bash
-npx opencode-patchline doctor
-npx opencode-patchline doctor --json
-npx opencode-patchline config show
-npx opencode-patchline explain STALE_SNAPSHOT
+node dist/cli.js doctor
+node dist/cli.js doctor --json
+node dist/cli.js config show
+node dist/cli.js explain STALE_SNAPSHOT
 ```
 
 The installer registers server and TUI entrypoints and provisions a compatible
@@ -80,14 +94,13 @@ retains the `opencode` command, and requests confirmation unless `--yes` is used
 Missing TypeScript LSP dependencies are handled independently:
 
 ```bash
-npx --yes opencode-patchline@latest install
-npx --yes opencode-patchline@latest install --global --lang ru
+node dist/cli.js install --local --yes --lang en --opencode-version 1.18.35
+node dist/cli.js install --local --global --yes --lang en --opencode-version 1.18.35
 ```
 
 Repeat installation to update the registration and integrated host version.
-Wrappers are available: `sh install.sh`, `sh uninstall.sh`, `./install.ps1` and
-`./uninstall.ps1`. Outside a checkout they fetch the latest published CLI; inside
-a built Patchline checkout, install wrappers use that local package automatically.
+Use the built CLI commands above for this GitHub-only release. Standalone
+wrappers that fetch `opencode-patchline@latest` require an npm publication.
 
 `--lang en|ru` (alias `--language`) selects installer/uninstaller messages and
 is remembered for that scope. Other Patchline commands keep their existing
@@ -99,9 +112,9 @@ settings are preserved.
 Uninstall with a preview or an interactive confirmation:
 
 ```bash
-npx --yes opencode-patchline@latest uninstall --dry-run
-npx --yes opencode-patchline@latest uninstall
-npx --yes opencode-patchline@latest uninstall --global --yes
+node dist/cli.js uninstall --dry-run --lang en
+node dist/cli.js uninstall --lang en
+node dist/cli.js uninstall --global --yes --lang en
 ```
 
 Removal affects Patchline registrations and installer-owned LSP/runtime additions.
@@ -112,14 +125,14 @@ files. See [installation and removal](docs/operations/installation.md).
 
 ### Conversation UI and integrated versions
 
-Full styling currently requires a modified OpenCode host: stock OpenCode 1.18.34
+Full styling currently requires a modified OpenCode host: stock OpenCode 1.18.35
 does not expose tool-card renderer slots. The installer prepares this integration
 automatically and replaces the executable with a guarded backup. Restart OpenCode
-after installation. With upstream 1.18.34 and this package, `opencode --version`
-reports `1.18.34+patchline.1.2.1`.
+after installation. With upstream 1.18.35 and this package, `opencode --version`
+reports `1.18.35+patchline.1.2.1`.
 
 The installer resolves the latest stable upstream version, or accepts
-`--opencode-version 1.18.34`. Plugin/upstream versions form the integrated version
+`--opencode-version 1.18.35`. Plugin/upstream versions form the integrated version
 independently. Exact matching pairs skip rebuilding; new executable replacements
 rotate one `.patchline-previous` backup. Integrated host upgrades delegate to the
 installer. Global `autoupdate` is currently set to `notify` to prevent stock
@@ -149,11 +162,10 @@ To verify the mounted UI locally, run `npm run smoke:tui` with Bun available.
 
 ## Runtime modes
 
-`precision` is the default. It replaces `read`, `edit`, `write` and
-`apply_patch` with guarded tools and registers Patchline search and diagnostics.
-Existing files must be edited from a current snapshot. Classic `apply_patch` is
-accepted only for creating new files; snapshot-tagged sections remain the
-precision editing path.
+`precision` is the default. It replaces `read`, `edit` and `write` with guarded
+tools and adds `patchline_apply_patch`, search and diagnostics. Native OpenCode
+`apply_patch` remains available and invalidates affected snapshots. Existing
+files edited through Patchline require a current snapshot.
 
 `compatibility` leaves OpenCode's built-in editing and shell behavior in place
 and adds Patchline discovery and diagnostic tools. `disabled` registers no
@@ -163,7 +175,7 @@ Configure the mode through the OpenCode plugin tuple:
 
 ```json
 {
-  "plugin": [["opencode-patchline", {
+  "plugin": [["file:///absolute/path/patchline-1.2.1/package/dist/plugin.js", {
     "mode": "precision",
     "maxInitialReadLines": 120,
     "maxSearchResults": 30,
@@ -203,7 +215,9 @@ Important error codes include `STALE_SNAPSHOT`, `WRITE_PROTECTED`,
 
 Patchline preserves familiar names and adds focused tools:
 
-- `read`, `edit`, `write`, `apply_patch`
+- `read`, `edit`, `write`, `patchline_apply_patch` (native `apply_patch` remains available)
+- `patchline_execute` for adaptive snapshot-safe editing
+- `patchline_route_search` for selecting a discovery mechanism
 - `patchline_grep` for bounded literal text search
 - `patchline_lsp` for symbol-oriented queries through the OpenCode CLI bridge
 - `ast_search` for structural syntax patterns

@@ -1,7 +1,9 @@
 # Installation
 
-Install `opencode-patchline`, add it to OpenCode's `plugin` array, and restart
-OpenCode. Configuration is loaded at startup and is not hot-reloaded.
+Patchline 1.2.1 is distributed as a GitHub release archive, not an npm registry
+publication. See the complete [English](../../README.md#installation) and
+[Russian](../../README.ru.md#установка) installation instructions. Configuration
+is loaded at startup; fully restart OpenCode after updates.
 
 Run `opencode-patchline doctor` after installation. The initial release targets
 OpenCode 1.18.x.
@@ -9,8 +11,8 @@ OpenCode 1.18.x.
 ## Installer
 
 ```bash
-npx --yes opencode-patchline@latest install --lang en
-npx --yes opencode-patchline@latest install --global --lang ru
+node dist/cli.js install --local --lang en --opencode-version 1.18.35
+node dist/cli.js install --local --global --lang ru --opencode-version 1.18.35
 ```
 
 Requires Node.js >=20 and OpenCode >=1.18.0 <2. Package registration delegates to
@@ -19,22 +21,23 @@ and TUI exports. Project configuration is discovered at the Git root (or current
 directory outside Git), including `.opencode/`. Global configuration follows
 OpenCode's XDG directory, overridden by `OPENCODE_CONFIG_DIR`.
 
-Run the same command again to update an existing Patchline registration: the
-installer requests the latest package and forces replacement of the old version.
-For scripts downloaded from this repository, run from the project to configure:
+Run the local command from the newly extracted package to update an existing
+registration. Keep the package directory in place while it is registered.
+For a source checkout, run from the project to configure:
 
 ```bash
-sh /path/to/install.sh --lang ru
-sh /path/to/uninstall.sh --dry-run --lang ru
+npm install
+npm run build
+node dist/cli.js install --local --lang ru
+node dist/cli.js uninstall --dry-run --lang ru
 ```
 
-```powershell
-& 'C:\path\to\install.ps1' --lang ru
-& 'C:\path\to\uninstall.ps1' --dry-run --lang ru
-```
+PowerShell wrappers in a source checkout remain available when their adjacent
+build is present.
 
 Add `--global` for global scope or `--yes` to accept installer prompts. The
-scripts fetch the latest published CLI using npx and preserve its exit code.
+standalone wrappers require an npm-published CLI. For this GitHub-only release,
+use the built `node dist/cli.js` commands directly.
 When `install.ps1` is run from a Patchline source checkout, it uses the adjacent
 built CLI and registers that checkout with `--local` instead. Run `npm install`
 and `npm run build` in the checkout before using it; no published Patchline
@@ -72,9 +75,9 @@ include `--global`.
 ## Uninstaller
 
 ```bash
-npx opencode-patchline uninstall --dry-run
-npx opencode-patchline uninstall --lang ru
-npx opencode-patchline uninstall --global --yes
+node dist/cli.js uninstall --dry-run
+node dist/cli.js uninstall --lang ru
+node dist/cli.js uninstall --global --yes
 ```
 
 `--dry-run` lists changes without writes or package-manager commands. Normal
