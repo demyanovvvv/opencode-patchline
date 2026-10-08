@@ -50,7 +50,7 @@ try {
   const port = reservation.address().port
   await new Promise((resolve) => reservation.close(resolve))
   const environment = createSmokeEnvironment(root)
-  environment.OPENCODE_CONFIG_CONTENT = JSON.stringify({ plugin: [fileURLToPath(new URL("../dist/plugin.js", import.meta.url))], permission: "allow", enabled_providers: ["fixture"], provider: { fixture: { name: "Controlled session fixture", npm: "@ai-sdk/openai-compatible", options: { baseURL: `http://127.0.0.1:${provider.address().port}/v1`, apiKey: "fixture" }, models: { fixture: { name: "fixture", limit: { context: 64000, output: 4000 } } } } } })
+  environment.OPENCODE_CONFIG_CONTENT = JSON.stringify({ plugin: [fileURLToPath(new URL("../dist/plugin.js", import.meta.url))], permission: "allow", enabled_providers: ["fixture"], provider: { fixture: { name: "Controlled session fixture", npm: "@ai-sdk/openai-compatible", options: { baseURL: `http://127.0.0.1:${provider.address().port}/v1`, apiKey: "fixture" }, models: { "gpt-5": { name: "gpt-5", limit: { context: 64000, output: 4000 } } } } } })
   child = spawn("opencode", ["serve", "--hostname", "127.0.0.1", "--port", String(port)], { cwd: root, env: environment, shell: process.platform === "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
   let logs = ""
   for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => { logs = (logs + chunk).slice(-8000) })
@@ -66,7 +66,7 @@ try {
   const create = await fetch(`${url}/session`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })
   assert.ok(create.ok, await create.clone().text())
   const session = await create.json()
-  const prompt = await fetch(`${url}/session/${session.id}/message`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: { providerID: "fixture", modelID: "fixture" }, parts: [{ type: "text", text: "Run the controlled native recovery fixture." }] }), signal: AbortSignal.timeout(120000) })
+  const prompt = await fetch(`${url}/session/${session.id}/message`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: { providerID: "fixture", modelID: "gpt-5" }, parts: [{ type: "text", text: "Run the controlled native recovery fixture." }] }), signal: AbortSignal.timeout(120000) })
   assert.ok(prompt.ok, await prompt.clone().text())
   await prompt.text()
   assert.deepEqual(failures, [])
@@ -74,7 +74,8 @@ try {
   assert.ok(messagesResponse.ok)
   const messages = await messagesResponse.json()
   const tools = messages.flatMap((message) => message.parts ?? []).filter((part) => part.type === "tool")
-  const diagnostic = JSON.stringify(tools.map((part) => ({ tool: part.tool, status: part.state.status, error: part.state.error, metadata: part.state.metadata }))).slice(-4000)
+  const diagnostic = JSON.stringify({ index, tools: tools.map((part) => ({ tool: part.tool, status: part.state.status, error: part.state.error, metadata: part.state.metadata })), infos: messages.map((message) => message.info), logs }).slice(-8000)
+  assert.ok(tools.some((part) => part.tool === "apply_patch" && part.state.status === "error"), diagnostic)
   assert.ok(tools.some((part) => part.tool === "apply_patch" && part.state.status === "error"), diagnostic)
   assert.ok(tools.some((part) => part.tool === "read" && part.state.status === "completed"), diagnostic)
   assert.ok(tools.some((part) => part.tool === "apply_patch" && part.state.status === "completed"), diagnostic)

@@ -72,9 +72,16 @@
   native-host jobs at commit 9544c8f (Windows/Linux/macOS, Node 20/22,
   OpenCode 1.18.0/1.18.30/1.18.35; native suite at 1.18.34).
 - Later installer-baseline, adaptive diff-budget and session-smoke changes pass
-  local Windows Node 22 verification. Their latest cross-platform CI jobs did
-  not start because GitHub account billing/spending limits block runners.
-  No full latest-commit cross-platform compatibility claim is made.
+  local Windows Node 22 verification. The isolated Docker Linux Node 22 gate
+  also passes typecheck, tests, lint, build, full audit and native-session smoke
+  with upstream OpenCode 1.18.35. The controlled provider uses a `gpt-5` model
+  identifier because upstream filters native patch tools by model ID.
+- Reproduce the free Linux gate without writable host mounts:
+  `docker build -f Dockerfile.ci-linux -t opencode-patchline-ci-linux .`, then
+  `docker run --rm opencode-patchline-ci-linux`.
+- Latest cross-platform CI jobs did not start because GitHub billing/spending
+  limits block runners. Current macOS and the full latest-commit version matrix
+  remain unverified; Docker Linux does not establish macOS compatibility.
 
 - Structural Hashline and recovery clear next-snapshot observations when exact
   provenance cannot be proved, requiring a fresh read instead of guessing from
