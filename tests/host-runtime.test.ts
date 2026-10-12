@@ -10,7 +10,7 @@ it("discovers a cached native binary behind an official npm launcher", async () 
     const bin = path.join(w.path, "node_modules", "opencode-ai", "bin")
     await mkdir(bin, { recursive: true })
     await writeFile(path.join(bin, "opencode"), '#!/usr/bin/env node\nconst cached = path.join(scriptDir, ".opencode")\nconst resolved = envPath || (fs.existsSync(cached) ? cached : findBinary(scriptDir))')
-    await writeFile(path.join(bin, ".opencode"), Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
+    await writeFile(path.join(bin, ".opencode"), Buffer.from([0x7f, 0x45, 0x4c, 0x46]), { mode: 0o755 })
     expect(await findHostBinary(path.join(bin, "opencode"))).toBe(path.join(bin, ".opencode"))
   } finally { await w.cleanup() }
 })
