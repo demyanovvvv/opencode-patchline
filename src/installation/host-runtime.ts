@@ -47,7 +47,7 @@ export async function findHostBinary(file: string): Promise<string> {
   const info = await lstat(resolved)
   if (!info.isFile()) throw new Error("OpenCode host must be a regular file.")
   if (await native(resolved)) {
-    if (process.platform !== "win32" && process.env.CI !== "true") {
+    if (process.platform !== "win32") {
       try { await access(resolved, constants.X_OK) } catch { throw new Error("OpenCode host is not executable.") }
     }
     return resolved
