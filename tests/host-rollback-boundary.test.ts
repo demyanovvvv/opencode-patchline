@@ -6,7 +6,7 @@ import { temporaryWorkspace } from "./helpers/workspace.js"
 const state = vi.hoisted(() => ({ calls: 0, config: "", badVersion: false, version: "" }))
 vi.mock("../src/installation/process.js", () => ({
   async executeCommand(command: string, args: string[]) {
-    if (command === "opencode" && args[0] === "--version") return { code: 0, output: state.badVersion ? "2.0.0" : `1.18.34+patchline.${state.version}` }
+    if ((command === "opencode" || path.basename(command) === "opencode.exe") && args[0] === "--version") return { code: 0, output: state.badVersion ? "2.0.0" : `1.18.34+patchline.${state.version}` }
     if (command === "npm" && args[0] === "view") return { code: 0, output: "1.18.34" }
     if (command === "opencode" && args[0] === "plugin") { state.calls++; return { code: 1, output: "failed" } }
     return { code: 0, output: "" }

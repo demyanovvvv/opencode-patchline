@@ -2,14 +2,14 @@
 
 Status: Accepted
 
-Patchline targets OpenCode `1.18.x`, Node.js 20 or newer, and the public v1
+Patchline targets OpenCode `1.18.x`–`1.19.x`, Node.js 20 or newer, and the public v1
 plugin API. Capability detection is mandatory: unavailable native LSP or AST
 bindings disable only the affected feature. A changed plugin tool ordering,
 missing execution hook, or unavailable session/worktree identity is a hard
 compatibility failure for precision mode.
 
-The 1.2.1 release baseline is OpenCode `1.18.35`; its integrated host version is
-`1.18.35+patchline.1.2.1`. Current dependencies are `@opencode-ai/plugin@1.18.30` and
+The 1.3.0 release baseline is OpenCode `1.19.0`; its integrated host version is
+`1.19.0+patchline.1.3.0`. Current dependencies are `@opencode-ai/plugin@1.19.0` and
 `@oh-my-pi/hashline@18.1.5`. Hashline is loaded lazily because its published
 runtime targets Bun. Node installations retain exact edits and linear PUT/CUT
 Hashline edits through the guarded fallback; structural blocks, registers, and

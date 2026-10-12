@@ -16,6 +16,19 @@ async function workspace() {
 }
 
 describe("installer safety", () => {
+  it("does not overwrite a host changed while its replacement was building", async () => {
+    const { installHostBinary } = await import("../src/installation/files.js")
+    const { captureHostRevision } = await import("../src/installation/host-runtime.js")
+    const root = await workspace()
+    const source = path.join(root, "new")
+    const target = path.join(root, "host")
+    await writeFile(source, "new")
+    await writeFile(target, "before")
+    const revision = await captureHostRevision(target)
+    await writeFile(target, "external")
+    await expect(installHostBinary(source, target, undefined, revision)).rejects.toThrow(/changed/)
+    expect(await readFile(target, "utf8")).toBe("external")
+  })
   it("restores the host and prior backup through a guarded rollback", async () => {
     const { installHostBinary } = await import("../src/installation/files.js")
     const root = await workspace()

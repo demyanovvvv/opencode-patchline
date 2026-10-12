@@ -2,7 +2,7 @@
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { inspectCapabilities } from "./compatibility.js"
-import { installPatchline, uninstallPatchline, type InstallerLanguage, type InstallerOptions } from "./installer.js"
+import { installPatchline, uninstallPatchline, upgradePatchlineHost, type InstallerLanguage, type InstallerOptions } from "./installer.js"
 import { DEFAULT_CONFIG, parseConfig } from "./config.js"
 import { lspGuide, renderLspGuide } from "./lsp-guide.js"
 import type { PatchlineErrorCode } from "./errors.js"
@@ -113,6 +113,23 @@ export async function runCli(args: readonly string[], options: CliOptions = {}):
     }
     stdout(`${code}: ${explanation.summary} ${explanation.action}`)
     return 0
+  }
+
+  if (command === "host-upgrade") {
+    const values: Record<string, string> = {}
+    const hostArgs = args.slice(1).filter((arg) => arg !== "--rebuild")
+    let valid = hostArgs.length % 2 === 0 && args.filter((arg) => arg === "--rebuild").length <= 1
+    for (let index = 0; index < hostArgs.length; index += 2) {
+      const flag = hostArgs[index]!
+      const value = hostArgs[index + 1]
+      if (!["--opencode-version", "--host-binary", "--expected-host-version"].includes(flag) || values[flag] || !value || value.startsWith("--")) { valid = false; break }
+      values[flag] = value
+    }
+    if (!valid || !/^1\.\d+\.\d+$/.test(values["--opencode-version"] ?? "")) {
+      stderr("Usage: opencode-patchline host-upgrade --opencode-version <stable-version> [--host-binary <path>] [--expected-host-version <version>] [--rebuild]")
+      return 1
+    }
+    return await upgradePatchlineHost({ ...options.installer, stdout, stderr, opencodeVersion: values["--opencode-version"]!, rebuildHost: args.includes("--rebuild"), ...(values["--host-binary"] ? { hostBinary: values["--host-binary"] } : {}), ...(values["--expected-host-version"] ? { expectedHostVersion: values["--expected-host-version"] } : {}) })
   }
 
   if (command === "install" || command === "uninstall") {

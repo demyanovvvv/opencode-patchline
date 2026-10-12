@@ -1,18 +1,19 @@
 # Installation
 
-Patchline 1.2.1 is distributed as a GitHub release archive, not an npm registry
+Patchline 1.3.0 is distributed as a GitHub release archive, not an npm registry
 publication. See the complete [English](../../README.md#installation) and
 [Russian](../../README.ru.md#установка) installation instructions. Configuration
 is loaded at startup; fully restart OpenCode after updates.
 
 Run `opencode-patchline doctor` after installation. The initial release targets
-OpenCode 1.18.x.
+OpenCode 1.18.x–1.19.x.
 
 ## Installer
 
 ```bash
-node dist/cli.js install --local --lang en --opencode-version 1.18.35
-node dist/cli.js install --local --global --lang ru --opencode-version 1.18.35
+node dist/cli.js install --local --lang en
+node dist/cli.js install --local --global --lang ru
+node dist/cli.js host-upgrade --opencode-version 1.19.0
 ```
 
 Requires Node.js >=20 and OpenCode >=1.18.0 <2. Package registration delegates to

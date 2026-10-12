@@ -3,6 +3,8 @@ import { copyFile, lstat, mkdir, readFile, realpath, rename, rm, writeFile } fro
 import os from "node:os"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
+import { createHash } from "node:crypto"
+import type { HostRevision } from "./host-runtime.js"
 import { atomicReplace, readFileIdentity } from "../writing/atomic.js"
 import { decodeUtf8 } from "../preservation/text.js"
 import type { FileIdentity } from "../snapshot/store.js"
@@ -151,7 +153,7 @@ export async function removeState(file: string): Promise<void> {
   if (snapshot) { await assertCurrent(snapshot); await rm(file) }
 }
 
-export async function installHostBinary(source: string, target: string, onRollback?: (restore: () => Promise<void>) => void): Promise<string> {
+export async function installHostBinary(source: string, target: string, onRollback?: (restore: () => Promise<void>) => void, expected?: HostRevision): Promise<string> {
   const from = await lstat(source)
   const to = await lstat(target)
   if (!from.isFile() || from.isSymbolicLink() || !to.isFile() || to.isSymbolicLink()) throw new Error("Host binary must be a regular, non-symlink file.")
@@ -159,6 +161,7 @@ export async function installHostBinary(source: string, target: string, onRollba
   if (path.normalize(await realpath(parent)) !== path.normalize(path.resolve(parent))) throw new Error("Symlink host directory.")
   const before = await readFile(target)
   const identity = await readFileIdentity(target)
+  if (expected && (expected.identity.device !== identity.device || expected.identity.inode !== identity.inode || expected.digest !== createHash("sha256").update(before).digest("hex"))) throw new Error("Host binary changed while building; current host retained.")
   const parentIdentity = await readFileIdentity(parent)
   const temporary = path.join(parent, `.patchline-host-${randomUUID()}`)
   const previous = `${target}.patchline-previous`
@@ -203,7 +206,10 @@ export async function installHostBinary(source: string, target: string, onRollba
       if (previousSnapshot) await atomicReplace(previous, previousSnapshot.bytes, { expectedParent: ownedBackup.parent, expectedTarget: ownedBackup.identity })
       else { await assertBinaryCurrent(ownedBackup); await rm(previous) }
     })
-    if (previousSnapshot) await rm(retired, { force: true })
+    // A running Windows image may lock the retired backup after a verified swap.
+    if (previousSnapshot) await rm(retired, { force: true }).catch((error: unknown) => {
+      if (!(error instanceof Error && "code" in error && ["EPERM", "EACCES", "EBUSY"].includes(String(error.code)))) throw error
+    })
     return previous
   } catch (error) {
     if (replaced && staged) {
