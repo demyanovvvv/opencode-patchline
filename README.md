@@ -7,7 +7,7 @@ stale-safe changes to existing source files. It keeps the familiar OpenCode
 workflow while enforcing correctness in deterministic tooling instead of relying
 only on model instructions.
 
-**Patchline `1.2.1` · OpenCode `1.18.35` · Integrated host `1.18.35+patchline.1.2.1`**
+**Patchline `1.3.0` · OpenCode `1.19.0` · Integrated host `1.19.0+patchline.1.3.0`**
 
 [Русский](README.ru.md) · [Installation](#installation) · [Usage](docs/operations/usage.md) · [Tools](#tools) · [Documentation](docs/README.md) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/demyanovvvv/opencode-patchline/releases) · [Issues](https://github.com/demyanovvvv/opencode-patchline/issues)
 
@@ -40,11 +40,11 @@ only on model instructions.
 ## Requirements
 
 - Node.js 20 or newer.
-- OpenCode >=1.18.0 and <2; the conversation UI host is currently provisioned on Windows x64.
+- OpenCode >=1.18.0 and <2; host artifact targets include Windows/Linux/macOS x64/arm64.
 - A project opened as an OpenCode worktree.
 
-The release targets OpenCode `1.18.35` and
-`@opencode-ai/plugin@1.18.30`. OpenCode loads plugins through Bun, so the full upstream Hashline runtime is
+The release targets OpenCode `1.19.0` and
+`@opencode-ai/plugin@1.19.0`. OpenCode loads plugins through Bun, so the full upstream Hashline runtime is
 available there when the native adapter loads. Direct Node use remains supported
 with the bounded PUT/CUT fallback. The optional `hashlineRecovery` setting
 allows only upstream-proven anchor recovery for ordinary edits; `REM` and `MV`
@@ -55,13 +55,13 @@ entrypoints; full conversation styling requires the compatible host it provision
 
 ### Quick start: GitHub release
 
-Download [`opencode-patchline-1.2.1.tgz`](https://github.com/demyanovvvv/opencode-patchline/releases/download/v1.2.1/opencode-patchline-1.2.1.tgz).
+Download [`opencode-patchline-1.3.0.tgz`](https://github.com/demyanovvvv/opencode-patchline/releases/download/v1.3.0/opencode-patchline-1.3.0.tgz).
 Extract it to a permanent directory and install its runtime dependencies:
 
 ```bash
-mkdir patchline-1.2.1
-tar -xzf opencode-patchline-1.2.1.tgz -C patchline-1.2.1
-cd patchline-1.2.1/package
+mkdir patchline-1.3.0
+tar -xzf opencode-patchline-1.3.0.tgz -C patchline-1.3.0
+cd patchline-1.3.0/package
 npm install --omit=dev
 node dist/cli.js doctor
 ```
@@ -72,12 +72,12 @@ add absolute file URLs to your OpenCode configuration:
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["file:///absolute/path/patchline-1.2.1/package/dist/plugin.js"],
-  "tui": { "plugin": ["file:///absolute/path/patchline-1.2.1/package/dist/tui.js"] }
+  "plugin": ["file:///absolute/path/patchline-1.3.0/package/dist/plugin.js"],
+  "tui": { "plugin": ["file:///absolute/path/patchline-1.3.0/package/dist/tui.js"] }
 }
 ```
 
-On Windows use a URL such as `file:///C:/tools/patchline-1.2.1/package/dist/plugin.js`.
+On Windows use a URL such as `file:///C:/tools/patchline-1.3.0/package/dist/plugin.js`.
 Keep the extracted directory in place while registration references it.
 Restart OpenCode after changing configuration. From that directory, run:
 
@@ -89,16 +89,19 @@ node dist/cli.js explain STALE_SNAPSHOT
 ```
 
 The installer registers server and TUI entrypoints and provisions a compatible
-OpenCode conversation UI host on Windows x64. It builds the host using Git/Bun,
-retains the `opencode` command, and requests confirmation unless `--yes` is used.
+OpenCode conversation UI host. It preserves the currently installed upstream
+version when installing Patchline. Host upgrades rebuild only the integrated
+host, preserving the installed Patchline version and plugin configuration.
 Missing TypeScript LSP dependencies are handled independently:
 
 ```bash
-node dist/cli.js install --local --yes --lang en --opencode-version 1.18.35
-node dist/cli.js install --local --global --yes --lang en --opencode-version 1.18.35
+node dist/cli.js install --local --yes --lang en
+node dist/cli.js install --local --global --yes --lang en
+node dist/cli.js host-upgrade --opencode-version 1.19.0
 ```
 
-Repeat installation to update the registration and integrated host version.
+Repeat installation to update Patchline without selecting a newer OpenCode.
+Use `host-upgrade` when the upstream OpenCode version should change.
 Use the built CLI commands above for this GitHub-only release. Standalone
 wrappers that fetch `opencode-patchline@latest` require an npm publication.
 
@@ -125,17 +128,17 @@ files. See [installation and removal](docs/operations/installation.md).
 
 ### Conversation UI and integrated versions
 
-Full styling currently requires a modified OpenCode host: stock OpenCode 1.18.35
+Full styling currently requires a modified OpenCode host: stock OpenCode 1.19.0
 does not expose tool-card renderer slots. The installer prepares this integration
 automatically and replaces the executable with a guarded backup. Restart OpenCode
-after installation. With upstream 1.18.35 and this package, `opencode --version`
-reports `1.18.35+patchline.1.2.1`.
+after installation. With upstream 1.19.0 and this package, `opencode --version`
+reports `1.19.0+patchline.1.3.0`.
 
-The installer resolves the latest stable upstream version, or accepts
-`--opencode-version 1.18.35`. Plugin/upstream versions form the integrated version
+The installer preserves the installed upstream version, or accepts an explicit
+`--opencode-version 1.19.0` override. Plugin/upstream versions form the integrated version
 independently. Exact matching pairs skip rebuilding; new executable replacements
 rotate one `.patchline-previous` backup. Integrated host upgrades delegate to the
-installer. Global `autoupdate` is currently set to `notify` to prevent stock
+host-only command. Global `autoupdate` is currently set to `notify` to prevent stock
 replacement; existing `false` is preserved.
 
 Cards use the active theme's warning/success/error border colors, English labels,
@@ -143,7 +146,7 @@ animated progress, and bottom `Show details` / `Hide details` controls. Text
 results reveal twelve lines at a time; files expand independently and native
 diffs reveal complete hunks with line numbers and added/removed colors.
 
-Current limitations: host provisioning requires Windows x64, Git and Bun; binary
+Current limitations: host provisioning requires Git and Bun; binary
 artifact delivery, cross-component transaction recovery and ownership-aware
 legacy-backup/source-cache cleanup are not yet implemented. Uninstall removes
 plugin registrations but does not restore the official executable or update

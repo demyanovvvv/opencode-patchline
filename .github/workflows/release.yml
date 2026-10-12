@@ -33,7 +33,7 @@ jobs:
 
       - run: npm ci
       - run: node scripts/check-release.mjs "$GITHUB_REF_NAME"
-      - run: npm install --global opencode-ai@1.18.35
+      - run: npm install --global opencode-ai@1.19.0
       - run: opencode --version
       - run: npm run typecheck
       - run: npm test -- --run --testTimeout=30000

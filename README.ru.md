@@ -8,7 +8,7 @@ Patchline - готовый к использованию плагин OpenCode �
 а контроль корректности выполняется детерминированными инструментами, а не
 только инструкциями для модели.
 
-**Patchline `1.2.1` · OpenCode `1.18.35` · Интегрированный хост `1.18.35+patchline.1.2.1`**
+**Patchline `1.3.0` · OpenCode `1.19.0` · Интегрированный хост `1.19.0+patchline.1.3.0`**
 
 [English](README.md) · [Установка](#установка) · [Работа](docs/operations/usage.ru.md) · [Инструменты](#инструменты) · [Документация](docs/README.md) · [Changelog](CHANGELOG.md) · [Релизы](https://github.com/demyanovvvv/opencode-patchline/releases) · [Issues](https://github.com/demyanovvvv/opencode-patchline/issues)
 
@@ -41,10 +41,10 @@ Patchline - готовый к использованию плагин OpenCode �
 ## Требования
 
 - Node.js 20 или новее.
-- OpenCode >=1.18.0 и <2; автоматическая установка conversation UI host пока поддерживает Windows x64.
+- OpenCode >=1.18.0 и <2; выбор артефакта хоста для Windows/Linux/macOS x64/arm64.
 - Проект, открытый в OpenCode как worktree.
 
-Релиз рассчитан на OpenCode `1.18.35` и `@opencode-ai/plugin@1.18.30`.
+Релиз проверен на OpenCode `1.19.0` и `@opencode-ai/plugin@1.19.0`.
 OpenCode загружает плагины через Bun, поэтому полный upstream Hashline доступен
 при успешной загрузке native adapter. Прямой запуск через Node сохраняет
 ограниченный PUT/CUT fallback. Опция `hashlineRecovery` разрешает только
@@ -56,13 +56,13 @@ OpenCode загружает плагины через Bun, поэтому пол
 
 ### Быстрый старт: GitHub-релиз
 
-Скачайте [`opencode-patchline-1.2.1.tgz`](https://github.com/demyanovvvv/opencode-patchline/releases/download/v1.2.1/opencode-patchline-1.2.1.tgz).
+Скачайте [`opencode-patchline-1.3.0.tgz`](https://github.com/demyanovvvv/opencode-patchline/releases/download/v1.3.0/opencode-patchline-1.3.0.tgz).
 Распакуйте в постоянную папку и установите runtime-зависимости:
 
 ```bash
-mkdir patchline-1.2.1
-tar -xzf opencode-patchline-1.2.1.tgz -C patchline-1.2.1
-cd patchline-1.2.1/package
+mkdir patchline-1.3.0
+tar -xzf opencode-patchline-1.3.0.tgz -C patchline-1.3.0
+cd patchline-1.3.0/package
 npm install --omit=dev
 node dist/cli.js doctor
 ```
@@ -73,12 +73,12 @@ node dist/cli.js doctor
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["file:///absolute/path/patchline-1.2.1/package/dist/plugin.js"],
-  "tui": { "plugin": ["file:///absolute/path/patchline-1.2.1/package/dist/tui.js"] }
+  "plugin": ["file:///absolute/path/patchline-1.3.0/package/dist/plugin.js"],
+  "tui": { "plugin": ["file:///absolute/path/patchline-1.3.0/package/dist/tui.js"] }
 }
 ```
 
-На Windows используйте URL вида `file:///C:/tools/patchline-1.2.1/package/dist/plugin.js`.
+На Windows используйте URL вида `file:///C:/tools/patchline-1.3.0/package/dist/plugin.js`.
 Сохраняйте распакованную папку, пока регистрация ссылается на неё.
 После изменения конфигурации перезапустите OpenCode. Из этой папки выполните:
 
@@ -95,8 +95,9 @@ conversation UI host OpenCode на Windows x64. Хост собирается ч
 Недостающие зависимости TypeScript LSP устанавливаются отдельно:
 
 ```bash
-node dist/cli.js install --local --yes --lang ru --opencode-version 1.18.35
-node dist/cli.js install --local --global --yes --lang ru --opencode-version 1.18.35
+node dist/cli.js install --local --yes --lang ru
+node dist/cli.js install --local --global --yes --lang ru
+node dist/cli.js host-upgrade --opencode-version 1.19.0
 ```
 
 Повторная установка обновляет регистрацию и версию интегрированного хоста.
@@ -126,17 +127,16 @@ node dist/cli.js uninstall --global --yes --lang ru
 
 ### Карточки инструментов и интегрированная версия
 
-Полное оформление пока требует модифицированного хоста: официальный OpenCode
-1.18.35 не предоставляет слоты renderer карточек. Установщик автоматически
+Полное оформление требует модифицированного хоста. Установщик автоматически
 подготавливает интеграцию и заменяет executable с защищённой резервной копией.
-После установки перезапустите OpenCode. Для upstream 1.18.35 и этого пакета
-`opencode --version` показывает `1.18.35+patchline.1.2.1`.
+После установки перезапустите OpenCode. Версия показывает установленный upstream
+и версию Patchline, например `1.19.0+patchline.1.3.0`.
 
-Установщик определяет последнюю стабильную upstream-версию или принимает
-`--opencode-version 1.18.35`. Версии плагина и OpenCode изменяют свои части
+Установщик сохраняет текущую upstream-версию. Команда `host-upgrade` принимает
+целевую версию OpenCode. Версии плагина и OpenCode изменяют свои части
 интегрированной версии независимо. Совпадающая пара не пересобирается; при
 замене executable обновляется одна копия `.patchline-previous`. Обновления
-интегрированного хоста проходят через установщик. Глобальный `autoupdate` пока
+интегрированного хоста проходят через отдельную host-only операцию. Глобальный `autoupdate` пока
 переводится в `notify` для защиты от stock-замены; значение `false` сохраняется.
 
 Карточки используют цвета состояния активной темы, английские подписи,
@@ -144,7 +144,7 @@ node dist/cli.js uninstall --global --yes --lang ru
 по двенадцать строк, файлы — независимо, native diff — целыми участками изменений
 с номерами строк и цветами добавления/удаления.
 
-Ограничения: подготовка хоста требует Windows x64, Git и Bun. Готовые бинарные
+Подготовка хоста требует Git и Bun. Готовые бинарные
 артефакты, межкомпонентное восстановление транзакций и очистка старых backups /
 source cache с проверкой владения пока не реализованы. Удаление плагина не
 восстанавливает официальный executable и настройку обновлений. Подробнее:

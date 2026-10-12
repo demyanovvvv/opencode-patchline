@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.0 - 2026-10-12
+
+### Independent OpenCode and Patchline upgrades
+
+- Preserve the installed OpenCode upstream version when installing or updating Patchline.
+- Add a host-only upgrade path used by coordinated OpenCode upgrades; plugin registration and dependencies are not reinstalled.
+- Keep the installed Patchline version while rebuilding the integrated host for a new OpenCode version.
+- Adapt version comparisons and host source preflight for OpenCode 1.19.0.
+- Add regression coverage for independent version lifecycles and platform host targets.
+- Normalize CLI and TUI version comparisons; target the exact running installation and reject stale host/package pairs.
+- Serialize host updates, preserve script launchers and recognize official npm layouts.
+- Retain locked Windows backups after a verified binary swap without stopping running sessions.
+- Keep source caches separate per upstream, plugin version and package path; migrate exactly owned legacy adapters.
+- Reject unsupported OpenCode 2 migration without replacing the integrated host.
+
 ## 1.2.1 - 2026-10-08
 
 ### Editing and preservation

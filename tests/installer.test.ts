@@ -112,8 +112,20 @@ describe("Patchline installer", () => {
 
   it("resolves a canonical installed host path", async () => {
     const root = await workspace("patchline-host-path-")
-    await writeFile(path.join(root, "opencode.exe"), "host")
-    expect(await resolveInstalledOpenCode(root)).toBe(path.join(root, "opencode.exe"))
+    const executable = process.platform === "win32" ? "opencode.exe" : "opencode"
+    await writeFile(path.join(root, executable), "MZhost", { mode: 0o755 })
+    expect(await resolveInstalledOpenCode(root)).toBe(path.join(root, executable))
+  })
+  it("resolves a Unix host path", async () => {
+    if (process.platform === "win32") return
+    const root = await workspace("patchline-host-path-unix-")
+    await writeFile(path.join(root, "opencode"), Buffer.from([0x7f, 0x45, 0x4c, 0x46]), { mode: 0o755 })
+    expect(await resolveInstalledOpenCode(root)).toBe(path.join(root, "opencode"))
+  })
+  it("does not replace a script launcher as if it were a native host", async () => {
+    const root = await workspace("patchline-host-script-")
+    await writeFile(path.join(root, "opencode"), "#!/usr/bin/env node\n")
+    await expect(resolveInstalledOpenCode(root)).rejects.toThrow(/launcher/)
   })
   it("installs missing LSP dependencies only after confirmation and localizes installer output", async () => {
     const root = await workspace("patchline-installer-test-")

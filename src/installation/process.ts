@@ -29,14 +29,14 @@ async function launcher(command: string): Promise<{ executable: string; prefix: 
   throw new Error(`Executable unavailable: ${command}`)
 }
 
-export async function executeCommand(command: string, args: readonly string[], cwd: string, inherit = false, env: Record<string, string> = {}): Promise<CommandResult> {
+export async function executeCommand(command: string, args: readonly string[], cwd: string, inherit = false, env: Record<string, string> = {}, maxOutput = 20_000): Promise<CommandResult> {
   const { executable, prefix } = await launcher(command)
   return new Promise((resolve, reject) => {
     const child = spawn(executable, [...prefix, ...args], {
       cwd, env: { ...process.env, ...env }, shell: false, windowsHide: true, stdio: inherit ? "inherit" : ["ignore", "pipe", "pipe"],
     })
     let output = ""
-    const append = (chunk: string) => { output = (output + chunk).slice(-20_000) }
+    const append = (chunk: string) => { output = (output + chunk).slice(-maxOutput) }
     child.stdout?.setEncoding("utf8").on("data", append)
     child.stderr?.setEncoding("utf8").on("data", append)
     const timeout = setTimeout(() => { child.kill(); reject(new Error(`Command timed out: ${command}`)) }, inherit ? 900_000 : 30_000)

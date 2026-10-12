@@ -10,6 +10,7 @@ import { WriteService } from "./write-service.js"
 import { DEFAULT_CONFIG } from "./config.js"
 import { supportsOpenCodeVersion } from "./opencode-version.js"
 import { terminateProcessTree } from "./validation/diagnostics.js"
+import { hostIntegrationStatus } from "./installation/host-runtime.js"
 
 export type CapabilityCheck = {
   name: string
@@ -135,11 +136,13 @@ export async function inspectCapabilities(): Promise<CapabilityCheck[]> {
   const opencode = await commandVersion("opencode", ["--version"])
   const plugin = await canImport("@opencode-ai/plugin")
   const ast = await canImport("@ast-grep/napi")
+  const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string }
   await access(process.cwd())
   return [
     { name: "Node.js", severity: "required", ok: Number(process.versions.node.split(".")[0]) >= 20, detail: process.versions.node },
     { name: "OpenCode", severity: "required", ok: opencode !== undefined && supportsOpenCodeVersion(opencode), detail: opencode === undefined ? "not found" : supportsOpenCodeVersion(opencode) ? opencode : `Unsupported ${opencode}; expected >=1.18.0 <2` },
     { name: "OpenCode plugin SDK", severity: "required", ...plugin },
+    { name: "Patchline host integration", severity: "optional", ...hostIntegrationStatus(opencode ?? "not found", manifest.version) },
     { ...(await hashlineCheck()), severity: "optional" },
     { name: "AST search", severity: "optional", ...ast },
     { name: "Text search", severity: "required", ok: true, detail: "built-in bounded fallback" },

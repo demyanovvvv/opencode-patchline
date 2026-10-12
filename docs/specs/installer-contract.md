@@ -6,6 +6,30 @@ Status: Accepted
 `--yes` / `-y`, and `--local`. `uninstall` supports the scope/language/confirmation
 flags and `--dry-run`. Invalid flags must fail before changing configurations.
 
+### Version lifecycle (1.3.0)
+
+Plugin installation selects the installed stable upstream from `opencode --version`,
+not the npm registry's latest version. An explicit `--opencode-version` remains an
+opt-in version override for installations/migrations.
+
+`host-upgrade --opencode-version <stable-version>` rebuilds only the host using the
+package containing the CLI. It accepts `--host-binary`, `--expected-host-version`,
+and `--rebuild`. Registration, LSP provisioning and installer state are not executed.
+The installed host must match that package's exact version; stale running hosts
+cannot upgrade another installed version. CLI and TUI share `Installation.upgrade`.
+Unknown install methods are allowed only for integrated hosts, whose update does
+not invoke the original package manager. Unsupported major migrations fail safely.
+
+Native targets are selected for Windows/Linux/macOS x64/arm64. Native executables,
+canonical symlinks, official npm launchers/cached binaries and npm Windows shims
+are discovered. Unknown or ambiguous launchers require an explicit binary path.
+Per-binary locks serialize installation/update. Source caches are per package and
+upstream version so different released packages do not rewrite each other's adapters.
+All owned legacy adapters are recognized by exact reconstruction, not marker alone.
+Retired Windows backups locked by running processes are retained after verification.
+External manager updates require integration repair; an inactive plugin cannot
+intercept them. Native artifact selection does not imply every manager is CI-tested.
+
 Installation delegates server/TUI registration and plugin dependency resolution
 to the installed OpenCode 1.x plugin command. Missing TypeScript LSP packages
 and the Bun runtime add-on require confirmation unless `--yes` is supplied.
@@ -49,8 +73,8 @@ preserving the caller's working directory and exit code. A missing build fails
 with instructions to run `npm install` and `npm run build`, without registry
 lookup. Standalone downloaded wrappers retain the published-package behavior.
 
-On Windows x64, installation provisions a conversation UI host from the latest
-stable `opencode-ai` upstream version, or `--opencode-version <1.x.y>`. Patchline
+Installation provisions a conversation UI host from the currently installed
+stable upstream version, or explicit `--opencode-version <1.x.y>`. Patchline
 version comes from the installer's package manifest. The executable version is
 `<upstream>+patchline.<plugin>` (for example `1.18.34+patchline.1.1.0`). Exact
 matching installed pairs skip rebuilding. Upstream and plugin changes therefore
