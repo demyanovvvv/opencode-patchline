@@ -1,11 +1,11 @@
 # Installation
 
-Patchline 1.3.0 is distributed as a GitHub release archive, not an npm registry
+Patchline 1.4.0 is distributed as a GitHub release archive, not an npm registry
 publication. See the complete [English](../../README.md#installation) and
 [Russian](../../README.ru.md#установка) installation instructions. Configuration
 is loaded at startup; fully restart OpenCode after updates.
 
-Run `opencode-patchline doctor` after installation. The initial release targets
+Run `node /path/to/package/dist/cli.js doctor` after installation. This release targets
 OpenCode 1.18.x–1.19.x.
 
 ## Installer

@@ -8,7 +8,7 @@ Patchline - готовый к использованию плагин OpenCode �
 а контроль корректности выполняется детерминированными инструментами, а не
 только инструкциями для модели.
 
-**Patchline `1.3.0` · OpenCode `1.19.0` · Интегрированный хост `1.19.0+patchline.1.3.0`**
+**Patchline `1.4.0` · OpenCode `1.19.0` · Интегрированный хост `1.19.0+patchline.1.4.0`**
 
 [English](README.md) · [Установка](#установка) · [Работа](docs/operations/usage.ru.md) · [Инструменты](#инструменты) · [Документация](docs/README.md) · [Changelog](CHANGELOG.md) · [Релизы](https://github.com/demyanovvvv/opencode-patchline/releases) · [Issues](https://github.com/demyanovvvv/opencode-patchline/issues)
 
@@ -56,13 +56,27 @@ OpenCode загружает плагины через Bun, поэтому пол
 
 ### Быстрый старт: GitHub-релиз
 
-Скачайте [`opencode-patchline-1.3.0.tgz`](https://github.com/demyanovvvv/opencode-patchline/releases/download/v1.3.0/opencode-patchline-1.3.0.tgz).
+Скачайте [`opencode-patchline-1.4.0.tgz`](https://github.com/demyanovvvv/opencode-patchline/releases/download/v1.4.0/opencode-patchline-1.4.0.tgz).
+Скачайте [SHA256SUMS.txt](https://github.com/demyanovvvv/opencode-patchline/releases/download/v1.4.0/SHA256SUMS.txt)
+в ту же папку и проверьте архив перед распаковкой:
+
+```bash
+sha256sum -c SHA256SUMS.txt
+# macOS: shasum -a 256 -c SHA256SUMS.txt
+```
+
+```powershell
+$expected = ((Get-Content .\SHA256SUMS.txt -Raw).Trim() -split '\s+')[0]
+$actual = (Get-FileHash .\opencode-patchline-1.4.0.tgz -Algorithm SHA256).Hash
+if ($actual -ne $expected) { throw 'Archive SHA-256 mismatch' }
+```
+
 Распакуйте в постоянную папку и установите runtime-зависимости:
 
 ```bash
-mkdir patchline-1.3.0
-tar -xzf opencode-patchline-1.3.0.tgz -C patchline-1.3.0
-cd patchline-1.3.0/package
+mkdir patchline-1.4.0
+tar -xzf opencode-patchline-1.4.0.tgz -C patchline-1.4.0
+cd patchline-1.4.0/package
 npm install --omit=dev
 node dist/cli.js doctor
 ```
@@ -73,12 +87,12 @@ node dist/cli.js doctor
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["file:///absolute/path/patchline-1.3.0/package/dist/plugin.js"],
-  "tui": { "plugin": ["file:///absolute/path/patchline-1.3.0/package/dist/tui.js"] }
+  "plugin": ["file:///absolute/path/patchline-1.4.0/package/dist/plugin.js"],
+  "tui": { "plugin": ["file:///absolute/path/patchline-1.4.0/package/dist/tui.js"] }
 }
 ```
 
-На Windows используйте URL вида `file:///C:/tools/patchline-1.3.0/package/dist/plugin.js`.
+На Windows используйте URL вида `file:///C:/tools/patchline-1.4.0/package/dist/plugin.js`.
 Сохраняйте распакованную папку, пока регистрация ссылается на неё.
 После изменения конфигурации перезапустите OpenCode. Из этой папки выполните:
 
@@ -107,15 +121,15 @@ OpenCode. Для смены upstream-версии используйте `host-u
 Запускайте их из нужного проекта или укажите проект через `--cwd`:
 
 ```bash
-sh /opt/patchline-1.3.0/package/install.sh --project --cwd /work/my-project --lang ru
-sh /opt/patchline-1.3.0/package/install.sh --global --yes --lang ru
-sh /opt/patchline-1.3.0/package/install.sh --project --cwd /work/my-project --dry-run
+sh /opt/patchline-1.4.0/package/install.sh --project --cwd /work/my-project --lang ru
+sh /opt/patchline-1.4.0/package/install.sh --global --yes --lang ru
+sh /opt/patchline-1.4.0/package/install.sh --project --cwd /work/my-project --dry-run
 ```
 
 ```powershell
-& "C:\tools\patchline-1.3.0\package\install.ps1" --project --cwd "C:\work\my-project" --lang ru
-& "C:\tools\patchline-1.3.0\package\install.ps1" --global --yes --lang ru
-& "C:\tools\patchline-1.3.0\package\uninstall.ps1" --project --cwd "C:\work\my-project" --dry-run
+& "C:\tools\patchline-1.4.0\package\install.ps1" --project --cwd "C:\work\my-project" --lang ru
+& "C:\tools\patchline-1.4.0\package\install.ps1" --global --yes --lang ru
+& "C:\tools\patchline-1.4.0\package\uninstall.ps1" --project --cwd "C:\work\my-project" --dry-run
 ```
 
 ### Флаги установщика
@@ -185,7 +199,7 @@ node dist/cli.js uninstall --global --restore-host --yes
 Полное оформление требует модифицированного хоста. Установщик автоматически
 подготавливает интеграцию и заменяет executable с защищённой резервной копией.
 После установки перезапустите OpenCode. Версия показывает установленный upstream
-и версию Patchline, например `1.19.0+patchline.1.3.0`.
+и версию Patchline, например `1.19.0+patchline.1.4.0`.
 
 Установщик сохраняет текущую upstream-версию. Команда `host-upgrade` принимает
 целевую версию OpenCode. Версии плагина и OpenCode изменяют свои части
@@ -199,11 +213,35 @@ node dist/cli.js uninstall --global --restore-host --yes
 по двенадцать строк, файлы — независимо, native diff — целыми участками изменений
 с номерами строк и цветами добавления/удаления.
 
-Подготовка хоста требует Git и Bun. Готовые бинарные
-артефакты, межкомпонентное восстановление транзакций и очистка старых backups /
-source cache с проверкой владения пока не реализованы. Удаление плагина не
-восстанавливает официальный executable и настройку обновлений. Подробнее:
+Подготовка хоста требует Git и Bun. Готовые интегрированные хосты, полное
+межкомпонентное восстановление транзакций и автоматическая очистка legacy/source
+cache пока не реализованы. `--restore-host` возвращает записанный исходный
+executable и неизменённую настройку обновлений. Старые/ручные установки без
+доказанной исходной копии требуют ручного восстановления. Подробнее:
 [контракт установщика](docs/specs/installer-contract.md).
+
+### Обновление с 1.3.x
+
+Распакуйте 1.4.0 в новую постоянную папку, установите runtime-зависимости и
+запустите новый установщик в той же проектной или глобальной области.
+Для запуска вне проекта укажите `--cwd`. Текущая upstream-версия OpenCode
+сохраняется; перезапустите OpenCode и выполните doctor из нового пакета.
+Не удаляйте старый пакет, пока его использует другая область.
+Старый интегрированный хост не получает проверенную исходную копию задним числом.
+
+### Проектный LSP
+
+```bash
+node /path/to/package/dist/cli.js lsp check --directory /work/my-project --json
+node /path/to/package/dist/cli.js lsp setup --directory /work/my-project
+```
+
+Check обнаруживает языки без установки; setup явно подготавливает управляемые
+серверы. Подготовка или установка не означает проверенное соединение.
+`patchline_lsp_status` показывает проектное состояние, `patchline_lsp` выполняет
+запросы. Отключённые и пользовательские серверы сохраняются. Хранилище
+управляемых LSP отделено от установленных через installer TypeScript/Bun.
+Подробнее: [doctor и LSP](docs/operations/doctor.md).
 
 Для локальной рабочей копии:
 

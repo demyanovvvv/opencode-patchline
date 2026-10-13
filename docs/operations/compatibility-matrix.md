@@ -2,7 +2,7 @@
 
 | Component | Version | Status |
 |---|---|---|
-| OpenCode | 1.18.x–1.19.x | verified baseline; integrated version uses installed upstream plus `+patchline.1.3.0` |
+| OpenCode | 1.18.x–1.19.x | release baseline; integrated version uses installed upstream plus `+patchline.1.4.0` |
 | `@opencode-ai/plugin` | 1.19.0 | verified |
 | `@oh-my-pi/hashline` | 18.1.5 | Full upstream runtime verified under OpenCode/Bun; Node keeps guarded linear fallback |
 | Node.js | 20.x and 22.x | CI matrix; local development uses 22.22.2 |

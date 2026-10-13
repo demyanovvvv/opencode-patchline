@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, writeFile, rm, realpath } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, expect, it } from "vitest"
@@ -8,7 +8,7 @@ import { prepareProjectLsp, type LspEnvironment } from "../src/lsp/manager.js"
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))) })
 async function fixture(files: string[]) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "patchline-lsp-regression-"))
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "patchline-lsp-regression-")))
   roots.push(root)
   for (const file of files) { await mkdir(path.dirname(path.join(root, file)), { recursive: true }); await writeFile(path.join(root, file), "") }
   return root

@@ -43,7 +43,7 @@ jobs:
       - run: opencode --version
       - run: npm run typecheck
       - run: npm test -- --run --testTimeout=30000
-      - run: npm run test:coverage
+      - run: npm run test:coverage -- --testTimeout=30000
       - run: npm run lint
       - run: npm run build
       - run: npm run doctor

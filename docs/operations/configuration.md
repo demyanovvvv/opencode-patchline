@@ -43,6 +43,20 @@ the hard 20,000-character safety cap. `telemetry: false` does not retain
 detailed local events; aggregate counters remain available to the optional
 `patchline_summary` tool. Setting `summary: false` omits that tool entirely.
 
+## Project LSP
+
+`lspAutoSetup` and `lspAutoInstall` default to `true`. The former controls project
+language/server preparation during plugin startup; the latter permits managed
+server installation where a recipe supports it. Set `lspAutoInstall: false` for
+discovery without automatic package installation, or `lspAutoSetup: false` to
+disable automatic preparation. `lspMaxEntries` bounds discovery (default 30,000);
+`lspStorageDirectory` overrides the dedicated managed-server cache.
+
+These runtime options are separate from installer `--no-lsp`, which skips only
+installer-side TypeScript provisioning/settings. OpenCode's `lsp: false` and
+custom/disabled server entries are honored. Use `lsp check`, explicit `lsp setup`
+and `patchline_lsp_status` as described in [doctor](doctor.md).
+
 Installer state is runtime ownership metadata and should not be committed to
 source control. Project-local state is ignored by the repository policy. A
 failed local install restores the captured package manifest and lockfiles when

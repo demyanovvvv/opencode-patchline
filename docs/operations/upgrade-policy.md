@@ -7,6 +7,19 @@ silently downgraded.
 
 ## Independent versions
 
+For the 1.4.0 GitHub archive, download the archive and SHA256SUMS.txt, verify the
+checksum, extract to a new permanent directory and install runtime dependencies.
+Run the new adjacent installer in every affected scope:
+
+```bash
+sh /path/to/patchline-1.4.0/package/install.sh --project --cwd /work/project --lang en
+sh /path/to/patchline-1.4.0/package/install.sh --global --yes --lang en
+```
+
+PowerShell uses the same flags with `install.ps1`. Restart OpenCode and run the
+new package's doctor. Keep the old package until no scope references it. Upgrading
+from a legacy integrated host does not create a verified stock-original backup.
+
 - `install --local` updates Patchline on the installed OpenCode upstream version.
 - `opencode upgrade` and the OpenCode 1.19 TUI update service invoke the same
   host-only operation. They pass the running binary path and full expected version.
@@ -28,3 +41,7 @@ upgrade entrypoint is anchored to that package, not to npm's `latest` tag.
 Windows can retain a running old image after replacement. Locked, integration-owned
 retired backups are retained; no unrelated process is terminated. An interrupted
 update's `.patchline-update-lock` must be inspected before removal/retry.
+
+Verified original backups survive managed host upgrades. `uninstall
+--restore-host` returns the saved original version, even if an integrated host
+was upgraded later, and refuses restoration while another recorded owner remains.
