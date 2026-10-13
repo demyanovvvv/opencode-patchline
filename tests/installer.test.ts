@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
@@ -329,6 +329,9 @@ describe("Patchline installer", () => {
     const root = await workspace("patchline-dedup-")
     const config = path.join(root, "opencode.json")
     const target = path.join(root, "opencode-patchline")
+    await mkdir(path.join(target, "dist"), { recursive: true })
+    await writeFile(path.join(target, "package.json"), '{"name":"opencode-patchline"}')
+    for (const entry of ["cli.js", "plugin.js", "tui.js"]) await writeFile(path.join(target, "dist", entry), "")
     await writeFile(config, JSON.stringify({ plugin: ["other", [target, { mode: "precision", summary: true }], `${target}/`] }))
     const code = await installPatchline({ cwd: root, packageName: target, stdout: () => undefined, stderr: () => undefined, hasCommand: async () => true,
       runCommand: async () => { const data = JSON.parse(await readFile(config, "utf8")); data.plugin.push(target); await writeFile(config, JSON.stringify(data)); return 0 },

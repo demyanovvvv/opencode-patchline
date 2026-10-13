@@ -1,25 +1,19 @@
 #!/bin/sh
 set -eu
-
-# Prefer local build if running from source checkout
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)"
-if [ -f "$SCRIPT_DIR/src/cli.ts" ] && [ -f "$SCRIPT_DIR/package.json" ]; then
-  PKG_NAME=$(node -e "try{const p=require('$SCRIPT_DIR/package.json');console.log(p.name||'')}catch(e){}" 2>/dev/null || true)
-  if [ "$PKG_NAME" = "opencode-patchline" ]; then
-    if ! command -v node >/dev/null 2>&1; then
-      printf '%s\n' 'Node.js >=20 is required. Install Node.js and retry.' >&2
-      exit 1
-    fi
-    if [ ! -f "$SCRIPT_DIR/dist/cli.js" ]; then
-      printf '%s\n' "Build the source checkout first: run npm install and npm run build in '$SCRIPT_DIR', then retry." >&2
-      exit 1
-    fi
-    exec node "$SCRIPT_DIR/dist/cli.js" uninstall "$@"
-  fi
-fi
-
-if ! command -v node >/dev/null 2>&1 || ! command -v npx >/dev/null 2>&1; then
-  printf '%s\n' 'Node.js >=20 and npx are required. Install Node.js and retry.' >&2
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+NODE_DIR="$SCRIPT_DIR"
+if command -v cygpath >/dev/null 2>&1; then NODE_DIR="$(cygpath -m "$SCRIPT_DIR")"; fi
+if ! command -v node >/dev/null 2>&1; then
+  printf '%s\n' 'Node.js >=20 is required. Install Node.js and retry.' >&2
   exit 1
 fi
-exec npx --yes opencode-patchline@latest uninstall "$@"
+if ! node -e 'if(Number(process.versions.node.split(".")[0])<20)process.exit(1)'; then
+  printf '%s\n' 'Node.js >=20 is required.' >&2
+  exit 1
+fi
+if [ ! -f "$SCRIPT_DIR/package.json" ] || [ ! -f "$SCRIPT_DIR/dist/cli.js" ] ||
+   ! node -e 'const fs=require("node:fs");try{if(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).name!=="opencode-patchline")process.exit(1)}catch{process.exit(1)}' "$NODE_DIR/package.json"; then
+  printf '%s\n' 'Use this script inside an extracted Patchline release package, or build the checkout with npm install and npm run build first.' >&2
+  exit 1
+fi
+exec node "$NODE_DIR/dist/cli.js" uninstall "$@"

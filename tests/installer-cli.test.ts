@@ -28,7 +28,7 @@ describe("installer CLI", () => {
   })
 
   it("rejects invalid flags and language before executing anything", async () => {
-    for (const args of [["install", "--wat"], ["install", "--lang"], ["install", "--lang", "fr"], ["install", "--dry-run"]]) {
+    for (const args of [["install", "--wat"], ["install", "--lang"], ["install", "--lang", "fr"], ["install", "--dry-run=true"]]) {
       const calls: string[] = []
       expect(await runCli(args, { stdout: () => undefined, stderr: () => undefined, installer: { runCommand: async (command) => { calls.push(command); return 0 } } })).toBe(1)
       expect(calls).toEqual([])
@@ -53,15 +53,20 @@ describe("installer CLI", () => {
     expect(calls).toEqual([])
   })
 
-  it("can install the current built checkout without using the older registry package", async () => {
+  it("can install an explicit built package without using the older registry package", async () => {
     const root = await workspace()
+    const source = path.join(root, "built package")
+    await mkdir(path.join(source, "dist"), { recursive: true })
+    await writeFile(path.join(source, "package.json"), '{"name":"opencode-patchline"}')
+    for (const entry of ["cli.js", "plugin.js", "tui.js"]) await writeFile(path.join(source, "dist", entry), "")
     const calls: string[][] = []
-    expect(await runCli(["install", "--local", "--lang", "en"], {
+    expect(await runCli(["install", "--package", source, "--lang", "en"], {
       stdout: () => undefined, stderr: () => undefined,
       installer: { cwd: root, hasCommand: async () => true, runCommand: async (_command, args) => { calls.push([...args]); return 0 } },
     })).toBe(0)
     expect(calls[0]?.[1]).not.toBe("opencode-patchline")
     expect(path.isAbsolute(calls[0]![1]!)).toBe(true)
+    expect(calls[0]![1]).toBe(source)
   })
 
   it("finds the Git root when running uninstall from a subdirectory and reuses Russian", async () => {

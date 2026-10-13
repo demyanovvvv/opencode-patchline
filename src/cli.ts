@@ -2,7 +2,8 @@
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { inspectCapabilities } from "./compatibility.js"
-import { installPatchline, uninstallPatchline, upgradePatchlineHost, type InstallerLanguage, type InstallerOptions } from "./installer.js"
+import { installPatchline, uninstallPatchline, upgradePatchlineHost, type InstallerOptions } from "./installer.js"
+import { installerArguments, installerHelp } from "./installation/arguments.js"
 import { DEFAULT_CONFIG, parseConfig } from "./config.js"
 import { lspGuide, renderLspGuide } from "./lsp-guide.js"
 import { prepareProjectLsp } from "./lsp/manager.js"
@@ -151,42 +152,15 @@ export async function runCli(args: readonly string[], options: CliOptions = {}):
   }
 
   if (command === "install" || command === "uninstall") {
-    const languageFlag = args.findIndex((arg) => arg === "--lang" || arg === "--language")
-    const languageValue = languageFlag >= 0 ? args[languageFlag + 1] : undefined
-    if (languageValue !== undefined && languageValue !== "ru" && languageValue !== "en") {
-      stderr("Unsupported installer language. Use --lang ru or --lang en.")
+    try {
+      const parsed = installerArguments(command, args.slice(1))
+      if (parsed.help) { stdout(installerHelp(command, parsed.options.language)); return 0 }
+      const installerOptions = { ...options.installer, ...parsed.options, stdout, stderr }
+      return command === "install" ? await installPatchline(installerOptions) : await uninstallPatchline(installerOptions)
+    } catch (error) {
+      stderr(error instanceof Error ? error.message : String(error))
       return 1
     }
-    if (languageFlag >= 0 && languageValue === undefined) {
-      stderr("Missing value for --lang. Use --lang ru or --lang en.")
-      return 1
-    }
-    const upstreamFlag = args.indexOf("--opencode-version")
-    const upstream = upstreamFlag >= 0 ? args[upstreamFlag + 1] : undefined
-    if (upstreamFlag >= 0 && (command !== "install" || !upstream || !/^1\.\d+\.\d+$/.test(upstream))) {
-      stderr("--opencode-version requires a stable OpenCode 1.x version.")
-      return 1
-    }
-    const flags = new Set(["--global", "-g", "--yes", "-y", "--lang", "--language", ...(command === "install" ? ["--local", "--opencode-version"] : ["--dry-run"])])
-    const unknown = args.slice(1).find((arg, index) => index + 1 !== languageFlag + 1 && index + 1 !== upstreamFlag + 1 && !flags.has(arg))
-    if (unknown) {
-      stderr(languageValue === "ru" ? `Неизвестный параметр: ${unknown}` : `Unknown installer option: ${unknown}`)
-      return 1
-    }
-    const installerOptions: InstallerOptions = {
-      ...options.installer,
-      stdout,
-      stderr,
-      global: args.includes("--global") || args.includes("-g"),
-      yes: args.includes("--yes") || args.includes("-y"),
-      dryRun: args.includes("--dry-run"),
-      ...(args.includes("--local") ? { packageName: fileURLToPath(new URL("..", import.meta.url)) } : {}),
-      ...(upstream !== undefined ? { opencodeVersion: upstream } : {}),
-      ...(languageValue !== undefined ? { language: languageValue as InstallerLanguage } : {}),
-    }
-    return command === "install"
-      ? await installPatchline(installerOptions)
-      : await uninstallPatchline(installerOptions)
   }
 
   stderr(`Unknown command: ${command}\nUsage: opencode-patchline <doctor [--lsp]|lsp check|lsp setup|config|explain|install|uninstall> [--directory <project>] [--json] [--global] [--lang ru|en] [--yes] [--dry-run]`)

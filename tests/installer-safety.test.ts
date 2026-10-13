@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { parse } from "jsonc-parser"
@@ -155,6 +155,9 @@ describe("installer safety", () => {
   it("removes exact local package registrations saved by the installer", async () => {
     const root = await workspace()
     const packageSpec = path.join(root, "local plugin")
+    await mkdir(path.join(packageSpec, "dist"), { recursive: true })
+    await writeFile(path.join(packageSpec, "package.json"), '{"name":"opencode-patchline"}')
+    for (const entry of ["cli.js", "plugin.js", "tui.js"]) await writeFile(path.join(packageSpec, "dist", entry), "")
     await installPatchline({ cwd: root, packageName: packageSpec, stdout: () => undefined, hasCommand: async () => true, runCommand: async () => 0 })
     await writeFile(path.join(root, "opencode.json"), JSON.stringify({ plugin: ["other", packageSpec] }))
     await uninstallPatchline({ cwd: root, yes: true, stdout: () => undefined })

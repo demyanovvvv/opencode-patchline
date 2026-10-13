@@ -12,7 +12,7 @@ import { digestBytes } from "../snapshot/store.js"
 
 export type FileSnapshot = { path: string; source: string; identity: FileIdentity; parent: FileIdentity }
 export type FileChange = FileSnapshot & { text: string }
-type BinarySnapshot = { path: string; bytes: Uint8Array; identity: FileIdentity; parent: FileIdentity }
+export type BinarySnapshot = { path: string; bytes: Uint8Array; identity: FileIdentity; parent: FileIdentity }
 export type InstallPaths = { cwd: string; configDirectory?: string; global?: boolean }
 
 export function globalConfigDirectory(): string {
@@ -57,7 +57,7 @@ export async function assertCurrent(snapshot: FileSnapshot): Promise<void> {
   }
 }
 
-async function readBinarySnapshot(file: string): Promise<BinarySnapshot | undefined> {
+export async function readBinarySnapshot(file: string): Promise<BinarySnapshot | undefined> {
   try {
     const info = await lstat(file)
     if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Expected a regular, non-symlink file: ${file}`)
@@ -69,7 +69,7 @@ async function readBinarySnapshot(file: string): Promise<BinarySnapshot | undefi
   }
 }
 
-async function assertBinaryCurrent(snapshot: BinarySnapshot): Promise<void> {
+export async function assertBinaryCurrent(snapshot: BinarySnapshot): Promise<void> {
   const current = await readBinarySnapshot(snapshot.path)
   if (!current || !Buffer.from(current.bytes).equals(Buffer.from(snapshot.bytes)) || current.identity.device !== snapshot.identity.device || current.identity.inode !== snapshot.identity.inode || current.parent.device !== snapshot.parent.device || current.parent.inode !== snapshot.parent.inode) {
     throw new Error(`Binary host backup changed; retry after inspecting it: ${snapshot.path}`)
@@ -223,4 +223,15 @@ export async function installHostBinary(source: string, target: string, onRollba
     }
     throw error
   } finally { await rm(temporary, { force: true }) }
+}
+
+export async function replaceHostFromSnapshot(source: BinarySnapshot, target: BinarySnapshot, onRollback: (restore: () => Promise<void>) => void): Promise<void> {
+  await assertBinaryCurrent(source)
+  await assertBinaryCurrent(target)
+  const staged = path.join(path.dirname(target.path), `.patchline-restore-${randomUUID()}`)
+  const mode = (await lstat(source.path)).mode
+  await writeFile(staged, source.bytes, { flag: "wx", mode })
+  try {
+    await installHostBinary(staged, target.path, onRollback, { identity: target.identity, digest: createHash("sha256").update(target.bytes).digest("hex") })
+  } finally { await rm(staged, { force: true }) }
 }

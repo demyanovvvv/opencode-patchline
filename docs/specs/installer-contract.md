@@ -2,9 +2,25 @@
 
 Status: Accepted
 
-`install` supports `--global` / `-g`, `--lang en|ru` / `--language en|ru`,
-`--yes` / `-y`, and `--local`. `uninstall` supports the scope/language/confirmation
-flags and `--dry-run`. Invalid flags must fail before changing configurations.
+Both commands support `--project` (default), `--global` / `-g`, `--cwd <path>`,
+`--lang en|ru` / `--language en|ru`, `--yes` / `-y`, `--help` / `-h`,
+`--dry-run`, and `--host-binary <path>`. Install additionally supports `--local`,
+`--package <built-directory>`, `--no-host`, `--no-lsp`, and `--opencode-version`.
+Uninstall additionally supports `--keep-deps` and `--restore-host`.
+Values accept separate or equals-style arguments. Unknown, repeated, missing,
+boolean-valued switches and conflicting flags fail before filesystem changes.
+`--project` conflicts with `--global`; `--local` conflicts with `--package`.
+`--no-host` conflicts with explicit host/version selection. `--local --global`
+remains valid: local selects the adjacent package source, not the scope.
+Help returns without filesystem inspection or subprocesses. Dry-run validates
+selected configuration/package inputs and reports paths/actions without writes,
+locks, prompts, subprocesses, downloads or builds. Explicit directories contain
+a Patchline manifest and built CLI/server/TUI, and supply host adapters/version.
+`--no-lsp` skips LSP provisioning/settings independently of Bun. `--no-host`
+skips provisioning and records ownership if an existing tracked host is used.
+`--keep-deps` retains direct dependencies and recorded LSP/runtime packages;
+registration and unchanged installer-owned LSP settings are still removed.
+Uninstallation checks its initial state snapshot before mutation and completion.
 
 ### Version lifecycle (1.3.0)
 
@@ -60,20 +76,15 @@ are preflighted and checked again before npm; failure retains installer state fo
 retry. Dry-run includes package cleanup without invoking npm. Shared OpenCode
 package caches and source checkouts are retained because other scopes may use them.
 
-Root `install.sh`, `uninstall.sh`, `install.ps1` and `uninstall.ps1` wrappers invoke
-`npx --yes opencode-patchline@latest` with the matching command, forward every
-argument and preserve the subprocess exit code and caller's working directory.
-They require Node.js and npx; npm's `--yes` only approves fetching the CLI, while
-installer confirmations require a separately forwarded `--yes`.
+Root `install.sh`, `uninstall.sh`, `install.ps1` and `uninstall.ps1` require Node.js
+>=20 and invoke the adjacent built `dist/cli.js` from a release or checkout.
+They validate `package.json`, forward literal arguments and preserve the exit
+code/caller's working directory. Install defaults to `--local` unless an explicit
+source was supplied. Missing package/build gives release/build instructions
+without registry lookup; `src/` is not required. POSIX wrappers convert Node paths
+using `cygpath` where available (Git Bash).
 
-When `install.ps1` is beside a Patchline source checkout (`src/cli.ts` and a
-`package.json` named `opencode-patchline`), it instead invokes the adjacent
-`dist/cli.js` using Node.js with `install --local`, forwarding all arguments and
-preserving the caller's working directory and exit code. A missing build fails
-with instructions to run `npm install` and `npm run build`, without registry
-lookup. Standalone downloaded wrappers retain the published-package behavior.
-
-Installation provisions a conversation UI host from the currently installed
+Unless `--no-host` is supplied, installation provisions a host from the installed
 stable upstream version, or explicit `--opencode-version <1.x.y>`. Patchline
 version comes from the installer's package manifest. The executable version is
 `<upstream>+patchline.<plugin>` (for example `1.18.34+patchline.1.1.0`). Exact
@@ -85,7 +96,8 @@ web UI. Unsupported upstream source APIs fail before replacing the executable.
 Replacement requires confirmation unless `--yes` is supplied. One fixed
 `.patchline-previous` backup is rotated; byte-identical installs do not rotate it.
 Command `opencode` is retained. Unsupported platforms fail instead of claiming
-full UI installation. Removing Patchline does not yet restore the shared host.
+full UI installation. Regular removal retains the shared host; `--restore-host`
+restores a verified original under the same per-binary lock.
 Legacy UUID backups and source caches are retained until ownership-aware cleanup
 is implemented; they must not be deleted merely by matching a filename.
 
@@ -101,7 +113,7 @@ comparison ignores integration build metadata to avoid repeated same-version
 notifications. The integrated host version is `<upstream>+patchline.<package-version>`;
 it does not include private host revision markers such as `.tools1`. Published artifact delivery, plugin-update coordination outside
 the installer, global transaction journaling and managed cleanup remain pending.
-The preference is retained on uninstall. Existing global configuration is
+The preference is retained on regular uninstall. Existing global configuration is
 required for provisioning. Executable discovery canonicalizes the located path
 (including NVM aliases) before regular-file, parent and identity checks.
 
@@ -122,3 +134,34 @@ failure. Dependency-removal failures retain state for retry.
 
 Successful removal deletes state, retains other plugins and the shared OpenCode
 package cache, and reminds the user to restart OpenCode.
+
+## Original host recovery
+
+Before the first stock replacement, `<binary>.patchline-original` is created
+exclusively and never rotated. `<binary>.patchline-recovery.json` records its
+SHA-256, original stable version, installed SHA-256, absolute state-file owners
+and the original autoupdate value when changed. Repeated installs and host-only
+upgrades preserve the original. Provisioning claims its owner while holding the
+host lock; ordinary removal releases it only after package cleanup succeeds.
+Installed Bun is recorded for normal cleanup, and newly provisioned Bun is
+removed after failed host preparation; pre-existing Bun is not claimed.
+Rollback restores recovery metadata only after a successful binary rollback,
+with snapshot/identity guards. Original copies and recovery receipts are retained.
+
+`--restore-host` preflights owner conflicts before uninstallation writes. Other
+recorded owners block restoration even if their state files are missing; missing
+state is not evidence of release. Unknown/manual installations are not enumerable.
+Legacy integrated binaries without a verified original cannot be restored using
+rotating backups. Current binary and original hashes/identities, receipt and any
+owned config changes are checked again under lock after confirmation. Restore
+returns the saved original version, not the latest upstream. Only a still-notify
+owned autoupdate setting is reverted; other user changes remain. Global plugin
+removal and preference restoration in the same file are combined into one edit.
+Delayed restore after regular removal works with a discoverable or explicitly
+selected binary. Restoration rolls back guarded writes on failure, preserving
+recovery evidence and reporting conflicts instead of overwriting external edits.
+
+`npm run smoke:installer-flags` exercises project/global wrapper installation,
+preview and removal in an isolated environment. `npm run smoke:host-restoration
+-- <stock-opencode-binary>` exercises real native file replacement and restoration
+through the uninstaller without building a new host or changing the current one.

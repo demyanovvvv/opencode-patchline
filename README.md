@@ -102,8 +102,47 @@ node dist/cli.js host-upgrade --opencode-version 1.19.0
 
 Repeat installation to update Patchline without selecting a newer OpenCode.
 Use `host-upgrade` when the upstream OpenCode version should change.
-Use the built CLI commands above for this GitHub-only release. Standalone
-wrappers that fetch `opencode-patchline@latest` require an npm publication.
+The included scripts work from an extracted release or a built checkout. They
+use the adjacent package, forward CLI flags and exit codes, and never fetch a CLI
+from npm. Run them from the target project, or select it with `--cwd`:
+
+```bash
+sh /opt/patchline-1.3.0/package/install.sh --project --cwd /work/my-project --lang en
+sh /opt/patchline-1.3.0/package/install.sh --global --yes --lang en
+sh /opt/patchline-1.3.0/package/install.sh --project --cwd /work/my-project --dry-run
+```
+
+```powershell
+& "C:\tools\patchline-1.3.0\package\install.ps1" --project --cwd "C:\work\my-project" --lang en
+& "C:\tools\patchline-1.3.0\package\install.ps1" --global --yes --lang en
+& "C:\tools\patchline-1.3.0\package\uninstall.ps1" --project --cwd "C:\work\my-project" --dry-run
+```
+
+### Installer flags
+
+| Flag | Commands | Meaning |
+| --- | --- | --- |
+| `--project` | Both | Project scope, the default; discovers the Git root from the selected directory. |
+| `--global`, `-g` | Both | Global configuration for all projects. |
+| `--cwd <path>` | Both | Select the project without changing the caller's working directory. |
+| `--lang en\|ru`, `--language` | Both | Installer language, remembered for the selected scope. |
+| `--yes`, `-y` | Both | Accept prompts for automation. |
+| `--dry-run` | Both | Preview paths and actions without writes, downloads, builds or package commands. |
+| `--help`, `-h` | Both | Show command-specific help. |
+| `--local` | Install | Use the package containing this CLI; selects a source, not project scope. |
+| `--package <path>` | Install | Use an explicit built package directory instead of `--local`. |
+| `--no-host` | Install | Skip UI host provisioning; full cards require an integrated host. |
+| `--no-lsp` | Install | Skip TypeScript LSP installation and configuration. |
+| `--opencode-version <1.x.y>` | Install | Explicit stable upstream version override. |
+| `--host-binary <path>` | Both | Select the OpenCode executable for provisioning/restoration. |
+| `--keep-deps` | Uninstall | Retain package dependencies and runtime add-ons. |
+| `--restore-host` | Uninstall | Restore verified original OpenCode if no other recorded installation uses it. |
+
+Values accept `--flag value` or `--flag=value`. Unknown, repeated, missing and
+conflicting options fail before changes. `--project --global` is invalid;
+`--local --global` remains valid. Scripts default to their adjacent package;
+an explicit `--package` replaces that default. Plain CLI `install` retains npm
+package registration; use `--local` or the scripts for this GitHub release.
 
 `--lang en|ru` (alias `--language`) selects installer/uninstaller messages and
 is remembered for that scope. Other Patchline commands keep their existing
@@ -118,13 +157,26 @@ Uninstall with a preview or an interactive confirmation:
 node dist/cli.js uninstall --dry-run --lang en
 node dist/cli.js uninstall --lang en
 node dist/cli.js uninstall --global --yes --lang en
+node dist/cli.js uninstall --project --cwd /work/my-project --keep-deps --yes
+node dist/cli.js uninstall --global --restore-host --dry-run
+node dist/cli.js uninstall --global --restore-host --yes
 ```
 
 Removal affects Patchline registrations and installer-owned LSP/runtime additions.
 Direct Patchline dependencies in the selected project/config root and project
 `.opencode/` are uninstalled. Shared OpenCode caches and source checkouts remain.
 Other plugins are retained; configuration backups are kept next to the original
-files. See [installation and removal](docs/operations/installation.md).
+files. Use `sh uninstall.sh` or `./uninstall.ps1` with the same flags and scope.
+Regular removal leaves the shared host integrated. `--restore-host` checks the
+original backup and installed binary hashes, refuses other recorded owners, and
+restores only an unchanged installer-owned `autoupdate` preference. It restores
+the saved original version, even after host upgrades. It can be run after normal
+removal, with `--host-binary` if the executable is no longer discoverable.
+Legacy installations without a verified original backup fail with recovery
+guidance; rotating `.patchline-previous` files are not treated as stock originals.
+Keep the extracted package while any registered scope or integrated host uses it.
+Fully restart OpenCode after installation, update or removal.
+See [installation and removal](docs/operations/installation.md).
 
 ### Conversation UI and integrated versions
 

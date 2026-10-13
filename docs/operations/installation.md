@@ -33,19 +33,32 @@ node dist/cli.js install --local --lang ru
 node dist/cli.js uninstall --dry-run --lang ru
 ```
 
-PowerShell wrappers in a source checkout remain available when their adjacent
-build is present.
+Both POSIX and PowerShell wrappers use their adjacent built package from a release
+or checkout, without npm CLI fetching. Missing builds give setup instructions.
+They preserve caller cwd, literal arguments and exit codes. Install defaults to
+the adjacent source; an explicit `--package` replaces it. For example:
 
-Add `--global` for global scope or `--yes` to accept installer prompts. The
-standalone wrappers require an npm-published CLI. For this GitHub-only release,
-use the built `node dist/cli.js` commands directly.
-When `install.ps1` is run from a Patchline source checkout, it uses the adjacent
-built CLI and registers that checkout with `--local` instead. Run `npm install`
-and `npm run build` in the checkout before using it; no published Patchline
-package is required for this path. The target scope still follows the caller's
-working directory (or `--global`).
-The existing automatic conversation UI host provisioning supports Windows x64;
-the shell wrappers do not extend that host's platform support.
+```bash
+sh /opt/patchline/package/install.sh --project --cwd /work/project --lang en
+sh /opt/patchline/package/install.sh --global --yes
+sh /opt/patchline/package/install.sh --project --cwd /work/project --dry-run
+```
+
+```powershell
+& "C:\tools\patchline\package\install.ps1" --project --cwd "C:\work\project" --lang ru
+& "C:\tools\patchline\package\install.ps1" --global --yes
+```
+
+Add `--global` for global scope, `--project` for explicit project scope,
+`--cwd <path>` to select a project, or `--yes` to accept installer prompts.
+`--dry-run` previews without changes, locks, commands, downloads or builds.
+`--no-host` skips the shared UI host; `--no-lsp` skips LSP provisioning/settings.
+Bun provisioning is independent. `--host-binary <path>` explicitly selects the
+executable when preparing the host. Use `install --help` for the full flag list.
+Values accept separate or equals-style arguments; duplicate/conflicting options
+are rejected. `--local` selects the package source, not project scope.
+Native host targets cover Windows/Linux/macOS x64/arm64; manager/platform smoke
+coverage is documented in the installer contract.
 
 The installer checks the supported add-ons independently. If
 `typescript-language-server` is missing, it asks before running `npm install
@@ -95,5 +108,12 @@ A configuration transaction rolls back already-written files on failure unless a
 concurrent change prevents safe rollback. Dependency-removal failure retains the
 state so a retry can finish cleanup. Successful removal deletes installer state.
 OpenCode's shared plugin cache is retained, as it may be used by another scope.
+
+`--keep-deps` retains dependencies and runtime add-ons. Regular removal leaves
+the integrated host and releases its recorded owner after successful cleanup.
+`--restore-host` restores the verified original executable/version only when no
+other recorded owners remain, and reverts only an unchanged owned autoupdate
+preference. Legacy rotating backups are not eligible. Delayed restore can use
+`--host-binary <path>`. See [uninstallation](uninstallation.md) for recovery.
 
 Restart OpenCode after either operation.

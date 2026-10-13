@@ -9,6 +9,7 @@ import { assertCurrent, backup, commitConfigurations, configurationFiles, global
 import { configureLsp, removeOwnedLsp, type OwnedLsp } from "./installation/lsp.js"
 import { supportsOpenCodeVersion } from "./opencode-version.js"
 import { captureHostRevision, findHostBinary, withHostLock } from "./installation/host-runtime.js"
+import { claimExistingHost, claimHostDuringInstall, hostRecoveryRollback, planHostRestore, prepareHostRecovery, recordHostInstall, recordHostProtection, releaseHostOwner, restoreOriginalHost } from "./installation/host-recovery.js"
 
 // jsonc-parser declares SyntaxKind as an ambient const enum, incompatible with verbatimModuleSyntax.
 const COMMA_TOKEN = 5
@@ -184,6 +185,11 @@ export type InstallerOptions = {
   opencodeVersion?: string
   yes?: boolean
   dryRun?: boolean
+  noHost?: boolean
+  noLsp?: boolean
+  keepDeps?: boolean
+  restoreHost?: boolean
+  onHostAddon?: (packages: string[]) => void
   stdout?: Output
   stderr?: Output
   confirm?: Confirm
@@ -193,6 +199,7 @@ export type InstallerOptions = {
 }
 
 type InstallerState = {
+  hostBinary?: string
   language?: InstallerLanguage
   scope?: "global" | "project"
   lspPackages?: string[]
@@ -303,6 +310,10 @@ async function readState(filePath: string): Promise<InstallerState> {
   if (Array.isArray(state.lspPackages)) result.lspPackages = state.lspPackages as string[]
   if (Array.isArray(state.addonPackages)) result.addonPackages = state.addonPackages as string[]
   if (typeof state.packageName === "string") result.packageName = state.packageName
+  if (state.hostBinary !== undefined) {
+    if (typeof state.hostBinary !== "string" || !path.isAbsolute(state.hostBinary)) throw new Error("Invalid installer host path.")
+    result.hostBinary = state.hostBinary
+  }
   if (state.lspConfig && typeof state.lspConfig === "object") {
     const config = state.lspConfig as Partial<OwnedLsp>
     if (typeof config.file !== "string" || !config.value || !Array.isArray(config.value.command) || !Array.isArray(config.value.extensions)) throw new Error("Invalid LSP ownership state.")
@@ -408,7 +419,7 @@ async function normalizeOptions(options: InstallerOptions): Promise<InstallerOpt
 }
 
 async function saveInstallationState(options: InstallerOptions, language: InstallerLanguage, lspPackages: string[], addonPackages: string[], lspConfig?: OwnedLsp): Promise<void> {
-  await saveState(stateFileOf(options), { schemaVersion: 1, language, scope: scopeOf(options), lspPackages, addonPackages, packageName: options.packageName ?? PATCHLINE_PACKAGE, ...(lspConfig ? { lspConfig } : {}) })
+  await saveState(stateFileOf(options), { schemaVersion: 1, language, scope: scopeOf(options), lspPackages, addonPackages, packageName: options.packageName ?? PATCHLINE_PACKAGE, ...(lspConfig ? { lspConfig } : {}), ...(options.hostBinary ? { hostBinary: options.hostBinary } : {}) })
 }
 
 async function rollbackPluginRegistration(options: InstallerOptions, previousConfigs: Awaited<ReturnType<typeof configurationFiles>>, packageName: string, log: Output, addedLsp?: OwnedLsp): Promise<void> {
@@ -483,17 +494,39 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
   const text = messages[language]
   const scope = scopeOf(options)
   const packageName = options.packageName ?? PATCHLINE_PACKAGE
+  if (path.isAbsolute(packageName)) {
+    const manifest = await readSnapshot(path.join(packageName, "package.json"))
+    if (!manifest || JSON.parse(manifest.source).name !== PATCHLINE_PACKAGE) throw new Error("Expected a built opencode-patchline package directory.")
+    for (const entry of ["cli.js", "plugin.js", "tui.js"]) {
+      try { await access(path.join(packageName, "dist", entry)) }
+      catch { throw new Error(`A built package is required: missing dist/${entry}. Run npm install and npm run build in the checkout, or extract a release.`) }
+    }
+  }
   const runCommand = (command: string, args: readonly string[]) => run(options, command, args)
   const hasCommand = (command: string) => commandAvailable(options, command)
 
   output(options, text.starting(packageName))
   output(options, text.scope(scope))
   let rollbackVisualHost: (() => Promise<void>) | undefined
+  let hostAddons: string[] = []
+  options.onHostAddon = (packages) => { hostAddons = packages }
   const previousConfigs = await configurationFiles({ cwd: options.cwd!, ...(options.configDirectory ? { configDirectory: options.configDirectory } : {}), ...(options.global !== undefined ? { global: options.global } : {}) })
+  for (const file of previousConfigs) removePatchlineEntries(file.source, state.packageName ?? PATCHLINE_PACKAGE)
+  if (options.dryRun) {
+    const ru = language === "ru"
+    output(options, `${ru ? "Конфигурация" : "Configuration"}: ${configDirectoryOf(options)}`)
+    output(options, `${ru ? "Регистрация server/TUI" : "Register server/TUI"}: ${packageName}${options.global ? " --global" : ""}`)
+    for (const file of previousConfigs) output(options, `${ru ? "Проверка/обновление" : "Inspect/update"}: ${file.path}`)
+    output(options, options.noHost ? (ru ? "Хост UI: пропущен" : "UI host: skipped") : `${ru ? "Хост UI: подготовка" : "UI host: provision"} ${options.hostBinary ?? "OpenCode"}; autoupdate: notify`)
+    output(options, options.noLsp ? (ru ? "LSP: пропущен" : "LSP: skipped") : (ru ? `LSP: установка/настройка недостающих TypeScript-пакетов (${scope}) после подтверждения` : `LSP: install/configure missing TypeScript packages (${scope}) after confirmation`))
+    output(options, ru ? "Runtime: установка недостающего Bun глобально после подтверждения" : "Runtime: install missing Bun globally after confirmation")
+    output(options, `${ru ? "Состояние" : "State"}: ${stateFileOf(options)}`)
+    return 0
+  }
   const previousStateSnapshot = await readSnapshot(stateFileOf(options))
   const previousPackageFiles = await capturePackageFiles(options)
   try {
-  if (!options.runCommand) rollbackVisualHost = await ensureVisualHost(options, (before, landed) => {
+  if (!options.noHost && !options.runCommand) rollbackVisualHost = await ensureVisualHost(options, (before, landed) => {
     const previous = previousConfigs.find((file) => file.path === before.path)
     if (!previous) return
     if (previous.source !== before.source || previous.identity.device !== before.identity.device || previous.identity.inode !== before.identity.inode) throw new Error(`Configuration changed; retry after inspecting it: ${before.path}`)
@@ -505,7 +538,11 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
       throw new Error(language === "ru" ? "Требуется OpenCode >=1.18.0 и <2. Установите совместимую версию OpenCode." : "OpenCode >=1.18.0 and <2 is required. Install a compatible OpenCode version.")
     }
   }
-  } catch (error) { await rollbackVisualHost?.(); throw error }
+  } catch (error) {
+    await rollbackVisualHost?.()
+    if (hostAddons.length) await rollbackInstalledPackages([{ packages: hostAddons, global: true }], runCommand, (line) => output(options, line))
+    throw error
+  }
   let expectedPackageFiles: FileSnapshot[] = []
   let expectedState = previousStateSnapshot
   const saveOwnedState = async (language: InstallerLanguage, packages: string[], addons: string[], lsp?: OwnedLsp): Promise<void> => {
@@ -524,7 +561,7 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
       }
     }
   }
-  const installedPackages: InstalledPackageSet[] = []
+  const installedPackages: InstalledPackageSet[] = hostAddons.length ? [{ packages: hostAddons, global: true }] : []
   let configuredLsp: OwnedLsp | undefined
   let pluginRegistered = false
   let rollbackStarted = false
@@ -596,10 +633,10 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
   const sameScope = state.scope === scope
   let lspConfig = state.lspConfig
   let ownedPackages = sameScope ? [...(state.lspPackages ?? [])] : []
-  let ownedAddons = sameScope ? [...(state.addonPackages ?? [])] : []
+  let ownedAddons = [...new Set([...(sameScope ? state.addonPackages ?? [] : []), ...hostAddons])]
   await saveOwnedState(language, ownedPackages, ownedAddons, lspConfig)
 
-  const lspAvailable = await hasCommand("typescript-language-server")
+  const lspAvailable = options.noLsp || await hasCommand("typescript-language-server")
   if (!lspAvailable) {
     output(options, text.lspMissing)
     const confirmed = options.yes === true || await (options.confirm ?? confirmPrompt)(text.lspPrompt)
@@ -654,6 +691,12 @@ async function performInstall(rawOptions: InstallerOptions = {}): Promise<number
   }
 
   await saveOwnedState(language, ownedPackages, ownedAddons, lspConfig)
+  if (options.noHost && !options.runCommand) {
+    const target = options.hostBinary ?? await resolveInstalledOpenCode()
+    options.hostBinary = target
+    await saveOwnedState(language, ownedPackages, ownedAddons, lspConfig)
+    await claimExistingHost(target, stateFileOf(options))
+  }
   output(options, text.complete)
   return 0
   } catch (error) {
@@ -678,17 +721,32 @@ export async function uninstallPatchline(rawOptions: InstallerOptions = {}): Pro
   let language = rawOptions.language ?? "en"
   try {
     const options = await normalizeOptions(rawOptions)
+    const stateBefore = await readSnapshot(stateFileOf(options))
     const state = await readState(stateFileOf(options))
+    const assertState = async () => {
+      if (stateBefore) await assertCurrent(stateBefore)
+      else if (await readSnapshot(stateFileOf(options))) throw new Error("Installer state appeared externally.")
+    }
     language = languageOf(options, state)
     const text = messages[language]
     const files = await configurationFiles(options)
-    const changes = files.map((file) => {
+    let changes = files.map((file) => {
       const removed = removePatchlineEntries(file.source, state.packageName ?? PATCHLINE_PACKAGE)
       const text = state.lspConfig?.file === file.path ? removeOwnedLsp(removed.text, state.lspConfig) : removed.text
       return { ...file, ...removed, text }
     }).filter((file) => file.text !== file.source)
-    const packageDirectories = new Set([configDirectoryOf(options)])
-    if (!options.global) packageDirectories.add(path.join(options.cwd!, ".opencode"))
+    const hostBinary = options.hostBinary ?? state.hostBinary ?? (options.restoreHost ? await resolveInstalledOpenCode() : undefined)
+    const hostPlan = options.restoreHost && hostBinary ? await planHostRestore(hostBinary, stateFileOf(options)) : undefined
+    if (hostPlan?.config) {
+      const overlap = changes.find((change) => change.path === hostPlan.config!.path)
+      if (overlap) {
+        const stripped = removePatchlineEntries(hostPlan.config.text, state.packageName ?? PATCHLINE_PACKAGE).text
+        hostPlan.config.text = state.lspConfig?.file === overlap.path ? removeOwnedLsp(stripped, state.lspConfig) : stripped
+        changes = changes.filter((change) => change !== overlap)
+      }
+    }
+    const packageDirectories = new Set(options.keepDeps ? [] : [configDirectoryOf(options)])
+    if (!options.keepDeps && !options.global) packageDirectories.add(path.join(options.cwd!, ".opencode"))
     const packageFiles = []
     for (const directory of packageDirectories) {
       const snapshot = await readSnapshot(path.join(directory, "package.json"))
@@ -702,16 +760,20 @@ export async function uninstallPatchline(rawOptions: InstallerOptions = {}): Pro
       })) packageFiles.push(snapshot)
     }
     const sameScope = state.scope === scopeOf(options)
-    const ownedPackages = sameScope ? state.lspPackages ?? [] : []
-    const ownedAddons = sameScope ? state.addonPackages ?? [] : []
+    const ownedPackages = sameScope && !options.keepDeps ? state.lspPackages ?? [] : []
+    const ownedAddons = sameScope && !options.keepDeps ? state.addonPackages ?? [] : []
     if (!changes.length) output(options, text.noConfig)
     for (const change of changes) output(options, `${text.dryRun}: ${change.path}`)
     if (ownedPackages.length) output(options, `${text.dryRun}: ${ownedPackages.join(", ")}`)
     if (ownedAddons.length) output(options, `${text.dryRun}: ${ownedAddons.join(", ")}`)
     for (const file of packageFiles) output(options, `${text.dryRun}: ${file.path} (${PATCHLINE_PACKAGE})`)
+    if (hostPlan) {
+      output(options, `${language === "ru" ? "Восстановление" : "Restore"} OpenCode ${hostPlan.originalVersion}: ${hostPlan.target.path}`)
+      if (hostPlan.config) output(options, `${language === "ru" ? "Восстановление собственных настроек" : "Restore owned settings"}: ${hostPlan.config.path}`)
+    }
     if (!ownedPackages.length && !ownedAddons.length) output(options, text.noDependencies)
     if (options.dryRun) return 0
-    if (changes.length || ownedPackages.length || ownedAddons.length || packageFiles.length) {
+    if (changes.length || ownedPackages.length || ownedAddons.length || packageFiles.length || hostPlan) {
       const prompt = language === "ru" ? "Удалить перечисленные компоненты Patchline?" : "Remove the listed Patchline components?"
       if (!options.yes && !await (options.confirm ?? confirmPrompt)(prompt)) {
         output(options, language === "ru" ? "Удаление отменено." : "Uninstallation cancelled.")
@@ -719,6 +781,7 @@ export async function uninstallPatchline(rawOptions: InstallerOptions = {}): Pro
       }
     }
     for (const file of packageFiles) await assertCurrent(file)
+    await assertState()
     await commitConfigurations(changes, (file) => output(options, text.backup(file)))
     for (const file of packageFiles) {
       await assertCurrent(file)
@@ -746,6 +809,9 @@ export async function uninstallPatchline(rawOptions: InstallerOptions = {}): Pro
       }
       output(options, text.addonsRemoved)
     }
+    await assertState()
+    if (hostPlan) await restoreOriginalHost(hostPlan)
+    else if (hostBinary) await releaseHostOwner(hostBinary, stateFileOf(options))
     await removeState(stateFileOf(options))
     output(options, text.completeUninstall)
     return 0
@@ -813,35 +879,51 @@ export function patchHostUpdates(source: string, cli: string): string {
 async function ensureVisualHost(options: InstallerOptions, onProtected?: (before: FileSnapshot, landed: FileSnapshot) => void, hostOnly = false): Promise<(() => Promise<void>) | undefined> {
   if (!hostOnly) {
     const target = options.hostBinary ? await findHostBinary(options.hostBinary) : await resolveInstalledOpenCode()
-    return await withHostLock(target, () => provisionVisualHost({ ...options, hostBinary: target }, onProtected, false))
+    options.hostBinary = target
+    const rollback = await withHostLock(target, () => provisionVisualHost({ ...options, hostBinary: target }, onProtected, false))
+    return rollback ? async () => { await withHostLock(target, rollback) } : undefined
   }
   return await provisionVisualHost(options, onProtected, true)
 }
 
 async function provisionVisualHost(options: InstallerOptions, onProtected: ((before: FileSnapshot, landed: FileSnapshot) => void) | undefined, hostOnly: boolean): Promise<(() => Promise<void>) | undefined> {
+  const target = options.hostBinary ? await findHostBinary(options.hostBinary) : await resolveInstalledOpenCode()
+  const recoveryBefore = await readSnapshot(`${target}.patchline-recovery.json`)
   const buildTarget = hostBuildTarget(process.platform, process.arch)
   const globalFiles = await configurationFiles({ ...options, cwd: options.cwd!, global: true })
   const serverConfig = globalFiles.find((file) => /^opencode\.jsonc?$/.test(path.basename(file.path)))
   if (!serverConfig) throw new Error("An OpenCode global configuration is required to protect the custom UI host from automatic replacement.")
   let rollbackVisualConfig: (() => Promise<void>) | undefined
-  if (!hostOnly) await protectVisualHostUpdates(serverConfig.path, (restore) => { rollbackVisualConfig = restore }, onProtected)
+  let protection: { before: FileSnapshot; landed: FileSnapshot } | undefined
+  if (!hostOnly) await protectVisualHostUpdates(serverConfig.path, (restore) => { rollbackVisualConfig = restore }, (before, landed) => {
+    protection = { before, landed }
+    onProtected?.(before, landed)
+  })
   let rollbackHost: (() => Promise<void>) | undefined
+  let rollbackRecovery: (() => Promise<void>) | undefined
+  let installedBun = false
   let rollbackSources: (() => Promise<void>) | undefined
   try {
-  const target = options.hostBinary ? await findHostBinary(options.hostBinary) : await resolveInstalledOpenCode()
   const version = await executeCommand(target, ["--version"], options.cwd!)
   const revision = await captureHostRevision(target)
-  const packageRoot = fileURLToPath(new URL("..", import.meta.url))
+  const packageRoot = options.packageName && path.isAbsolute(options.packageName) ? options.packageName : fileURLToPath(new URL("..", import.meta.url))
   const manifest = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8")) as { version: string }
   if (version.code !== 0) throw new Error("Could not detect installed OpenCode version; existing host retained.")
   const upstream = options.opencodeVersion ?? installedUpstreamVersion(version.output)
   if (hostOnly && version.output.trim() !== integratedHostVersion(installedUpstreamVersion(version.output), manifest.version)) throw new Error("Installed host and Patchline package versions differ; repair the integration before upgrading.")
   if (options.expectedHostVersion && version.output.trim() !== options.expectedHostVersion) throw new Error("Running host and installed binary differ; restart OpenCode before upgrading.")
   const desiredVersion = integratedHostVersion(upstream, manifest.version)
-  if (version.output.trim() === desiredVersion && !options.rebuildHost) return rollbackVisualConfig
+  if (version.output.trim() === desiredVersion && !options.rebuildHost) {
+    if (protection) await recordHostProtection(target, protection.before, protection.landed)
+    if (!hostOnly) await claimHostDuringInstall(target, stateFileOf(options))
+    rollbackRecovery = await hostRecoveryRollback(target, recoveryBefore)
+    return async () => { await rollbackRecovery?.(); await rollbackVisualConfig?.() }
+  }
   if (!options.yes && !await (options.confirm ?? confirmPrompt)("Install the Patchline-compatible OpenCode UI host and replace the opencode executable (with a backup)?")) throw new Error("Conversation UI host installation was declined; installation is incomplete.")
   if ((await executeCommand("bun", ["--version"], options.cwd!).catch(() => ({ code: 1, output: "" }))).code !== 0) {
     if (hostOnly) throw new Error("Bun is required for host updates; install it separately and retry.")
+    const existing = await presentPackages({ ...options, global: true })
+    installedBun = !existing.has("bun")
     if ((await executeCommand("npm", ["install", "--global", "bun"], options.cwd!, true)).code !== 0) throw new Error("Bun is required to build the UI host.")
   }
   let host = path.join(packageRoot, ".opencode-host")
@@ -879,19 +961,36 @@ async function provisionVisualHost(options: InstallerOptions, onProtected: ((bef
   const binary = path.join(buildDirectory, "dist", buildTarget.directory, "bin", buildTarget.executable)
   const built = await executeCommand(binary, ["--version"], options.cwd!)
   if (built.code !== 0 || built.output.trim() !== desiredVersion) throw new Error("Built host version mismatch; existing binary retained.")
+  await prepareHostRecovery(target, version.output.trim(), revision)
+  rollbackRecovery = await hostRecoveryRollback(target, recoveryBefore)
   const previous = await installHostBinary(binary, target, (restore) => { rollbackHost = restore }, revision)
   output(options, `OpenCode UI host installed. Backup: ${previous}`)
   const installed = await executeCommand(target, ["--version"], options.cwd!)
   if (installed.code !== 0 || installed.output.trim() !== desiredVersion) throw new Error("The opencode command does not resolve to the installed UI host.")
+  await recordHostInstall(target, hostOnly ? undefined : stateFileOf(options))
+  rollbackRecovery = await hostRecoveryRollback(target, recoveryBefore)
+  if (protection) await recordHostProtection(target, protection.before, protection.landed)
+  rollbackRecovery = await hostRecoveryRollback(target, recoveryBefore)
+  if (installedBun) options.onHostAddon?.(["bun"])
   return async () => {
     await rollbackHost?.()
+    await rollbackRecovery?.()
     await rollbackSources?.()
     await rollbackVisualConfig?.()
   }
   } catch (error) {
-    try { await rollbackHost?.() } finally {
-      try { await rollbackSources?.() } finally { await rollbackVisualConfig?.() }
-    }
+    const conflicts: string[] = []
+    const attempt = async (operation: (() => Promise<void>) | undefined) => { try { await operation?.() } catch (failure) { conflicts.push(String(failure)) } }
+    let hostRestored = true
+    try { await rollbackHost?.() } catch (failure) { hostRestored = false; conflicts.push(String(failure)) }
+    if (hostRestored) await attempt(rollbackRecovery)
+    await attempt(rollbackSources)
+    await attempt(rollbackVisualConfig)
+    if (installedBun) await attempt(async () => {
+      const code = await executeCommand("npm", ["uninstall", "--global", "bun"], options.cwd!, true)
+      if (code.code !== 0) throw new Error(`Bun rollback failed: ${code.code}`)
+    })
+    if (conflicts.length) throw new Error(`Host installation rollback conflicts: ${conflicts.join("; ")}`, { cause: error })
     throw error
   }
 }
