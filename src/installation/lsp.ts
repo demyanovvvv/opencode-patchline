@@ -2,7 +2,7 @@ import path from "node:path"
 import { applyEdits, findNodeAtLocation, modify, parse, parseTree, type ParseError } from "jsonc-parser"
 import { commitConfigurations, configurationFiles, type FileSnapshot } from "./files.js"
 
-export type OwnedLsp = { file: string; value: { command: string[]; extensions: string[] } }
+export type OwnedLsp = { file: string; value: { command: string[]; extensions: string[]; initialization?: Record<string, unknown> } }
 const extensions = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"]
 
 export function removeOwnedLsp(source: string, owned: OwnedLsp): string {
@@ -31,6 +31,13 @@ export async function configureLsp(options: { cwd: string; global?: boolean; con
   const lsp = findNodeAtLocation(tree, ["lsp"])
   if (lsp && lsp.type !== "object") return previous
   if (findNodeAtLocation(tree, ["lsp", "typescript"])) return previous
+  // OpenCode 1.19+ owns the TypeScript server lifecycle and resolves the
+  // project TypeScript plus its tsserver initialization itself. A static
+  // global override starts the server without that initialization and can
+  // terminate with EPIPE on Windows. Keep the installer compatible with
+  // older OpenCode releases by only writing the legacy override when the
+  // caller explicitly supplies a project-local command.
+  if (options.global) return previous
   const command = options.global
     ? ["typescript-language-server", "--stdio"]
     : [process.execPath, path.join(options.cwd, "node_modules", "typescript-language-server", "lib", "cli.mjs"), "--stdio"]

@@ -7,7 +7,7 @@ export async function verifyLspServer(command: readonly string[], cwd: string, o
   options.signal?.throwIfAborted()
   if (!command[0]) throw new Error("LSP command is empty")
   return new Promise((resolve, reject) => {
-    const child = spawn(command[0]!, [...command.slice(1)], { cwd, shell: false, windowsHide: true, detached: process.platform !== "win32" })
+    const child = spawn(command[0]!, [...command.slice(1)], { cwd, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] })
     let input = ""
     let output = ""
     let settled = false
@@ -31,7 +31,7 @@ export async function verifyLspServer(command: readonly string[], cwd: string, o
     options.signal?.addEventListener("abort", abort, { once: true })
     const send = (value: unknown) => {
       const body = JSON.stringify(value)
-      child.stdin.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`)
+      child.stdin.write(Buffer.from(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`, "utf8"))
     }
     const processMessages = () => {
       while (true) {

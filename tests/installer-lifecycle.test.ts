@@ -161,4 +161,23 @@ describe("installer lifecycle", () => {
     await installPatchline({ cwd: root, yes: true, stdout: () => undefined, hasCommand: async () => false, runCommand: async () => 0 })
     expect(parse(await readFile(file, "utf8")).lsp).toBe(false)
   })
+
+  it("does not write a legacy global TypeScript override", async () => {
+    const root = await workspace()
+    const file = path.join(root, "opencode.json")
+    await writeFile(file, '{"plugin":["other"]}\n')
+    await installPatchline({
+      cwd: root, global: true, yes: true, stdout: () => undefined, stderr: () => undefined,
+      hasCommand: async () => false,
+      runCommand: async (command) => {
+        if (command === "opencode") {
+          const config = parse(await readFile(file, "utf8"))
+          config.plugin.push("opencode-patchline")
+          await writeFile(file, JSON.stringify(config, null, 2))
+        }
+        return 0
+      },
+    })
+    expect(parse(await readFile(file, "utf8")).lsp).toBeUndefined()
+  })
 })
