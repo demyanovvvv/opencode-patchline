@@ -9,7 +9,7 @@ describe.skipIf(!available)("PowerShell package wrappers", () => {
   for (const action of ["install", "uninstall"]) {
     for (const source of [true, false]) {
       it(`${action} uses a built ${source ? "checkout" : "release"} and forwards literal arguments and status`, () => {
-        const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "patchline wrapper ' ")))
+        const directory = realpathSync.native(mkdtempSync(path.join(tmpdir(), "patchline wrapper ' ")))
         try {
           copyFileSync(path.resolve(`${action}.ps1`), path.join(directory, `${action}.ps1`))
           writeFileSync(path.join(directory, "package.json"), JSON.stringify({ name: "opencode-patchline" }))
@@ -24,14 +24,14 @@ describe.skipIf(!available)("PowerShell package wrappers", () => {
           expect(result.status).toBe(23)
           const lines = result.stdout.trim().split(/\r?\n/)
           const forwarded = JSON.parse(lines[0]!) as string[]
-          expect(realpathSync(forwarded[0]!)).toBe(realpathSync(path.join(directory, "dist", "cli.js")))
+          expect(realpathSync.native(forwarded[0]!)).toBe(realpathSync.native(path.join(directory, "dist", "cli.js")))
           expect(forwarded.slice(1)).toEqual([action, ...(action === "install" ? ["--local"] : []), "--global", "--lang=ru", "--cwd", "argument with spaces & ;"])
-          expect(realpathSync(lines[1]!)).toBe(realpathSync(path.resolve("tests")))
+          expect(realpathSync.native(lines[1]!)).toBe(realpathSync.native(path.resolve("tests")))
         } finally { rmSync(directory, { recursive: true, force: true }) }
       })
     }
     it(`${action} explains a missing package without npm access`, () => {
-      const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "patchline wrapper ")))
+      const directory = realpathSync.native(mkdtempSync(path.join(tmpdir(), "patchline wrapper ")))
       try {
         copyFileSync(path.resolve(`${action}.ps1`), path.join(directory, `${action}.ps1`))
         const file = path.join(directory, `${action}.ps1`).replaceAll("'", "''")
@@ -49,7 +49,7 @@ const shellAvailable = spawnSync(shell, ["-c", "exit 0"]).status === 0
 describe.skipIf(!shellAvailable)("POSIX package wrappers", () => {
   for (const action of ["install", "uninstall"]) {
     it(`${action} uses the adjacent release and preserves argv, cwd and status`, () => {
-      const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "patchline wrapper ' ")))
+      const directory = realpathSync.native(mkdtempSync(path.join(tmpdir(), "patchline wrapper ' ")))
       try {
         copyFileSync(path.resolve(`${action}.sh`), path.join(directory, `${action}.sh`))
         writeFileSync(path.join(directory, "package.json"), JSON.stringify({ name: "opencode-patchline" }))
@@ -60,7 +60,7 @@ describe.skipIf(!shellAvailable)("POSIX package wrappers", () => {
         expect(result.status).toBe(23)
         const lines = result.stdout.trim().split(/\r?\n/)
         expect(JSON.parse(lines[0]!)).toEqual([action, ...(action === "install" ? ["--local"] : []), "--global", "--lang=ru", "--cwd", "spaces & ; '"])
-        expect(realpathSync(lines[1]!)).toBe(realpathSync(path.resolve("tests")))
+        expect(realpathSync.native(lines[1]!)).toBe(realpathSync.native(path.resolve("tests")))
       } finally { rmSync(directory, { recursive: true, force: true }) }
     })
   }
