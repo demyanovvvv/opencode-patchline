@@ -49,6 +49,8 @@ jobs:
       - run: bun --conditions=browser scripts/tui-smoke.mjs
       - run: npm run smoke:install
       - run: npm run smoke:installer-lifecycle
+      - run: npm run smoke:installer-flags
+      - run: npm run smoke:host-restoration
       - run: npm run smoke:installer-lsp
       - run: npm run audit:dependencies
       - run: npm audit --audit-level=high

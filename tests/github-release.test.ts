@@ -7,6 +7,8 @@ describe("GitHub release distribution", () => {
     expect(workflow).not.toContain("npm publish")
     expect(workflow).toContain("opencode-ai@1.19.0")
     expect(workflow).toContain("npm run audit:dependencies")
+    expect(workflow).toContain("npm run smoke:installer-flags")
+    expect(workflow).toContain("npm run smoke:host-restoration")
     expect(workflow).toContain("sha256sum")
     expect(workflow).toContain('--notes-file "docs/releases/${GITHUB_REF_NAME}.md"')
     expect(workflow).toContain('"opencode-patchline-${GITHUB_REF_NAME#v}.tgz"')

@@ -2,6 +2,10 @@
 
 Status: Accepted
 
+`patchline_lsp_status` reports per-project preparation and verified connection
+state. Its conversation renderer is registered alongside every other server
+tool; prepared/configured/installed is not a verified LSP connection.
+
 `read` accepts `filePath`, `offset`, and `limit`. Supplied `offset` and `limit`
 values must be positive integers; invalid direct service calls are rejected
 instead of silently clamped. `maxInitialReadLines` controls the default file page

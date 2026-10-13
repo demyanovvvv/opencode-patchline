@@ -24,9 +24,9 @@ describe.skipIf(!available)("PowerShell package wrappers", () => {
           expect(result.status).toBe(23)
           const lines = result.stdout.trim().split(/\r?\n/)
           const forwarded = JSON.parse(lines[0]!) as string[]
-          expect(forwarded[0]).toBe(path.join(directory, "dist", "cli.js"))
+          expect(realpathSync(forwarded[0]!)).toBe(realpathSync(path.join(directory, "dist", "cli.js")))
           expect(forwarded.slice(1)).toEqual([action, ...(action === "install" ? ["--local"] : []), "--global", "--lang=ru", "--cwd", "argument with spaces & ;"])
-          expect(lines[1]).toBe(path.resolve("tests"))
+          expect(realpathSync(lines[1]!)).toBe(realpathSync(path.resolve("tests")))
         } finally { rmSync(directory, { recursive: true, force: true }) }
       })
     }
@@ -60,7 +60,7 @@ describe.skipIf(!shellAvailable)("POSIX package wrappers", () => {
         expect(result.status).toBe(23)
         const lines = result.stdout.trim().split(/\r?\n/)
         expect(JSON.parse(lines[0]!)).toEqual([action, ...(action === "install" ? ["--local"] : []), "--global", "--lang=ru", "--cwd", "spaces & ; '"])
-        expect(lines[1]).toBe(path.resolve("tests"))
+        expect(realpathSync(lines[1]!)).toBe(realpathSync(path.resolve("tests")))
       } finally { rmSync(directory, { recursive: true, force: true }) }
     })
   }

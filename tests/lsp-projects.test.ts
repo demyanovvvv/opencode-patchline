@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises"
+import { mkdtemp, mkdir, writeFile, rm, symlink, realpath } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, expect, it } from "vitest"
@@ -6,7 +6,7 @@ import { detectLspProjects } from "../src/lsp/projects.js"
 
 const roots: string[] = []
 async function fixture(files: Record<string, string>) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "patchline-languages-"))
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "patchline-languages-")))
   roots.push(root)
   for (const [file, content] of Object.entries(files)) {
     await mkdir(path.dirname(path.join(root, file)), { recursive: true })

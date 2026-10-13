@@ -8,6 +8,18 @@ const environment = { ...process.env, GITHUB_REF_NAME: undefined }
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string; name: string }
 
 describe("release metadata check", () => {
+  it("keeps release notes, lockfile and download instructions aligned with the package", async () => {
+    const lock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"))
+    expect(lock.version).toBe(packageJson.version)
+    expect(lock.packages[""].version).toBe(packageJson.version)
+    const notes = await readFile(new URL(`../docs/releases/v${packageJson.version}.md`, import.meta.url), "utf8")
+    expect(notes).toContain(`# Patchline ${packageJson.version}`)
+    for (const file of ["README.md", "README.ru.md"]) {
+      const readme = await readFile(new URL(`../${file}`, import.meta.url), "utf8")
+      expect(readme).toContain(`/releases/download/v${packageJson.version}/opencode-patchline-${packageJson.version}.tgz`)
+      expect(readme).toContain("SHA256SUMS.txt")
+    }
+  })
   it("accepts the package version tag", async () => {
     const tag = `v${packageJson.version}`
     const result = await execute(process.execPath, ["scripts/check-release.mjs", tag], { env: environment })

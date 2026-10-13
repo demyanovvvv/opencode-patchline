@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.4.0 - 2026-10-13
+
+### Installation and removal
+
+- Unify release/checkout Shell and PowerShell wrappers around the adjacent built package, without fetching a CLI from npm.
+- Add explicit project scope, target-directory/package selection, help and equals-style arguments; reject repeated and conflicting flags before changes.
+- Preview installation with `--dry-run`; independently skip host/LSP provisioning and retain dependencies during removal.
+- Add `--restore-host` with an immutable original executable, SHA-256 checks, shared-host ownership, per-binary locking and guarded update-preference restoration.
+- Preserve state changed during confirmation and account for Bun installed during host preparation, including failure cleanup.
+- Add project/global wrapper and real-native host-restoration smoke gates.
+
+### Project LSP
+
+- Discover language servers by project and nested workspace instead of relying on a global TypeScript override.
+- Add project `lsp check`, explicit `lsp setup`, bounded managed-server provisioning and connection-aware verification.
+- Preserve user-disabled/custom LSP settings and let OpenCode manage its built-in servers.
+- Canonicalize Windows test fixture paths to handle short temporary-directory aliases in CI.
+- Register a conversation renderer for the project LSP status tool.
+
+### Documentation and release
+
+- Update bilingual installation, upgrade, removal and checksum instructions for 1.4.0.
+- Document legacy-host recovery limits, shared package/host ownership and managed LSP storage.
+- Publish the verified package archive and SHA-256 manifest through GitHub Releases.
+
 ## 1.3.0 - 2026-10-12
 
 ### Independent OpenCode and Patchline upgrades

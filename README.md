@@ -7,7 +7,7 @@ stale-safe changes to existing source files. It keeps the familiar OpenCode
 workflow while enforcing correctness in deterministic tooling instead of relying
 only on model instructions.
 
-**Patchline `1.3.0` · OpenCode `1.19.0` · Integrated host `1.19.0+patchline.1.3.0`**
+**Patchline `1.4.0` · OpenCode `1.19.0` · Integrated host `1.19.0+patchline.1.4.0`**
 
 [Русский](README.ru.md) · [Installation](#installation) · [Usage](docs/operations/usage.md) · [Tools](#tools) · [Documentation](docs/README.md) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/demyanovvvv/opencode-patchline/releases) · [Issues](https://github.com/demyanovvvv/opencode-patchline/issues)
 
@@ -55,13 +55,27 @@ entrypoints; full conversation styling requires the compatible host it provision
 
 ### Quick start: GitHub release
 
-Download [`opencode-patchline-1.3.0.tgz`](https://github.com/demyanovvvv/opencode-patchline/releases/download/v1.3.0/opencode-patchline-1.3.0.tgz).
-Extract it to a permanent directory and install its runtime dependencies:
+Download [`opencode-patchline-1.4.0.tgz`](https://github.com/demyanovvvv/opencode-patchline/releases/download/v1.4.0/opencode-patchline-1.4.0.tgz).
+Download [SHA256SUMS.txt](https://github.com/demyanovvvv/opencode-patchline/releases/download/v1.4.0/SHA256SUMS.txt)
+to the same directory and verify before extracting:
 
 ```bash
-mkdir patchline-1.3.0
-tar -xzf opencode-patchline-1.3.0.tgz -C patchline-1.3.0
-cd patchline-1.3.0/package
+sha256sum -c SHA256SUMS.txt
+# macOS: shasum -a 256 -c SHA256SUMS.txt
+```
+
+```powershell
+$expected = ((Get-Content .\SHA256SUMS.txt -Raw).Trim() -split '\s+')[0]
+$actual = (Get-FileHash .\opencode-patchline-1.4.0.tgz -Algorithm SHA256).Hash
+if ($actual -ne $expected) { throw 'Archive SHA-256 mismatch' }
+```
+
+Extract to a permanent directory and install its runtime dependencies:
+
+```bash
+mkdir patchline-1.4.0
+tar -xzf opencode-patchline-1.4.0.tgz -C patchline-1.4.0
+cd patchline-1.4.0/package
 npm install --omit=dev
 node dist/cli.js doctor
 ```
@@ -72,12 +86,12 @@ add absolute file URLs to your OpenCode configuration:
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["file:///absolute/path/patchline-1.3.0/package/dist/plugin.js"],
-  "tui": { "plugin": ["file:///absolute/path/patchline-1.3.0/package/dist/tui.js"] }
+  "plugin": ["file:///absolute/path/patchline-1.4.0/package/dist/plugin.js"],
+  "tui": { "plugin": ["file:///absolute/path/patchline-1.4.0/package/dist/tui.js"] }
 }
 ```
 
-On Windows use a URL such as `file:///C:/tools/patchline-1.3.0/package/dist/plugin.js`.
+On Windows use a URL such as `file:///C:/tools/patchline-1.4.0/package/dist/plugin.js`.
 Keep the extracted directory in place while registration references it.
 Restart OpenCode after changing configuration. From that directory, run:
 
@@ -107,15 +121,15 @@ use the adjacent package, forward CLI flags and exit codes, and never fetch a CL
 from npm. Run them from the target project, or select it with `--cwd`:
 
 ```bash
-sh /opt/patchline-1.3.0/package/install.sh --project --cwd /work/my-project --lang en
-sh /opt/patchline-1.3.0/package/install.sh --global --yes --lang en
-sh /opt/patchline-1.3.0/package/install.sh --project --cwd /work/my-project --dry-run
+sh /opt/patchline-1.4.0/package/install.sh --project --cwd /work/my-project --lang en
+sh /opt/patchline-1.4.0/package/install.sh --global --yes --lang en
+sh /opt/patchline-1.4.0/package/install.sh --project --cwd /work/my-project --dry-run
 ```
 
 ```powershell
-& "C:\tools\patchline-1.3.0\package\install.ps1" --project --cwd "C:\work\my-project" --lang en
-& "C:\tools\patchline-1.3.0\package\install.ps1" --global --yes --lang en
-& "C:\tools\patchline-1.3.0\package\uninstall.ps1" --project --cwd "C:\work\my-project" --dry-run
+& "C:\tools\patchline-1.4.0\package\install.ps1" --project --cwd "C:\work\my-project" --lang en
+& "C:\tools\patchline-1.4.0\package\install.ps1" --global --yes --lang en
+& "C:\tools\patchline-1.4.0\package\uninstall.ps1" --project --cwd "C:\work\my-project" --dry-run
 ```
 
 ### Installer flags
@@ -184,7 +198,7 @@ Full styling currently requires a modified OpenCode host: stock OpenCode 1.19.0
 does not expose tool-card renderer slots. The installer prepares this integration
 automatically and replaces the executable with a guarded backup. Restart OpenCode
 after installation. With upstream 1.19.0 and this package, `opencode --version`
-reports `1.19.0+patchline.1.3.0`.
+reports `1.19.0+patchline.1.4.0`.
 
 The installer preserves the installed upstream version, or accepts an explicit
 `--opencode-version 1.19.0` override. Plugin/upstream versions form the integrated version
@@ -198,11 +212,33 @@ animated progress, and bottom `Show details` / `Hide details` controls. Text
 results reveal twelve lines at a time; files expand independently and native
 diffs reveal complete hunks with line numbers and added/removed colors.
 
-Current limitations: host provisioning requires Git and Bun; binary
-artifact delivery, cross-component transaction recovery and ownership-aware
-legacy-backup/source-cache cleanup are not yet implemented. Uninstall removes
-plugin registrations but does not restore the official executable or update
-preference. Review [the installer contract](docs/specs/installer-contract.md).
+Host provisioning requires Git and Bun. Prebuilt integrated hosts, full
+cross-component transaction recovery and automatic legacy/source-cache cleanup
+remain outside this release. `--restore-host` restores a recorded stock original
+and unchanged owned update preference; legacy/manual installs without recovery
+evidence require manual repair. Review [the installer contract](docs/specs/installer-contract.md).
+
+### Updating from 1.3.x
+
+Extract 1.4.0 to a new permanent directory, install its runtime dependencies, and
+run its installer with the same project/global scope as before. Use `--cwd` for a
+project install from outside that project. The currently installed OpenCode
+upstream version is preserved; restart OpenCode and run the new package's doctor.
+Do not delete the old package while another scope still references it. A legacy
+integrated host does not retroactively gain a verified stock-original backup.
+
+### Project LSP
+
+```bash
+node /path/to/package/dist/cli.js lsp check --directory /work/my-project --json
+node /path/to/package/dist/cli.js lsp setup --directory /work/my-project
+```
+
+Check discovers project languages without installing; setup explicitly prepares
+managed servers. Prepared/installed is not a verified connection. Use
+`patchline_lsp_status` for per-project status and `patchline_lsp` for queries.
+Disabled/custom servers are preserved. Managed LSP storage is separate from
+installer-owned TypeScript/Bun dependencies. See [doctor and LSP](docs/operations/doctor.md).
 
 For a local checkout, build and install the current directory:
 

@@ -1,4 +1,4 @@
-export const PATCHLINE_ACTIVITY_TOOLS = ["read", "edit", "write", "apply_patch", "patchline_apply_patch", "patchline_execute", "patchline_edit_batch", "patchline_grep", "ast_search", "patchline_route_search", "patchline_lsp", "patchline_diagnostics", "patchline_summary"] as const
+export const PATCHLINE_ACTIVITY_TOOLS = ["read", "edit", "write", "apply_patch", "patchline_apply_patch", "patchline_execute", "patchline_edit_batch", "patchline_grep", "ast_search", "patchline_route_search", "patchline_lsp", "patchline_lsp_status", "patchline_diagnostics", "patchline_summary"] as const
 export type ActivityStatus = "running" | "completed" | "failed"
 export type ActivityKind = "read" | "mutation" | "search" | "route" | "lsp" | "diagnostics" | "summary"
 
@@ -157,7 +157,7 @@ export function patchlineActivity(calls: readonly ToolCall[]): ActivityView | un
     ? "mutation"
     : call.tool === "read" ? "read"
     : call.tool === "patchline_route_search" ? "route"
-    : call.tool === "patchline_lsp" ? "lsp"
+    : call.tool === "patchline_lsp" || call.tool === "patchline_lsp_status" ? "lsp"
     : call.tool === "patchline_diagnostics" ? "diagnostics"
     : call.tool === "patchline_summary" ? "summary"
     : "search"
@@ -215,6 +215,7 @@ function activityLabel(tool: string, metadata: Record<string, unknown>, running:
   if (tool === "patchline_grep") return "Literal search"
   if (tool === "ast_search") return "Structural search"
   if (tool === "patchline_route_search") return "Search route"
+  if (tool === "patchline_lsp_status") return "LSP status"
   if (tool === "patchline_lsp") {
     const operation = stringValue(metadata.operation)
     return operation === "documentSymbol" ? "Document symbols" : operation === "diagnostics" ? "LSP diagnostics" : "Workspace symbols"
