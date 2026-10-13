@@ -11,9 +11,33 @@ LSP, the CLI bridge, AST, then grep. Workspace-symbol requests use the active
 SDK client when available, avoiding an isolated process; document symbols and
 diagnostics retain the CLI bridge. OpenCode 1.18.30 exposes model-facing LSP
 only when `OPENCODE_EXPERIMENTAL_LSP_TOOL` or global experimental mode is enabled.
-Patchline does not start a duplicate server in the initial release. Its
+Patchline does not start a duplicate server for OpenCode-native recipes. Its
 optional CLI bridge is exposed as `patchline_lsp` rather than `lsp`, preserving
 OpenCode's native experimental tool when that capability is enabled.
+
+Patchline discovers supported language projects recursively, excluding repository
+ dependencies, generated directories, hidden control directories, and
+ symlinked directories. Discovery uses extensions, manifests, nearest project
+ roots, and shebangs, and may return multiple servers for a monorepo.
+
+The registry covers OpenCode's common native servers and managed npm recipes for
+servers not provided by the current OpenCode installation. Explicit `lsp: false`,
+per-server disabled entries, and custom commands remain authoritative. Managed
+installations live outside the project in a per-user cache, use exact package
+versions, an inter-process lock, temporary directories, a completion marker, and
+no lifecycle scripts. Project toolchains remain requirements rather than being
+silently installed by scanning.
+
+Preparation reports distinguish `configured`/`native` from `verified`. A server
+is verified only after a bounded LSP `initialize` handshake; finding an executable
+on PATH alone is not a working connection. Failed optional setup is reported by
+`patchline_lsp_status` and does not prevent OpenCode startup.
+
+Automatic setup is controlled by `lspAutoSetup`, `lspAutoInstall`, `lspMaxEntries`,
+and `lspStorageDirectory`. CLI `lsp check` performs discovery without
+installation; `lsp setup` permits managed installation. Both support
+`--directory` and `--json`.
+
 When the native tool flag is disabled, Patchline's `lsp` tool bridges
 `workspaceSymbol`, `documentSymbol`, and diagnostics through the installed
 OpenCode CLI. Definition/reference/call hierarchy remain native-only.

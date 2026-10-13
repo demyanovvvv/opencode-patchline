@@ -14,6 +14,7 @@ import { ReadService } from "./read-service.js"
 import { astSearchFile } from "./search/ast.js"
 import { grepWorkspace } from "./search/grep.js"
 import { runOpenCodeLspBridge, runOpenCodeLspClient } from "./search/lsp.js"
+import { configureProjectLsp, prepareProjectLsp, type LspConfiguration, type LspReport } from "./lsp/manager.js"
 import { routeSearch } from "./search/router.js"
 import { ScopedSnapshotStore } from "./snapshot/store.js"
 import { LocalMetrics } from "./telemetry/metrics.js"
@@ -164,6 +165,9 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
   const writes = new WriteService(config)
   const metrics = new LocalMetrics({ enabled: config.telemetry })
   const nativeFailureCalls = new Set<string>()
+  let lspConfiguration: LspConfiguration = {}
+  let lspReports: LspReport[] = []
+  const lspOptions = { install: config.lspAutoInstall, maxEntries: config.lspMaxEntries, ...(config.lspStorageDirectory ? { storage: config.lspStorageDirectory } : {}) }
 
   async function validateMutation(context: ToolContext, paths: readonly string[]) {
     const commands = [...new Set(paths.map((filePath) => validationCommand(filePath, config)).filter((command): command is string => command !== undefined))]
@@ -315,7 +319,25 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
   })
 
   return {
+    async config(openCodeConfig) {
+      lspConfiguration = openCodeConfig as LspConfiguration
+      if (!config.lspAutoSetup) return
+      try { lspReports = await configureProjectLsp(input.worktree, lspConfiguration, lspOptions) }
+      catch (error) {
+        // A bounded scan or optional preparation failure must not prevent OpenCode startup.
+        lspReports = [{ root: input.directory, server: "discovery", language: "unknown", sample: "", evidence: [], status: "failed", verified: false, detail: errorMessage(error) }]
+      }
+    },
     tool: {
+      patchline_lsp_status: tool({
+        description: "Show detected languages and LSP preparation state. Installed/configured does not mean a connection has been verified.",
+        args: {},
+        async execute(_args, context) {
+          await context.ask({ permission: "read", patterns: ["**/*"], always: ["*"], metadata: { reason: "LSP project discovery" } })
+          const reports = lspReports.length ? lspReports : await prepareProjectLsp(context.worktree, { ...lspOptions, install: false, configuration: lspConfiguration, signal: context.abort })
+          return JSON.stringify({ projects: reports, autoSetup: config.lspAutoSetup, autoInstall: config.lspAutoInstall }, null, 2)
+        },
+      }),
       ...(config.mode === "precision" ? {
         patchline_execute: tool({
           description: "Execute snapshot-safe edits with automatic exact, Hashline, batch, or standard-tool fallback selection.",
@@ -604,7 +626,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
                 if (!(error instanceof PatchlineError) || error.code !== "CAPABILITY_UNAVAILABLE") throw error
               }
             }
-            output ??= await runOpenCodeLspBridge({ worktree: context.worktree, operation: args.operation, query: args.query, filePath: resolvedFile?.canonical, signal: context.abort })
+            output ??= await runOpenCodeLspBridge({ worktree: context.worktree, operation: args.operation, query: args.query, filePath: resolvedFile?.canonical, signal: context.abort, configuration: lspConfiguration })
             return { title: `Patchline · ${args.operation}`, output, metadata: { ...details, status: "observed", stage: "completed" } }
           } catch (error) {
             failure(context, error, "searching", args.filePath, { ...details, writes: 0 })

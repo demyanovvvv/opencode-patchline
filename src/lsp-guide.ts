@@ -10,22 +10,22 @@ export type LspGuide = {
 
 export function lspGuide(checks: readonly CapabilityCheck[]): LspGuide {
   const check = checks.find((item) => item.name === "LSP setup")
-  const ready = check?.ok === true && /typescript-language-server\s+\S+/i.test(check.detail)
+  const ready = check?.ok === true && !/disabled|unavailable|missing/i.test(check.detail)
   return {
     status: ready ? "ready" : "unavailable",
     summary: ready ? "OpenCode LSP is available." : "OpenCode LSP is unavailable or disabled.",
     steps: [
       "1. Enable LSP in OpenCode by removing lsp: false or adding lsp: {} to opencode.json.",
-      "2. Install the TypeScript server with: npm install --save-dev typescript typescript-language-server.",
-      "3. Restart OpenCode and verify with: opencode debug lsp document-symbols <file-uri>.",
-      "4. Use patchline_lsp for symbols; use ast_search for structure and patchline_grep for literal text when LSP is unavailable.",
+      "2. Run: opencode-patchline lsp check --directory <project> --json.",
+      "3. Run: opencode-patchline lsp setup --directory <project> to prepare managed servers (TypeScript uses typescript-language-server when detected).",
+      "4. Restart OpenCode if its version requires configuration to be loaded before startup.",
+      "5. Use patchline_lsp for symbols; use ast_search for structure and patchline_grep for literal text when LSP is unavailable.",
     ],
     config: {
-      lsp: {
-        typescript: {
-          command: ["npx", "typescript-language-server", "--stdio"],
-          extensions: [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"],
-        },
+      lsp: "auto-detected per project",
+      patchline: {
+        lspAutoSetup: true,
+        lspAutoInstall: true,
       },
     },
     fallback: ["ast_search", "patchline_grep"],

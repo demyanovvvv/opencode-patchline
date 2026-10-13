@@ -37,7 +37,7 @@ describe("Patchline CLI", () => {
 
     expect(exitCode).toBe(1)
     expect(output.join("\n")).toContain("1. Enable LSP")
-    expect(output.join("\n")).toContain("typescript-language-server")
+    expect(output.join("\n")).toContain("managed servers")
     expect(output.join("\n")).toContain("patchline_grep")
   })
 
@@ -52,7 +52,7 @@ describe("Patchline CLI", () => {
     expect(exitCode).toBe(1)
     expect(JSON.parse(output.join(""))).toMatchObject({
       status: "unavailable",
-      steps: expect.arrayContaining([expect.stringContaining("typescript-language-server")]),
+      steps: expect.arrayContaining([expect.stringContaining("managed servers")]),
     })
   })
 

@@ -98,6 +98,7 @@ export async function runOpenCodeLspBridge(input: {
   query?: string | undefined
   filePath?: string | undefined
   signal?: AbortSignal | undefined
+  configuration?: { lsp?: unknown } | undefined
 }): Promise<string> {
   input.signal?.throwIfAborted()
   const command = await resolveOpenCodeCommand()
@@ -112,7 +113,7 @@ export async function runOpenCodeLspBridge(input: {
      args = buildLspArgs(input.operation, input.operation === "documentSymbol" ? pathToFileURL(resolved.absolute).href : resolved.absolute)
   }
   return new Promise<string>((resolve, reject) => {
-    const child = spawn(command, args, { cwd: input.worktree, windowsHide: true, shell: false, signal: input.signal })
+    const child = spawn(command, args, { cwd: input.worktree, windowsHide: true, shell: false, signal: input.signal, env: { ...process.env, ...(input.configuration?.lsp !== undefined ? { OPENCODE_CONFIG_CONTENT: JSON.stringify({ lsp: input.configuration.lsp }) } : {}) } })
     let stdout = ""
     let stderr = ""
     let settled = false

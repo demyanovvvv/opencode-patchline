@@ -5,6 +5,7 @@ import { inspectCapabilities } from "./compatibility.js"
 import { installPatchline, uninstallPatchline, upgradePatchlineHost, type InstallerLanguage, type InstallerOptions } from "./installer.js"
 import { DEFAULT_CONFIG, parseConfig } from "./config.js"
 import { lspGuide, renderLspGuide } from "./lsp-guide.js"
+import { prepareProjectLsp } from "./lsp/manager.js"
 import type { PatchlineErrorCode } from "./errors.js"
 
 type Output = (line: string) => void
@@ -55,6 +56,23 @@ export async function runCli(args: readonly string[], options: CliOptions = {}):
   const stderr = options.stderr ?? ((line) => console.error(line))
   const inspect = options.inspect ?? inspectCapabilities
   const command = args[0] ?? "doctor"
+
+  if ((command === "lsp" && ["check", "setup"].includes(args[1] ?? "check") && !options.inspect) || (command === "doctor" && args.includes("--lsp") && !options.inspect)) {
+    const directoryIndex = args.indexOf("--directory")
+    if (directoryIndex >= 0 && (!args[directoryIndex + 1] || args[directoryIndex + 1]!.startsWith("--"))) { stderr("--directory requires a path"); return 1 }
+    const directory = path.resolve(directoryIndex >= 0 ? args[directoryIndex + 1]! : process.cwd())
+    try {
+      const projects = await prepareProjectLsp(directory, { install: command === "lsp" && args[1] === "setup" })
+      const ok = projects.every((project) => ["configured", "native", "custom"].includes(project.status))
+      if (args.includes("--json")) writeJson(stdout, { directory, projects, verified: false })
+      else {
+        stdout("Patchline LSP projects (connection not yet verified)")
+        for (const project of projects) stdout(`${path.relative(directory, project.root) || "."}: ${project.language} / ${project.server}: ${project.status} — ${project.detail}`)
+        if (projects.length === 0) stdout("No supported language files found.")
+      }
+      return ok ? 0 : 1
+    } catch (error) { stderr(error instanceof Error ? error.message : String(error)); return 1 }
+  }
 
   if (command === "doctor") {
     const checks = await inspect()
@@ -171,7 +189,7 @@ export async function runCli(args: readonly string[], options: CliOptions = {}):
       : await uninstallPatchline(installerOptions)
   }
 
-  stderr(`Unknown command: ${command}\nUsage: opencode-patchline <doctor [--lsp]|lsp check|config|explain|install|uninstall> [--global] [--lang ru|en] [--yes] [--dry-run]`)
+  stderr(`Unknown command: ${command}\nUsage: opencode-patchline <doctor [--lsp]|lsp check|lsp setup|config|explain|install|uninstall> [--directory <project>] [--json] [--global] [--lang ru|en] [--yes] [--dry-run]`)
   return 1
 }
 
