@@ -39,7 +39,15 @@ export function analyzeDiff(before: string, after: string, seenBefore: ReadonlyS
 
 export function diffStats(before: string, after: string): DiffStats {
   if (!before || !after) return { added: chunkLineCount(after), deleted: chunkLineCount(before) }
-  return analyzeDiff(before, after, new Set()).stats
+  const changes = diffLines(before, after, { timeout: 100, maxEditLength: 2_000 })
+  if (!changes) throw new PatchlineError("STANDARD_TOOL_REQUIRED", "Diff analysis exceeded its budget; use the standard tool for this large change.")
+  let added = 0
+  let deleted = 0
+  for (const change of changes) {
+    if (change.added) added += chunkLineCount(change.value)
+    else if (change.removed) deleted += chunkLineCount(change.value)
+  }
+  return { added, deleted }
 }
 
 export function lineRangeForSubstring(text: string, start: number, length: number): { start: number; end: number } {

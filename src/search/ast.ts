@@ -1,17 +1,17 @@
 import path from "node:path"
-import { Lang, parse, pattern as compilePattern } from "@ast-grep/napi"
+import type { Lang } from "@ast-grep/napi"
 import { PatchlineError } from "../errors.js"
 import { decodeUtf8 } from "../preservation/text.js"
 import { resolveWorkspacePath } from "../workspace/paths.js"
 import { readBoundedUtf8Bytes } from "../io/bounded-file.js"
 
-const languages: Record<string, Lang> = {
-  css: Lang.Css,
-  html: Lang.Html,
-  js: Lang.JavaScript,
-  jsx: Lang.JavaScript,
-  ts: Lang.TypeScript,
-  tsx: Lang.Tsx,
+const languages: Record<string, keyof typeof Lang> = {
+  css: "Css",
+  html: "Html",
+  js: "JavaScript",
+  jsx: "JavaScript",
+  ts: "TypeScript",
+  tsx: "Tsx",
 }
 
 const MAX_AST_FILE_BYTES = 8 * 1024 * 1024
@@ -74,12 +74,16 @@ export async function astSearchFile(input: {
   const resolved = await resolveWorkspacePath(input.worktree, input.filePath, input.authorizePath)
   if (!resolved.exists) throw new PatchlineError("FILE_NOT_FOUND", `File not found: ${input.filePath}`, { path: input.filePath })
   const languageName = input.language?.toLowerCase() ?? path.extname(resolved.absolute).slice(1).toLowerCase()
-  const language = languages[languageName]
-  if (!language) {
+  const languageKey = languages[languageName]
+  if (!languageKey) {
     throw new PatchlineError("CAPABILITY_UNAVAILABLE", `AST language is not supported by the bundled parser: ${languageName}`)
   }
   try {
     const document = decodeUtf8(await readBoundedUtf8Bytes(resolved.absolute, resolved.relative, MAX_AST_FILE_BYTES), resolved.relative)
+    input.signal?.throwIfAborted()
+    const { Lang, parse, pattern: compilePattern } = await import("@ast-grep/napi")
+    input.signal?.throwIfAborted()
+    const language = Lang[languageKey]
     const root = parse(language, document.text)
     input.signal?.throwIfAborted()
     const matcher = compilePattern(language, input.pattern)

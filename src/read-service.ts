@@ -14,6 +14,7 @@ const MAX_DIRECTORY_ENTRIES = 4_096
 export type ReadRequest = SnapshotScope & {
   filePath: string
   offset?: number | undefined
+  anchor?: string | undefined
   limit?: number | undefined
 }
 
@@ -57,6 +58,9 @@ export class ReadService {
   ) {}
 
   async read(request: ReadRequest): Promise<ReadResult> {
+    if (request.anchor !== undefined && (request.anchor.length === 0 || request.offset !== undefined)) {
+      throw new PatchlineError("INVALID_ARGUMENT", "Read anchor must be nonempty and cannot be combined with offset.", { path: request.filePath })
+    }
     if (request.offset !== undefined && (!Number.isInteger(request.offset) || request.offset < 1)) {
       throw new PatchlineError("INVALID_ARGUMENT", "Read offset must be a positive integer.", { path: request.filePath })
     }
@@ -69,10 +73,11 @@ export class ReadService {
     }
     const fileInfo = await stat(resolved.absolute, { bigint: true })
     const displayPath = resolved.relative || "."
-    const offset = request.offset ?? 1
+    let offset = request.offset ?? 1
     const limit = fileInfo.isDirectory() ? Math.min(this.defaultLimit, request.limit ?? this.defaultLimit) : Math.min(2_000, request.limit ?? this.defaultLimit)
 
     if (fileInfo.isDirectory()) {
+      if (request.anchor !== undefined) throw new PatchlineError("INVALID_ARGUMENT", "Read anchor requires a file.", { path: displayPath })
       const directory = await opendir(resolved.absolute)
       const entries: string[] = []
       try {
@@ -122,6 +127,27 @@ export class ReadService {
     const lineIndexResult = this.snapshots.getOrBuildLineIndex(document)
     const lineIndex = lineIndexResult.index
     const totalLines = lineIndex.totalLines
+    if (request.anchor !== undefined) {
+      const candidates: number[] = []
+      let match = document.normalizedText.indexOf(request.anchor)
+      while (match >= 0 && candidates.length < 9) {
+        let low = 0
+        let high = lineIndex.starts.length
+        while (low < high) {
+          const middle = Math.floor((low + high) / 2)
+          if (lineIndex.starts[middle]! <= match) low = middle + 1
+          else high = middle
+        }
+        candidates.push(low)
+        match = document.normalizedText.indexOf(request.anchor, match + 1)
+      }
+      if (candidates.length !== 1) {
+        const truncated = candidates.length > 8
+        const lines = candidates.slice(0, 8)
+        throw new PatchlineError("INVALID_ARGUMENT", `Read anchor must match exactly once. Candidate lines: ${lines.join(", ") || "none"}${truncated ? ", ..." : ""}. Use a more specific literal anchor or read with an explicit offset.`, { path: displayPath, details: { candidates: lines, truncated } })
+      }
+      offset = candidates[0]!
+    }
     if (offset > totalLines && !(totalLines === 0 && offset === 1)) {
       throw new PatchlineError("INVALID_ARGUMENT", `Offset ${offset} is out of range for this file (${totalLines} lines)`, { path: displayPath })
     }

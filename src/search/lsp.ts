@@ -25,10 +25,25 @@ export async function runOpenCodeLspClient(client: LspBridgeClient, input: { wor
   })
   let result: unknown
   try {
+    if (client.lsp?.status) {
+      const response = await Promise.race([client.lsp.status({ query: { directory: input.worktree } }), deadline])
+      input.signal?.throwIfAborted()
+      const envelope = response && typeof response === "object" && "data" in response ? (response as { data: unknown }).data : response
+      if (response && typeof response === "object" && "error" in response && (response as { error?: unknown }).error) {
+        throw new PatchlineError("DIAGNOSTICS_UNAVAILABLE", "OpenCode SDK LSP status failed; use ast_search or patchline_grep.")
+      }
+      if (!Array.isArray(envelope)) throw new PatchlineError("DIAGNOSTICS_UNAVAILABLE", "OpenCode SDK LSP status is unavailable; use ast_search or patchline_grep.")
+      if (!envelope.some((entry) => entry && typeof entry === "object" && entry.status === "connected")) {
+        throw new PatchlineError("CAPABILITY_UNAVAILABLE", "No connected active OpenCode LSP client; use ast_search or patchline_grep, or open a project file through the host LSP integration.")
+      }
+    }
+    controller.signal.throwIfAborted()
     result = await Promise.race([client.find.symbols({ query: { query: input.query, directory: input.worktree }, signal: controller.signal }), deadline])
   } finally { clearTimeout(timer); input.signal?.removeEventListener("abort", abort) }
   input.signal?.throwIfAborted()
   if (result && typeof result === "object" && "error" in result && result.error) throw new PatchlineError("DIAGNOSTICS_UNAVAILABLE", `OpenCode SDK symbols failed: ${boundedErrorDetail(JSON.stringify(result.error))}`)
+  const symbols = result && typeof result === "object" && "data" in result ? (result as { data: unknown }).data : result
+  if (!Array.isArray(symbols)) throw new PatchlineError("DIAGNOSTICS_UNAVAILABLE", "OpenCode SDK returned an invalid symbols response; use ast_search or patchline_grep.")
   const output = JSON.stringify(result)
   return output.length <= MAX_OUTPUT_CHARS ? output : `${output.slice(0, MAX_OUTPUT_CHARS)}\n... LSP result truncated; narrow the query.`
 }
@@ -53,10 +68,13 @@ export function interpretLspOutput(operation: LspBridgeOperation, stdout: string
     throw new PatchlineError("CAPABILITY_UNAVAILABLE", boundedErrorDetail(`OpenCode LSP is unavailable for ${operation}: ${diagnostics}\n${LSP_RECOVERY}`), { details: { operation, lsp: "disabled" } })
   }
   const result = stdout.trim()
+  if (result === "" && operation === "diagnostics") {
+    throw new PatchlineError("DIAGNOSTICS_UNAVAILABLE", "OpenCode CLI returned no diagnostics result; validation is unverified. Retry through the active session or run the configured project checks.", { details: { operation, validation: "unverified" } })
+  }
   if ((result === "" || /^\[\s*\]$/.test(result)) && operation !== "diagnostics") {
     throw new PatchlineError("CAPABILITY_UNAVAILABLE", `OpenCode CLI returned no ${operation === "documentSymbol" ? "document symbols" : "workspace symbols"}; its isolated process cannot confirm document/index initialization. Use native OpenCode LSP in the active session for semantic symbols, ast_search for structure, or patchline_grep for literal text.`, { details: { operation, indexing: "unverified" } })
   }
-  return result || "[]"
+  return result
 }
 
 export function buildLspArgs(operation: LspBridgeOperation, target: string): string[] {
@@ -101,6 +119,7 @@ export async function runOpenCodeLspBridge(input: {
   configuration?: { lsp?: unknown } | undefined
 }): Promise<string> {
   input.signal?.throwIfAborted()
+  if (input.configuration?.lsp === false) throw new PatchlineError("CAPABILITY_UNAVAILABLE", "OpenCode LSP is disabled by configuration.")
   const command = await resolveOpenCodeCommand()
   let args: string[]
   if (input.operation === "workspaceSymbol") {

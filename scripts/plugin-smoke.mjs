@@ -11,8 +11,10 @@ import { pluginTools, hostTools } from "./smoke-tools.mjs"
 const pluginPath = path.resolve(fileURLToPath(new URL("../dist/plugin.js", import.meta.url)))
 const worktree = await mkdtemp(path.join(os.tmpdir(), "patchline-plugin-smoke-"))
 const execute = promisify(execFile)
-const required = hostTools
-const hashlineRequired = ["read", "edit", "write", "patchline_apply_patch"]
+const compact = process.argv.includes("--compact")
+const required = compact ? ["read", "edit", "write", "patchline_edit_batch", "patchline_grep", "ast_search", "patchline_diagnostics", "apply_patch"] : hostTools
+const hashlineRequired = compact ? ["read", "edit", "write"] : ["read", "edit", "write", "patchline_apply_patch"]
+const hiddenCompactTools = ["patchline_execute", "patchline_apply_patch", "patchline_route_search", "patchline_lsp_status", "patchline_summary"]
 
 async function freePort() {
   const server = createServer()
@@ -111,11 +113,13 @@ const port = await freePort()
 await execute(process.platform === "win32" ? "git.exe" : "git", ["init", "--initial-branch=main"], { cwd: worktree, windowsHide: true })
 if (process.platform === "win32" && process.env.PATCHLINE_PLUGIN_SMOKE_DIRECT === "1") {
   const module = await import(pathToFileURL(pluginPath).href)
-  const hooks = await module.PatchlinePlugin({ directory: worktree, worktree })
+  const hooks = await module.PatchlinePlugin({ directory: worktree, worktree }, { toolProfile: compact ? "compact" : "extended" })
   const toolIds = Object.keys(hooks.tool ?? {})
-  const missing = pluginTools.filter((toolId) => !toolIds.includes(toolId))
+  const expected = compact ? required.filter((toolId) => toolId !== "apply_patch") : pluginTools
+  const missing = expected.filter((toolId) => !toolIds.includes(toolId))
   if (missing.length > 0) throw new Error(`Patchline plugin loaded without required tools: ${missing.join(", ")}`)
-  console.log(`Patchline plugin direct smoke passed (${pluginTools.length} tools registered)`)
+  if (compact && hiddenCompactTools.some((toolId) => toolIds.includes(toolId))) throw new Error("Compact direct registry exposes hidden tools")
+  console.log(`Patchline plugin direct smoke passed (${expected.length} tools registered)`)
   await removeWorktree(worktree)
   process.exit(0)
 }
@@ -125,7 +129,8 @@ const child = spawn(command, ["serve", "--hostname", "127.0.0.1", "--port", Stri
   env: {
     ...createSmokeEnvironment(worktree),
     OPENCODE_CONFIG_CONTENT: JSON.stringify({
-      plugin: [[pluginPath, { mode: "precision", telemetry: false, summary: true }]],
+      plugin: [[pluginPath, { mode: "precision", toolProfile: compact ? "compact" : "extended", telemetry: false, summary: true }]],
+      ...(compact ? { lsp: false } : {}),
     }),
   },
   stdio: ["ignore", "pipe", "pipe"],
@@ -140,7 +145,11 @@ try {
   const toolIds = await waitForTools(`http://127.0.0.1:${port}/experimental/tool/ids`, child, logs)
   const missing = required.filter((toolId) => !toolIds.includes(toolId))
   if (missing.length > 0) throw new Error(`OpenCode plugin loaded without required tools: ${missing.join(", ")}. Registered tools: ${toolIds.join(", ")}. Server logs:\n${logs()}`)
-  console.log(`OpenCode plugin smoke passed (${required.length} Patchline tools registered)`)
+  if (compact) {
+    const unexpected = [...hiddenCompactTools, "patchline_lsp"].filter((toolId) => toolIds.includes(toolId))
+    if (unexpected.length) throw new Error(`Compact registry exposes hidden tools: ${unexpected.join(", ")}`)
+  }
+  console.log(`OpenCode plugin smoke passed (${compact ? "compact" : "extended"}; ${required.length} required tools registered)`)
 } finally {
   await stopProcess(child)
   await removeWorktree(worktree)

@@ -23,6 +23,18 @@
   UI patching validates all replacement anchors before writing the renderer.
 - Doctor version probes have a 10-second deadline and a 16,384-character combined
   output cap. Exceeding either terminates the probe and reports it unavailable.
+- CLI installer code is imported only after a valid install/uninstall request
+  passes argument parsing (help does not initialize it), or after host-upgrade
+  arguments pass validation. Capability inspection is loaded when an inspection
+  command needs it, preserving injected inspection hooks. This defers startup
+  work; it neither removes installation guards nor skips doctor self-tests.
+- CLI LSP project preparation is imported only within the LSP command branch,
+  after validating `--directory`. Configuration and explanatory commands do not
+  initialize LSP discovery; LSP command behavior and verification remain intact.
+- AST search loads the native parser only after argument, path, language and
+  bounded UTF-8 file checks pass. Plugin/module import and rejected requests do
+  not load the native binding. Cancellation is checked before and after loading;
+  the first valid AST request pays initialization, later requests reuse the module.
 
 Further implemented budgets and limitations are specified in
 `deep-review-hardening.md`: linear tag normalization, 32 MiB prepared edit data,

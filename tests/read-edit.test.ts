@@ -10,6 +10,76 @@ import { buildLineIndex, sliceIndexedLines } from "../src/preservation/line-inde
 import { temporaryWorkspace } from "./helpers/workspace.js"
 
 describe("read and exact edit", () => {
+  it("returns bounded line candidates for ambiguous anchors without authorizing edits", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "candidates.ts"), Array.from({ length: 100 }, () => "needle").join("\n"))
+      const snapshots = new ScopedSnapshotStore()
+      const reads = new ReadService(snapshots)
+      const scope = { sessionId: "s", worktree: workspace.path, filePath: "candidates.ts" }
+      await expect(reads.read({ ...scope, anchor: "needle" })).rejects.toMatchObject({
+        code: "INVALID_ARGUMENT", writes: 0,
+        details: { candidates: [1, 2, 3, 4, 5, 6, 7, 8], truncated: true },
+        message: expect.stringContaining("1, 2, 3, 4, 5, 6, 7, 8"),
+      })
+      expect(snapshots.size).toBe(0)
+      await writeFile(path.join(workspace.path, "candidates.ts"), "needle\nother\nneedle\n")
+      await expect(reads.read({ ...scope, anchor: "needle" })).rejects.toMatchObject({ details: { candidates: [1, 3], truncated: false } })
+      expect(snapshots.size).toBe(0)
+      const read = await reads.read({ ...scope, offset: 2, limit: 1 })
+      if (!isFileReadResult(read)) throw new Error("Expected file")
+      await expect(reads.read({ ...scope, anchor: "needle" })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+      await expect(new EditService(snapshots).edit({ ...scope, snapshot: read.snapshot, exact: { oldString: "needle", newString: "changed", replaceAll: true } })).rejects.toMatchObject({ code: "INVALID_ANCHOR", writes: 0 })
+      expect(await readFile(path.join(workspace.path, "candidates.ts"), "utf8")).toBe("needle\nother\nneedle\n")
+    } finally { await workspace.cleanup() }
+  })
+  it("counts overlapping and same-line anchor occurrences independently at the candidate cap", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const file = path.join(workspace.path, "candidates.ts")
+      const snapshots = new ScopedSnapshotStore()
+      const reads = new ReadService(snapshots)
+      const scope = { sessionId: "s", worktree: workspace.path, filePath: "candidates.ts" }
+      for (const count of [2, 8, 9]) {
+        await writeFile(file, "a".repeat(count + 1))
+        await expect(reads.read({ ...scope, anchor: "aa" })).rejects.toMatchObject({ details: { candidates: Array(Math.min(count, 8)).fill(1), truncated: count > 8 } })
+      }
+      await expect(reads.read({ ...scope, anchor: "absent" })).rejects.toMatchObject({ details: { candidates: [], truncated: false } })
+      expect(snapshots.size).toBe(0)
+    } finally { await workspace.cleanup() }
+  })
+  it("reads from a unique literal anchor and authorizes only the returned range", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "anchor.ts"), "const hidden = 1\r\n// needle.*\r\nconst shown = 2\r\nconst tail = 3\r\n")
+      const snapshots = new ScopedSnapshotStore()
+      const scope = { sessionId: "s", worktree: workspace.path, filePath: "anchor.ts" }
+      const result = await new ReadService(snapshots).read({ ...scope, anchor: "needle.*", limit: 2 })
+      if (result.kind !== "file") throw new Error("Expected file")
+      expect(result.offset).toBe(2)
+      expect(result.endLine).toBe(3)
+      expect(result.output).toContain("2:// needle.*\n3:const shown = 2")
+      expect(result.output).not.toContain("const hidden")
+      const edits = new EditService(snapshots)
+      await expect(edits.edit({ ...scope, snapshot: result.snapshot, exact: { oldString: "const hidden = 1", newString: "const hidden = 9" } })).rejects.toMatchObject({ code: "INVALID_ANCHOR" })
+      await edits.edit({ ...scope, snapshot: result.snapshot, exact: { oldString: "const shown = 2", newString: "const shown = 4" } })
+      expect(await readFile(path.join(workspace.path, "anchor.ts"), "utf8")).toBe("const hidden = 1\r\n// needle.*\r\nconst shown = 4\r\nconst tail = 3\r\n")
+    } finally { await workspace.cleanup() }
+  })
+
+  it("rejects missing, ambiguous, empty, conflicting, and directory anchors", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "anchor.ts"), "repeat repeat\nlast\n")
+      const reads = new ReadService(new ScopedSnapshotStore())
+      const scope = { sessionId: "s", worktree: workspace.path, filePath: "anchor.ts" }
+      for (const request of [{ anchor: "absent" }, { anchor: "repeat" }, { anchor: "" }, { anchor: "last", offset: 1 }]) {
+        await expect(reads.read({ ...scope, ...request })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+      }
+      await expect(reads.read({ ...scope, filePath: ".", anchor: "last" })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" })
+    } finally { await workspace.cleanup() }
+  })
+
   it("indexes normalized lines without materializing the whole line array", () => {
     const text = "first\nsecond\nthird"
     const index = buildLineIndex(text)
@@ -48,6 +118,20 @@ describe("read and exact edit", () => {
       expect(await readFile(file, "utf8")).toBe("const first = 1\nconst second = 20\n")
     } finally {
       await workspace.cleanup()
+    }
+  })
+
+  it("preserves every UTF-16 source-line offset across newline and Unicode combinations", () => {
+    const fragments = ["", "a", "\n", "\r", "😀", "\n\n", "x\r\n"]
+    for (const first of fragments) for (const second of fragments) for (const third of fragments) {
+      const text = first + second + third
+      const starts = text.length ? [0] : []
+      for (let at = 0; at < text.length; at++) if (text.charCodeAt(at) === 10 && at + 1 < text.length) starts.push(at + 1)
+      const index = buildLineIndex(text)
+      expect(index).toEqual({ starts, totalLines: starts.length, endsWithNewline: text.endsWith("\n") })
+      const expected = text === "" ? [] : text.split("\n")
+      if (text.endsWith("\n")) expected.pop()
+      expect(sliceIndexedLines(text, index, 1, index.totalLines)).toEqual(expected)
     }
   })
 

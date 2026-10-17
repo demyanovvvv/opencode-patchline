@@ -1,8 +1,9 @@
 import path from "node:path"
+import { realpath } from "node:fs/promises"
 import { diffPreview, DIFF_PREVIEW_BUDGET } from "./visualization/diff-preview.js"
 import { diffStats } from "./editing/diff.js"
 import { editFiles } from "./visualization/edit-files.js"
-import type { Plugin, PluginModule, ToolContext } from "@opencode-ai/plugin"
+import type { Hooks, Plugin, PluginModule, ToolContext } from "@opencode-ai/plugin"
 import { tool } from "@opencode-ai/plugin"
 import { parseConfig } from "./config.js"
 import { EditService, type EditRequest } from "./edit-service.js"
@@ -26,6 +27,21 @@ import { resolveWorkspacePath } from "./workspace/paths.js"
 const MAX_SEARCH_OUTPUT_CHARS = 20_000
 const MAX_PATCH_INPUT_BYTES = 8 * 1024 * 1024
 
+function compactEditOutput(result: { output: string; diff: string; diffTruncated: boolean }): string {
+  // Reuse the display-only preview; never clip a hunk or recompute a safety diff.
+  if (result.diffTruncated || result.diff.length > 2_000) return `${result.output}\nDiff preview omitted: exceeds compact budget; inspect metadata or read a narrow range if needed.`
+  return result.diff ? `${result.output}\n${result.diff}` : result.output
+}
+
+function compactEditsOutput(results: { output: string; diff: string; diffTruncated: boolean }[], validationFailed: boolean): string {
+  const summaries = results.map((result) => result.output).join("\n\n")
+  const previews = results.map(compactEditOutput).join("\n\n")
+  // Leave room for diagnostics and never let the aggregate limiter split a hunk.
+  return validationFailed || previews.length > 19_000
+    ? `${summaries}\nDiff preview omitted: aggregate budget or failed validation; inspect metadata if needed.`
+    : previews
+}
+
 function boundedSearchOutput(output: string, notice = ""): string {
   const complete = `${output}${notice}`
   if (complete.length <= MAX_SEARCH_OUTPUT_CHARS) return complete
@@ -43,11 +59,12 @@ function boundedMutationOutput(output: string): string {
 }
 
 const POLICY = `PATCHLINE EDITING POLICY
-- Locate before broad reads; use LSP for symbols, grep for text, and AST for structure.
-- Read the smallest useful source range.
+- When the exact path is known, read that file directly using the smallest useful range; skip discovery searches.
+- Locate only when the path or target is unknown; use available LSP for symbols, grep for text, and AST for structure.
+- Read the smallest useful source range; when a unique literal target is known, use read with anchor and limit instead of grep followed by read. Do not combine anchor with offset; resolve ambiguous candidates before editing.
 - Existing files edited through Patchline require a snapshot; preserve unrelated code.
 - Use patchline_apply_patch for Hashline: [PATH#TAG] followed by PUT N.=M: and +TEXT payload rows, CUT N.=M, or PUT <N:/PUT >N: insertions.
-- Use the ordinary apply_patch tool for large files, large changes, or operations unsupported by Patchline. Native patches do not require a Patchline snapshot.
+- Select the editing tool by change scope, representation, and supported operations. File size alone does not select the editing tool; use ordinary apply_patch for changes beyond Patchline's limits or unsupported operations. Native patches do not require a Patchline snapshot.
 - After a native patch, read changed files again before using Patchline snapshots.
 - If native apply_patch reports "Failed to find expected lines", re-read the smallest affected range and rebuild the patch from the exact current lines, including line breaks. Do not repeat the same patch, guess context, or overwrite the file to bypass rejection.
 - Line numbers refer to the original snapshot; every section requires the tag returned by read.
@@ -159,6 +176,8 @@ function parseNewFilePatch(patchText: string): Array<{ path: string; content: st
 export const PatchlinePlugin: Plugin = async (input, options) => {
   const config = parseConfig(options ?? {})
   if (config.mode === "disabled") return {}
+  const policy = config.toolProfile === "compact" ? POLICY.split("\n").filter((line) => !line.includes("patchline_apply_patch") && !line.includes('"strategy":"exact"')).join("\n")
+    + (config.mode === "precision" ? '\n- Use edit with filePath, snapshot, oldString and newString for a local exact edit; use patchline_edit_batch for several related edits. Omit unused optional fields.' : '\n- Use the standard edit tool for local changes in compatibility mode.') : POLICY
   const snapshots = new ScopedSnapshotStore({ ttlMs: config.snapshotTtlMs, maxSnapshots: config.maxSnapshots, maxBytes: config.maxSnapshotBytes })
   const reads = new ReadService(snapshots, config.maxInitialReadLines)
   const edits = new EditService(snapshots, config)
@@ -167,6 +186,12 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
   const nativeFailureCalls = new Set<string>()
   let lspConfiguration: LspConfiguration = {}
   let lspReports: LspReport[] = []
+  let lspConfigurationGeneration = 0
+  let lspConfigurationContent = JSON.stringify(lspConfiguration.lsp)
+  const supportsLspOperation = (operation: string) => lspReports.some((report) => report.verified && (
+    operation === "documentSymbol" ? report.capabilities?.documentSymbolProvider :
+      operation === "workspaceSymbol" ? report.capabilities?.workspaceSymbolProvider : false
+  ))
   const lspOptions = { install: config.lspAutoInstall, maxEntries: config.lspMaxEntries, ...(config.lspStorageDirectory ? { storage: config.lspStorageDirectory } : {}) }
 
   async function validateMutation(context: ToolContext, paths: readonly string[]) {
@@ -177,7 +202,10 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
     for (const command of commands) {
       await context.ask({ permission: "bash", patterns: [command], always: ["*"], metadata: { command, reason: "post-edit validation" } })
       const diagnostic = await runDiagnosticCommand(command, context.worktree, 120_000, config.maxDiagnostics, context.abort)
-      if (!diagnostic.ok) { ok = false; failures.push(diagnostic.output) }
+      if (!diagnostic.ok) {
+        ok = false
+        failures.push(`${command}: ${diagnostic.timedOut ? "timed out" : `exit ${diagnostic.exitCode ?? "unknown"}`}${diagnostic.output ? `\n${diagnostic.output}` : " (no output)"}`)
+      }
     }
     return { validation: ok ? "passed" : "failed", diagnostics: ok, reason: ok ? undefined : boundedMutationOutput(`Validation failed: ${failures.join("\n")}`) }
   }
@@ -187,6 +215,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
     args: {
       filePath: tool.schema.string().describe("Absolute or worktree-relative file path"),
       offset: tool.schema.number().int().min(1).optional().describe("First line, 1-based"),
+      anchor: tool.schema.string().min(1).optional().describe("Unique literal text; start at its line instead of offset (LF-normalized)"),
       limit: tool.schema.number().int().min(1).optional().describe("Maximum lines; defaults to Patchline policy"),
     },
     async execute(args, context) {
@@ -244,6 +273,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
       hashlinePatch: tool.schema.string().optional(),
     },
     async execute(args, context) {
+      if (config.toolProfile === "compact" && args.hashlinePatch !== undefined) throw new PatchlineError("INVALID_ARGUMENT", "Compact edit accepts exact strings only; use oldString and newString.")
       const hashlinePatch = args.hashlinePatch?.trim() ? args.hashlinePatch : undefined
       const exact = args.oldString !== undefined && args.newString !== undefined && !(hashlinePatch && args.oldString === "" && args.newString === "")
         ? { oldString: args.oldString, newString: args.newString, replaceAll: args.replaceAll }
@@ -266,7 +296,9 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         const validation = await validateMutation(context, [result.path])
         return {
           title: result.path,
-          output: `${result.output}\nDiagnostics: ${validation.validation === "not_configured" ? "not configured; OpenCode native diagnostics may run" : validation.reason ?? "clean"}`,
+          output: config.toolProfile === "compact"
+            ? boundedMutationOutput(`${validation.reason ? `${validation.reason}\n` : ""}${compactEditsOutput([result], !!validation.reason)}\nDiagnostics: ${validation.validation === "not_configured" ? "not configured; OpenCode native diagnostics may run" : validation.validation}`)
+            : `${result.output}\nDiagnostics: ${validation.validation === "not_configured" ? "not configured; OpenCode native diagnostics may run" : validation.reason ?? "clean"}`,
           metadata: {
             ...applied,
             status: "applied",
@@ -318,14 +350,37 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
     },
   })
 
-  return {
+  const hooks: Hooks = {
     async config(openCodeConfig) {
+      const generation = ++lspConfigurationGeneration
       lspConfiguration = openCodeConfig as LspConfiguration
-      if (!config.lspAutoSetup) return
-      try { lspReports = await configureProjectLsp(input.worktree, lspConfiguration, lspOptions) }
+      lspConfigurationContent = JSON.stringify(lspConfiguration.lsp)
+      lspReports = []
+      if (lspConfiguration.lsp === false || config.toolProfile === "compact") {
+        delete hooks.tool!.patchline_lsp
+        delete hooks.tool!.patchline_lsp_status
+      } else Object.assign(hooks.tool!, lspTools)
+      if (lspConfiguration.lsp === false) return
+      if (!config.lspAutoSetup) {
+        if (config.toolProfile === "compact") delete hooks.tool!.patchline_lsp
+        return
+      }
+      let reports: LspReport[]
+      try { reports = await configureProjectLsp(input.worktree, lspConfiguration, lspOptions) }
       catch (error) {
         // A bounded scan or optional preparation failure must not prevent OpenCode startup.
-        lspReports = [{ root: input.directory, server: "discovery", language: "unknown", sample: "", evidence: [], status: "failed", verified: false, detail: errorMessage(error) }]
+        reports = [{ root: input.directory, server: "discovery", language: "unknown", sample: "", evidence: [], status: "failed", verified: false, detail: errorMessage(error) }]
+      }
+      if (generation !== lspConfigurationGeneration) return
+      lspConfigurationContent = JSON.stringify(lspConfiguration.lsp)
+      lspReports = reports
+      if (config.toolProfile === "compact") {
+        const operations = (["workspaceSymbol", "documentSymbol"] as const).filter(supportsLspOperation)
+        if (operations.length === 0) delete hooks.tool!.patchline_lsp
+        else {
+          const definition = lspTools.patchline_lsp!
+          hooks.tool!.patchline_lsp = { ...definition, args: { ...definition.args, operation: tool.schema.enum(operations as [typeof operations[number], ...typeof operations[number][]]) } }
+        }
       }
     },
     tool: {
@@ -333,8 +388,32 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         description: "Show detected languages and LSP preparation state. Installed/configured does not mean a connection has been verified.",
         args: {},
         async execute(_args, context) {
+          if (lspConfiguration.lsp === false) throw new PatchlineError("CAPABILITY_UNAVAILABLE", "OpenCode LSP is disabled by configuration.")
           await context.ask({ permission: "read", patterns: ["**/*"], always: ["*"], metadata: { reason: "LSP project discovery" } })
-          const reports = lspReports.length ? lspReports : await prepareProjectLsp(context.worktree, { ...lspOptions, install: false, configuration: lspConfiguration, signal: context.abort })
+          let generation = lspConfigurationGeneration
+          const configuration = lspConfiguration
+          const configurationContent = JSON.stringify(configuration.lsp)
+          if (configuration.lsp === false) throw new PatchlineError("CAPABILITY_UNAVAILABLE", "LSP is disabled in OpenCode configuration.")
+          const sameRoot = await realpath(context.worktree) === await realpath(input.worktree)
+          if (sameRoot && generation === lspConfigurationGeneration) {
+            generation = ++lspConfigurationGeneration
+            lspReports = []
+          }
+          const reports = await prepareProjectLsp(context.worktree, { ...lspOptions, install: false, configuration, signal: context.abort })
+          context.abort.throwIfAborted()
+          if (generation !== lspConfigurationGeneration || JSON.stringify(configuration.lsp) !== configurationContent) throw new PatchlineError("CAPABILITY_UNAVAILABLE", "LSP configuration changed or status refresh was superseded. Retry status with the current configuration.")
+          if (sameRoot && generation === lspConfigurationGeneration) {
+            lspReports = reports
+            lspConfigurationContent = JSON.stringify(configuration.lsp)
+            if (config.toolProfile === "compact") {
+              const operations = (["workspaceSymbol", "documentSymbol"] as const).filter(supportsLspOperation)
+              if (operations.length === 0) delete hooks.tool!.patchline_lsp
+              else {
+                const definition = lspTools.patchline_lsp!
+                hooks.tool!.patchline_lsp = { ...definition, args: { ...definition.args, operation: tool.schema.enum(operations as [typeof operations[number], ...typeof operations[number][]]) } }
+              }
+            }
+          }
           return JSON.stringify({ projects: reports, autoSetup: config.lspAutoSetup, autoInstall: config.lspAutoInstall }, null, 2)
         },
       }),
@@ -451,7 +530,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
                 }, context.abort)
                 const files = editFiles(result, context.worktree, "diff")
                 const validation = await validateMutation(context, result.map((item) => item.path))
-                return { title: "Patchline · adaptive Hashline", output: boundedMutationOutput(result.map((item) => item.output).join("\n\n")), metadata: { status: "applied", stage: "completed", strategy: selected, confidence: route.confidence, routeReason: route.reason, writes: result.length, files, paths: result.map((item) => item.path), ...validation } }
+                return { title: "Patchline · adaptive Hashline", output: boundedMutationOutput(`${validation.reason ? `${validation.reason}\n` : ""}${result.map((item) => item.output).join("\n\n")}`), metadata: { status: "applied", stage: "completed", strategy: selected, confidence: route.confidence, routeReason: route.reason, writes: result.length, files, paths: result.map((item) => item.path), ...validation } }
               } catch (error) {
                 failure(context, error, stage, paths[0], { paths, strategy: selected })
                 throw toolError(error)
@@ -474,7 +553,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
               }, context.abort)
               const files = editFiles(result, context.worktree, "diff")
               const validation = await validateMutation(context, paths)
-              return { title: `Patchline · adaptive ${selected}`, output: boundedMutationOutput(result.map((item) => item.output).join("\n\n")), metadata: { status: "applied", stage: "completed", strategy: selected, confidence: route.confidence, routeReason: route.reason, writes: result.length, paths, added: result.reduce((sum, item) => sum + item.added, 0), deleted: result.reduce((sum, item) => sum + item.deleted, 0), files, ...validation } }
+              return { title: `Patchline · adaptive ${selected}`, output: boundedMutationOutput(`${validation.reason ? `${validation.reason}\n` : ""}${result.map((item) => item.output).join("\n\n")}`), metadata: { status: "applied", stage: "completed", strategy: selected, confidence: route.confidence, routeReason: route.reason, writes: result.length, paths, added: result.reduce((sum, item) => sum + item.added, 0), deleted: result.reduce((sum, item) => sum + item.deleted, 0), files, ...validation } }
             } catch (error) {
               failure(context, error, stage, paths.length === 1 ? paths[0] : undefined, { paths, strategy: selected })
               throw toolError(error)
@@ -526,7 +605,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             stage = "validation"
             progress(context, stage, "Patchline · validation", { paths, ...applied })
             const validation = await validateMutation(context, paths)
-            return { title: `Patchline · ${created.length} created`, output: boundedMutationOutput(`${created.map((result) => result.output).join("\n")}${validation.reason ? `\n${validation.reason}` : ""}`), metadata: { status: "applied", stage: "completed", paths, ...applied, ...validation } }
+            return { title: `Patchline · ${created.length} created`, output: boundedMutationOutput(`${validation.reason ? `${validation.reason}\n` : ""}${created.map((result) => result.output).join("\n")}`), metadata: { status: "applied", stage: "completed", paths, ...applied, ...validation } }
           }
           paths = [...new Set(sections.flatMap((section) => [section.path, ...(section.fileOp?.kind === "move" ? [section.fileOp.dest] : [])]))]
           stage = "permission"
@@ -541,7 +620,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
           stage = "validation"
           progress(context, stage, "Patchline · validation", applied)
           const validation = await validateMutation(context, paths)
-          return { title: `Patchline · ${results.length} patched`, output: boundedMutationOutput(`${results.map((result) => result.output).join("\n\n")}${validation.reason ? `\n${validation.reason}` : ""}`), metadata: { status: "applied", stage: "completed", ...applied, ...validation } }
+          return { title: `Patchline · ${results.length} patched`, output: boundedMutationOutput(`${validation.reason ? `${validation.reason}\n` : ""}${results.map((result) => result.output).join("\n\n")}`), metadata: { status: "applied", stage: "completed", ...applied, ...validation } }
           } catch (error) {
             failure(context, error, stage, undefined, { paths: [...new Set(paths)], ...applied, ...(stage === "validation" ? { status: "applied", validation: "failed", recoveryAction: "Changes were applied. Inspect diagnostics and re-read before retrying." } : {}) })
             throw toolError(error)
@@ -615,10 +694,35 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         },
         async execute(args, context) {
           const details = { kind: "lsp", operation: args.operation, query: args.query, path: args.filePath }
+          const generation = lspConfigurationGeneration
+          const assertCurrent = () => {
+            context.abort.throwIfAborted()
+            if (JSON.stringify(lspConfiguration.lsp) !== lspConfigurationContent) {
+              lspConfigurationContent = JSON.stringify(lspConfiguration.lsp)
+              lspConfigurationGeneration++
+              lspReports = []
+              if (config.toolProfile === "compact") delete hooks.tool!.patchline_lsp
+            }
+            if (generation !== lspConfigurationGeneration) throw new PatchlineError("CAPABILITY_UNAVAILABLE", "LSP configuration changed. Retry with the current capabilities.")
+          }
           try {
+            assertCurrent()
+            if (lspConfiguration.lsp === false) throw new PatchlineError("CAPABILITY_UNAVAILABLE", "OpenCode LSP is disabled by configuration.")
+            if (config.toolProfile === "compact" && !supportsLspOperation(args.operation)) throw new PatchlineError("CAPABILITY_UNAVAILABLE", `No verified capability for LSP ${args.operation}; use available text/AST tools or configured diagnostics.`)
             progress(context, "permission", "Patchline · LSP", details)
             const resolvedFile = args.filePath ? await resolveWorkspacePath(context.worktree, args.filePath, scope(context, "read").authorizePath) : undefined
+            if (config.toolProfile === "compact" && args.operation === "documentSymbol") {
+              const projects = await Promise.all(lspReports.filter((report) => report.verified && report.capabilities?.documentSymbolProvider).map(async (report) => {
+                try {
+                  const root = await realpath(report.root)
+                  const relative = resolvedFile ? path.relative(root, resolvedFile.canonical) : undefined
+                  return relative !== undefined && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+                } catch { return false }
+              }))
+              if (!projects.some(Boolean)) throw new PatchlineError("CAPABILITY_UNAVAILABLE", "No verified document-symbol capability for this file's project; use available text/AST tools.")
+            }
             if (args.filePath) await context.ask({ permission: "read", patterns: [args.filePath], always: ["*"], metadata: { path: args.filePath } })
+            assertCurrent()
             progress(context, "searching", "Patchline · LSP", details)
             let output: string | undefined
             if (args.operation === "workspaceSymbol" && args.query !== undefined) {
@@ -626,7 +730,19 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
                 if (!(error instanceof PatchlineError) || error.code !== "CAPABILITY_UNAVAILABLE") throw error
               }
             }
-            output ??= await runOpenCodeLspBridge({ worktree: context.worktree, operation: args.operation, query: args.query, filePath: resolvedFile?.canonical, signal: context.abort, configuration: lspConfiguration })
+            try {
+              assertCurrent()
+              output ??= await runOpenCodeLspBridge({ worktree: context.worktree, operation: args.operation, query: args.query, filePath: resolvedFile?.canonical, signal: context.abort, configuration: lspConfiguration })
+            } catch (error) {
+              if (config.toolProfile === "compact" && generation === lspConfigurationGeneration && error instanceof PatchlineError && error.code === "CAPABILITY_UNAVAILABLE" && await realpath(context.worktree) === await realpath(input.worktree)) {
+                if (generation === lspConfigurationGeneration) {
+                  lspReports = []
+                  delete hooks.tool!.patchline_lsp
+                }
+              }
+              throw error
+            }
+            assertCurrent()
             return { title: `Patchline · ${args.operation}`, output, metadata: { ...details, status: "observed", stage: "completed" } }
           } catch (error) {
             failure(context, error, "searching", args.filePath, { ...details, writes: 0 })
@@ -669,7 +785,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             stage = "validation"
             progress(context, stage, `Patchline · ${paths.length} files`, { paths, ...applied })
             const validation = await validateMutation(context, paths)
-            return { title: `Patchline · ${result.length} files`, output: boundedMutationOutput(`${result.map((item) => item.output).join("\n\n")}${validation.reason ? `\n${validation.reason}` : ""}`), metadata: { status: "applied", stage: "completed", paths, ...applied, ...validation } }
+            return { title: `Patchline · ${result.length} files`, output: boundedMutationOutput(`${validation.reason ? `${validation.reason}\n` : ""}${config.toolProfile === "compact" ? compactEditsOutput(result, !!validation.reason) : result.map((item) => item.output).join("\n\n")}`), metadata: { status: "applied", stage: "completed", paths, ...applied, ...validation } }
           } catch (error) {
             failure(context, error, stage, paths.length === 1 ? paths[0] : undefined, { paths: [...new Set(paths)], ...applied, ...(stage === "validation" ? { status: "applied", validation: "failed", recoveryAction: "Changes were applied. Inspect diagnostics and re-read before retrying." } : {}) })
             throw toolError(error)
@@ -686,7 +802,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             progress(context, "diagnostics", "Patchline · diagnostics", { kind: "diagnostics", command: args.command })
             const result = await runDiagnosticCommand(args.command, context.worktree, 120_000, config.maxDiagnostics, context.abort)
             metrics.record({ name: "diagnostics", details: { ok: result.ok } })
-            return { title: result.ok ? "Patchline · diagnostics clean" : "Patchline · diagnostics failed", output: `${result.ok ? "Diagnostics clean." : `Diagnostics failed (${result.exitCode}).`}\n${result.output}`.trim(), metadata: { kind: "diagnostics", stage: "completed", status: "observed", command: args.command, exitCode: result.exitCode, ok: result.ok, outputLines: result.output ? result.output.split("\n").length : 0 } }
+            return { title: result.ok ? "Patchline · diagnostics clean" : result.timedOut ? "Patchline · diagnostics timed out" : "Patchline · diagnostics failed", output: `${result.ok ? "Diagnostics clean." : result.timedOut ? "Diagnostics incomplete: timeout." : `Diagnostics failed (${result.exitCode}).`}\n${result.output}`.trim(), metadata: { kind: "diagnostics", stage: "completed", status: "observed", command: args.command, exitCode: result.exitCode, ok: result.ok, timedOut: result.timedOut, outputLines: result.output ? result.output.split("\n").length : 0 } }
           } catch (error) {
             failure(context, error, "diagnostics", undefined, { kind: "diagnostics", command: args.command, writes: 0 })
             throw toolError(error)
@@ -715,7 +831,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
       }) } : {}),
     },
     async "experimental.chat.system.transform"(_hookInput, output) {
-      if (!output.system.includes(POLICY)) output.system.push(POLICY)
+      if (!output.system.includes(policy)) output.system.push(policy)
     },
     async "tool.execute.before"(hookInput, output) {
       if (hookInput.tool === "apply_patch") snapshots.clear()
@@ -742,6 +858,16 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
       nativeFailureCalls.clear()
     },
   }
+  if (config.toolProfile === "compact") {
+    if (hooks.tool!.edit === editTool) {
+      const args = { ...editTool.args }
+      delete (args as Partial<typeof args>).hashlinePatch
+      hooks.tool!.edit = { ...editTool, description: "Apply a stale-safe exact string edit linked to a snapshot returned by read.", args }
+    }
+    for (const name of ["patchline_execute", "patchline_apply_patch", "patchline_route_search", "patchline_lsp_status", "patchline_summary"]) delete hooks.tool![name]
+  }
+  const lspTools = Object.fromEntries(["patchline_lsp", "patchline_lsp_status"].flatMap((name) => hooks.tool![name] ? [[name, hooks.tool![name]!]] : []))
+  return hooks
 }
 
 const pluginModule: PluginModule = { id: "opencode-patchline", server: PatchlinePlugin }

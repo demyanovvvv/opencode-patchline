@@ -1,0 +1,8 @@
+{
+  "scope": "Actual first outgoing chat request to local mock provider; fixed OK response; no tool execution or external provider calls; lsp:false; JSON bytes not tokens. Captured sections only, no request contents.",
+  "results": [
+    {"profile":"stock","toolCount":10,"toolBytes":21599,"systemBytes":19694,"ids":["bash","edit","glob","grep","read","skill","task","todowrite","webfetch","write"]},
+    {"profile":"extended","toolCount":19,"toolBytes":23793,"systemBytes":22520,"ids":["apply_patch","ast_search","bash","edit","glob","grep","patchline_apply_patch","patchline_diagnostics","patchline_edit_batch","patchline_execute","patchline_grep","patchline_route_search","patchline_summary","read","skill","task","todowrite","webfetch","write"]},
+    {"profile":"compact","toolCount":15,"toolBytes":21901,"systemBytes":22102,"ids":["apply_patch","ast_search","bash","edit","glob","grep","patchline_diagnostics","patchline_edit_batch","patchline_grep","read","skill","task","todowrite","webfetch","write"]}
+  ]
+}

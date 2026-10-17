@@ -1,10 +1,380 @@
-import { readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { describe, expect, it, vi } from "vitest"
 import { PatchlinePlugin } from "../src/plugin.js"
+import * as lspManager from "../src/lsp/manager.js"
+import * as lspSearch from "../src/search/lsp.js"
+import { PatchlineError } from "../src/errors.js"
+import { EditService } from "../src/edit-service.js"
 import { temporaryWorkspace } from "./helpers/workspace.js"
 
 describe("OpenCode plugin", () => {
+  it("rejects status reports when configuration changes in place during refresh", async () => {
+    const workspace = await temporaryWorkspace()
+    const configuration = { lsp: { typescript: { disabled: false } } }
+    const prepare = vi.spyOn(lspManager, "prepareProjectLsp").mockImplementation(async () => {
+      configuration.lsp.typescript.disabled = true
+      return []
+    })
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { lspAutoSetup: false })
+      await hooks.config!(configuration as never)
+      await expect(hooks.tool!.patchline_lsp_status!.execute({}, { worktree: workspace.path, abort: new AbortController().signal, ask: async () => {} } as never)).rejects.toThrow(/configuration.*changed/i)
+    } finally { prepare.mockRestore(); await workspace.cleanup() }
+  })
+  it("rejects cached capabilities after an in-place LSP configuration edit", async () => {
+    const workspace = await temporaryWorkspace()
+    const prepare = vi.spyOn(lspManager, "configureProjectLsp").mockResolvedValue([{ root: workspace.path, server: "typescript", language: "typescript", sample: "index.ts", evidence: [], status: "configured", verified: true, detail: "verified", capabilities: { workspaceSymbolProvider: true } }])
+    const client = vi.spyOn(lspSearch, "runOpenCodeLspClient").mockResolvedValue("obsolete")
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path, client: {} } as never, { toolProfile: "compact" })
+      const configuration = { lsp: { typescript: { disabled: false } } }
+      await hooks.config!(configuration as never)
+      const captured = hooks.tool!.patchline_lsp!
+      configuration.lsp.typescript.disabled = true
+      const context = { sessionID: "s", worktree: workspace.path, directory: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) } as never
+      await expect(captured.execute({ operation: "workspaceSymbol", query: "needle" }, context)).rejects.toThrow(/configuration.*changed/i)
+      expect(client).not.toHaveBeenCalled()
+      expect(hooks.tool).not.toHaveProperty("patchline_lsp")
+    } finally { client.mockRestore(); prepare.mockRestore(); await workspace.cleanup() }
+  })
+  it.each(["success", "unavailable"])("rejects obsolete SDK %s after configuration changes", async (outcome) => {
+    const workspace = await temporaryWorkspace()
+    const client = vi.spyOn(lspSearch, "runOpenCodeLspClient")
+    const bridge = vi.spyOn(lspSearch, "runOpenCodeLspBridge").mockResolvedValue("obsolete fallback")
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path, client: {} } as never, { lspAutoSetup: false })
+      client.mockImplementation(async () => {
+        await hooks.config!({ lsp: false } as never)
+        if (outcome === "unavailable") throw new PatchlineError("CAPABILITY_UNAVAILABLE", "SDK unavailable")
+        return "obsolete symbols"
+      })
+      const context = { sessionID: "s", worktree: workspace.path, directory: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) } as never
+      await expect(hooks.tool!.patchline_lsp!.execute({ operation: "workspaceSymbol", query: "needle" }, context)).rejects.toThrow(/configuration.*changed/i)
+      expect(client).toHaveBeenCalledOnce()
+      expect(bridge).not.toHaveBeenCalled()
+    } finally { bridge.mockRestore(); client.mockRestore(); await workspace.cleanup() }
+  })
+  it("does not start LSP after configuration changes during permission", async () => {
+    const workspace = await temporaryWorkspace()
+    const bridge = vi.spyOn(lspSearch, "runOpenCodeLspBridge").mockResolvedValue("obsolete")
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { lspAutoSetup: false })
+      const captured = hooks.tool!.patchline_lsp!
+      const context = { sessionID: "s", worktree: workspace.path, directory: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: async () => { await hooks.config!({ lsp: false } as never) } } as never
+      await expect(captured.execute({ operation: "diagnostics", filePath: "index.ts" }, context)).rejects.toThrow(/configuration.*changed|disabled/i)
+      expect(bridge).not.toHaveBeenCalled()
+    } finally { bridge.mockRestore(); await workspace.cleanup() }
+  })
+  it("revokes compact capabilities after the host reports LSP unavailable", async () => {
+    const workspace = await temporaryWorkspace()
+    const prepare = vi.spyOn(lspManager, "configureProjectLsp").mockResolvedValue([{ root: workspace.path, server: "typescript", language: "typescript", sample: "index.ts", evidence: [], status: "configured", verified: true, detail: "verified", capabilities: { workspaceSymbolProvider: true } }])
+    const client = vi.spyOn(lspSearch, "runOpenCodeLspClient").mockRejectedValue(new PatchlineError("CAPABILITY_UNAVAILABLE", "No connected server"))
+    const bridge = vi.spyOn(lspSearch, "runOpenCodeLspBridge").mockRejectedValue(new PatchlineError("CAPABILITY_UNAVAILABLE", "No connected server"))
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path, client: {} } as never, { toolProfile: "compact" })
+      await hooks.config!({ lsp: true } as never)
+      const captured = hooks.tool!.patchline_lsp!
+      const context = { sessionID: "s", worktree: workspace.path, directory: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) } as never
+      await expect(captured.execute({ operation: "workspaceSymbol", query: "needle" }, context)).rejects.toThrow(/connected/)
+      expect(hooks.tool).not.toHaveProperty("patchline_lsp")
+      await expect(captured.execute({ operation: "workspaceSymbol", query: "needle" }, context)).rejects.toThrow(/capability/i)
+      expect(client).toHaveBeenCalledOnce()
+    } finally { bridge.mockRestore(); client.mockRestore(); prepare.mockRestore(); await workspace.cleanup() }
+  })
+  it.each(["extended", "compact"])("does not prepare or scan explicitly disabled LSP in %s", async (toolProfile) => {
+    const workspace = await temporaryWorkspace()
+    const prepare = vi.spyOn(lspManager, "configureProjectLsp").mockResolvedValue([])
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { toolProfile })
+      await hooks.config!({ lsp: false } as never)
+      expect(prepare).not.toHaveBeenCalled()
+      expect(hooks.tool).not.toHaveProperty("patchline_lsp")
+      expect(hooks.tool).not.toHaveProperty("patchline_lsp_status")
+    } finally { prepare.mockRestore(); await workspace.cleanup() }
+  })
+  it.each(["fallback", "diagnostics"])("preserves verified compact capability after %s", async (kind) => {
+    const workspace = await temporaryWorkspace()
+    const prepare = vi.spyOn(lspManager, "configureProjectLsp").mockResolvedValue([{ root: workspace.path, server: "typescript", language: "typescript", sample: "index.ts", evidence: [], status: "configured", verified: true, detail: "verified", capabilities: { workspaceSymbolProvider: true } }])
+    const client = vi.spyOn(lspSearch, "runOpenCodeLspClient").mockRejectedValue(new PatchlineError("CAPABILITY_UNAVAILABLE", "SDK unavailable"))
+    const bridge = vi.spyOn(lspSearch, "runOpenCodeLspBridge")
+    if (kind === "fallback") bridge.mockResolvedValue("symbol found")
+    else bridge.mockRejectedValue(new PatchlineError("DIAGNOSTICS_UNAVAILABLE", "Malformed response"))
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path, client: {} } as never, { toolProfile: "compact" })
+      await hooks.config!({ lsp: true } as never)
+      const captured = hooks.tool!.patchline_lsp!
+      const context = { sessionID: "s", worktree: workspace.path, directory: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) } as never
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const pending = captured.execute({ operation: "workspaceSymbol", query: "needle" }, context)
+        if (kind === "fallback") expect(await pending).toMatchObject({ output: "symbol found" })
+        else await expect(pending).rejects.toThrow(/Malformed response/)
+      }
+      expect(hooks.tool!.patchline_lsp).toBe(captured)
+      expect(client).toHaveBeenCalledTimes(2)
+      expect(bridge).toHaveBeenCalledTimes(2)
+    } finally { bridge.mockRestore(); client.mockRestore(); prepare.mockRestore(); await workspace.cleanup() }
+  })
+  it.each(["small", "large", "truncated", "aggregate", "extended", "validation"])("includes a bounded existing diff in compact batch output (%s)", async (kind) => {
+    const workspace = await temporaryWorkspace()
+    const batch = vi.spyOn(EditService.prototype, "editBatch")
+    try {
+      const diff = kind === "large" ? "x".repeat(2_001) : "@@ -1 +1 @@\n-before\n+after\n"
+      batch.mockResolvedValue(Array.from({ length: kind === "aggregate" ? 400 : 1 }, () => ({ path: "a.ts", snapshot: "next", added: 1, deleted: 1, bytesWritten: 1, warnings: [], diff, diffTruncated: kind === "truncated", output: "a.ts: +1 -1\nsnapshot: next" })))
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { toolProfile: kind === "extended" ? "extended" : "compact", lspAutoSetup: false, ...(kind === "validation" ? { validationCommands: { default: `"${process.execPath}" -e "process.exit(1)"` } } : {}) })
+      const context = { sessionID: "s", worktree: workspace.path, directory: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) } as never
+      const result = await hooks.tool!.patchline_edit_batch!.execute({ edits: [{ filePath: "a.ts", snapshot: "observed", oldString: "before", newString: "after" }] }, context)
+      const output = typeof result === "string" ? result : result.output
+      expect(output).toContain("snapshot: next")
+      if (kind === "extended") expect(output).toBe("a.ts: +1 -1\nsnapshot: next")
+      else if (kind !== "small") {
+        expect(output).toContain("Diff preview omitted")
+        expect(output).not.toContain("x".repeat(100))
+        if (kind === "aggregate" || kind === "validation") expect(output).not.toContain("@@")
+        if (kind === "validation") expect(output).toMatch(/^Validation failed:/)
+      } else expect(output).toContain(diff)
+    } finally { batch.mockRestore(); await workspace.cleanup() }
+  })
+  it("returns the actual compact edit preview without granting observation of its context", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "a.ts"), "const hidden = 0\nconst value = 1\n")
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { toolProfile: "compact", lspAutoSetup: false })
+      const context = { sessionID: "s", worktree: workspace.path, directory: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) } as never
+      const observed = await hooks.tool!.read!.execute({ filePath: "a.ts", offset: 2, limit: 1 }, context)
+      const snapshot = typeof observed === "string" ? "" : observed.metadata?.snapshot
+      const result = await hooks.tool!.edit!.execute({ filePath: "a.ts", snapshot, oldString: "const value = 1", newString: "const value = 2" }, context)
+      expect(typeof result).not.toBe("string")
+      if (typeof result === "string") throw new Error("Expected metadata")
+      expect(result.output).toContain("-const value = 1")
+      expect(result.output).toContain("+const value = 2")
+      await expect(hooks.tool!.edit!.execute({ filePath: "a.ts", snapshot: result.metadata?.snapshot, oldString: "const hidden = 0", newString: "const hidden = 3" }, context)).rejects.toThrow()
+      expect(await readFile(path.join(workspace.path, "a.ts"), "utf8")).toBe("const hidden = 0\nconst value = 2\n")
+    } finally { await workspace.cleanup() }
+  })
+  it.each(["extended", "compact"])("guides %s reads by anchor and routes patches by change scope", async (toolProfile) => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { toolProfile })
+      const output = { system: [] as string[] }
+      await hooks["experimental.chat.system.transform"]!({} as never, output)
+      const policy = output.system.join("\n")
+      expect(policy).toContain("read with anchor")
+      expect(policy).toContain("File size alone does not select the editing tool")
+      expect(policy).not.toContain("for large files, large changes")
+    } finally { await workspace.cleanup() }
+  })
+  it.each(["outside.ts", "nested-other/outside.ts"])("rejects compact document symbols outside the verified server project: %s", async (filePath) => {
+    const workspace = await temporaryWorkspace()
+    const prepare = vi.spyOn(lspManager, "configureProjectLsp")
+    const bridge = vi.spyOn(lspSearch, "runOpenCodeLspBridge")
+    try {
+      await mkdir(path.join(workspace.path, "nested"))
+      await mkdir(path.join(workspace.path, "nested-other"))
+      await writeFile(path.join(workspace.path, filePath), "const outside = 1\n")
+      prepare.mockResolvedValue([{ root: path.join(workspace.path, "nested"), server: "typescript", language: "typescript", sample: "index.ts", evidence: [], status: "configured", verified: true, detail: "verified", capabilities: { documentSymbolProvider: true } }])
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { toolProfile: "compact" })
+      await hooks.config!({ lsp: true } as never)
+      const context = { sessionID: "s", worktree: workspace.path, directory: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) } as never
+      await expect(hooks.tool!.patchline_lsp!.execute({ operation: "documentSymbol", filePath }, context)).rejects.toThrow(/verified.*project/i)
+      expect(bridge).not.toHaveBeenCalled()
+    } finally { bridge.mockRestore(); prepare.mockRestore(); await workspace.cleanup() }
+  })
+  it("allows compact document symbols inside the verified server project", async () => {
+    const workspace = await temporaryWorkspace()
+    const prepare = vi.spyOn(lspManager, "configureProjectLsp")
+    const bridge = vi.spyOn(lspSearch, "runOpenCodeLspBridge").mockResolvedValue("symbols")
+    try {
+      await mkdir(path.join(workspace.path, "nested"))
+      await writeFile(path.join(workspace.path, "nested/index.ts"), "const inside = 1\n")
+      prepare.mockResolvedValue([{ root: path.join(workspace.path, "nested"), server: "typescript", language: "typescript", sample: "index.ts", evidence: [], status: "configured", verified: true, detail: "verified", capabilities: { documentSymbolProvider: true } }])
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { toolProfile: "compact" })
+      await hooks.config!({ lsp: true } as never)
+      const context = { sessionID: "s", worktree: workspace.path, directory: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) } as never
+      await expect(hooks.tool!.patchline_lsp!.execute({ operation: "documentSymbol", filePath: "nested/index.ts" }, context)).resolves.toMatchObject({ output: "symbols" })
+      expect(bridge).toHaveBeenCalledOnce()
+    } finally { bridge.mockRestore(); prepare.mockRestore(); await workspace.cleanup() }
+  })
+  it.each(["extended", "compact"])("preserves failed validation in truncated %s batch output", async (toolProfile) => {
+    const workspace = await temporaryWorkspace()
+    const batch = vi.spyOn(EditService.prototype, "editBatch")
+    try {
+      batch.mockResolvedValue([{ path: "a.ts", snapshot: "next", added: 1, deleted: 1, bytesWritten: 1, warnings: [], diff: "", diffTruncated: false, output: "x".repeat(25_000) }])
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { toolProfile, validationCommands: { default: `"${process.execPath}" -e "process.exit(1)"` } })
+      const context = { sessionID: "s", worktree: workspace.path, directory: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask: vi.fn(async () => undefined) } as never
+      const result = await hooks.tool!.patchline_edit_batch!.execute({ edits: [{ filePath: "a.ts", snapshot: "observed", oldString: "before", newString: "after" }] }, context)
+      const output = typeof result === "string" ? result : result.output
+      expect(output.length).toBeLessThanOrEqual(20_000)
+      expect(output).toContain("Validation failed")
+      expect(output).toContain("Output truncated")
+    } finally { batch.mockRestore(); await workspace.cleanup() }
+  })
+  it("offers only exact edit arguments in compact and rejects hidden Hashline before permissions", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { toolProfile: "compact", lspAutoSetup: false })
+      const edit = hooks.tool!.edit!
+      expect(edit.args).not.toHaveProperty("hashlinePatch")
+      expect(edit.description).not.toContain("Hashline")
+      const ask = vi.fn()
+      const context = { sessionID: "s", worktree: workspace.path, directory: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask } as never
+      await expect(edit.execute({ filePath: "index.ts", snapshot: "invented", hashlinePatch: "PUT 1:\n+x" }, context)).rejects.toThrow(/compact.*exact/i)
+      expect(ask).not.toHaveBeenCalled()
+      const extended = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { lspAutoSetup: false })
+      expect(extended.tool!.edit!.args).toHaveProperty("hashlinePatch")
+    } finally { await workspace.cleanup() }
+  })
+  it("does not restore compact LSP from preparation that finishes after LSP is disabled", async () => {
+    const workspace = await temporaryWorkspace()
+    const prepare = vi.spyOn(lspManager, "configureProjectLsp")
+    try {
+      let finish!: (reports: Awaited<ReturnType<typeof lspManager.configureProjectLsp>>) => void
+      prepare.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { toolProfile: "compact" })
+      const pending = hooks.config!({ lsp: true } as never)
+      expect(hooks.tool).not.toHaveProperty("patchline_lsp")
+      prepare.mockResolvedValue([])
+      await hooks.config!({ lsp: false } as never)
+      finish([{ root: workspace.path, server: "typescript", language: "typescript", sample: "index.ts", evidence: [], status: "configured", verified: true, detail: "verified", capabilities: { documentSymbolProvider: true } }])
+      await pending
+      expect(hooks.tool).not.toHaveProperty("patchline_lsp")
+    } finally { prepare.mockRestore(); await workspace.cleanup() }
+  })
+  it("rejects previously registered LSP calls after configuration disables LSP", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const symbols = vi.fn().mockResolvedValue([])
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path, client: { find: { symbols } } } as never, { lspAutoSetup: false })
+      const lsp = hooks.tool!.patchline_lsp!
+      const status = hooks.tool!.patchline_lsp_status!
+      await hooks.config!({ lsp: false } as never)
+      const ask = vi.fn()
+      const context = { sessionID: "s", worktree: workspace.path, directory: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask } as never
+      await expect(lsp.execute({ operation: "workspaceSymbol", query: "needle" }, context)).rejects.toThrow(/disabled/)
+      await expect(status.execute({}, context)).rejects.toThrow(/disabled/)
+      expect(symbols).not.toHaveBeenCalled()
+      expect(ask).not.toHaveBeenCalled()
+    } finally { await workspace.cleanup() }
+  })
+  it("offers compact edits without duplicate routers or policy references to hidden tools", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { toolProfile: "compact" })
+      expect(Object.keys(hooks.tool!).sort()).toEqual(["read", "edit", "write", "patchline_edit_batch", "patchline_grep", "ast_search", "patchline_diagnostics", "patchline_lsp"].sort())
+      const output = { system: [] as string[] }
+      await hooks["experimental.chat.system.transform"]!({} as never, output)
+      expect(output.system.join("\n")).not.toMatch(/patchline_execute|patchline_apply_patch|patchline_route_search/)
+      expect(output.system.join("\n")).toContain("patchline_edit_batch")
+      await hooks.config!({ lsp: false } as never)
+      expect(hooks.tool).not.toHaveProperty("patchline_lsp")
+      await hooks.config!({ lsp: true } as never)
+      expect(hooks.tool).not.toHaveProperty("patchline_lsp")
+      expect(hooks.tool).not.toHaveProperty("patchline_lsp_status")
+    } finally { await workspace.cleanup() }
+  })
+  it("offers compact LSP only after a verified symbol capability and invalidates it on config reload", async () => {
+    const workspace = await temporaryWorkspace()
+    const prepare = vi.spyOn(lspManager, "configureProjectLsp")
+    try {
+      prepare.mockResolvedValue([{ root: workspace.path, server: "typescript", language: "typescript", sample: "index.ts", evidence: [], status: "configured", verified: true, detail: "verified", capabilities: { documentSymbolProvider: true } }])
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { toolProfile: "compact" })
+      await hooks.config!({ lsp: true } as never)
+      expect(hooks.tool).toHaveProperty("patchline_lsp")
+      expect((hooks.tool!.patchline_lsp!.args.operation as unknown as { options: string[] }).options).toEqual(["documentSymbol"])
+      const captured = hooks.tool!.patchline_lsp!
+      prepare.mockResolvedValue([{ root: workspace.path, server: "typescript", language: "typescript", sample: "index.ts", evidence: [], status: "missing", verified: false, detail: "missing" }])
+      await hooks.config!({ lsp: true } as never)
+      expect(hooks.tool).not.toHaveProperty("patchline_lsp")
+      const ask = vi.fn()
+      const context = { sessionID: "s", worktree: workspace.path, directory: workspace.path, abort: new AbortController().signal, metadata: vi.fn(), ask } as never
+      await expect(captured.execute({ operation: "documentSymbol", filePath: "index.ts" }, context)).rejects.toThrow(/capability/i)
+      expect(ask).not.toHaveBeenCalled()
+      prepare.mockResolvedValue([{ root: workspace.path, server: "typescript", language: "typescript", sample: "index.ts", evidence: [], status: "configured", verified: true, detail: "verified", capabilities: { documentSymbolProvider: false, workspaceSymbolProvider: false } }])
+      await hooks.config!({ lsp: true } as never)
+      expect(hooks.tool).not.toHaveProperty("patchline_lsp")
+      prepare.mockRejectedValue(new Error("preparation failed"))
+      await hooks.config!({ lsp: true } as never)
+      expect(hooks.tool).not.toHaveProperty("patchline_lsp")
+      prepare.mockResolvedValue([{ root: workspace.path, server: "typescript", language: "typescript", sample: "index.ts", evidence: [], status: "configured", verified: true, detail: "verified", capabilities: { workspaceSymbolProvider: {} } }])
+      await hooks.config!({ lsp: true } as never)
+      expect(hooks.tool).toHaveProperty("patchline_lsp")
+      expect((hooks.tool!.patchline_lsp!.args.operation as unknown as { options: string[] }).options).toEqual(["workspaceSymbol"])
+      await expect(captured.execute({ operation: "documentSymbol", filePath: "index.ts" }, context)).rejects.toThrow(/capability/i)
+      await expect(captured.execute({ operation: "diagnostics", filePath: "index.ts" }, context)).rejects.toThrow(/capability/i)
+      expect(ask).not.toHaveBeenCalled()
+    } finally { prepare.mockRestore(); await workspace.cleanup() }
+  })
+
+  it("refreshes LSP status without installing after the startup toolchain disappears", async () => {
+    const workspace = await temporaryWorkspace()
+    const configure = vi.spyOn(lspManager, "configureProjectLsp")
+    const prepare = vi.spyOn(lspManager, "prepareProjectLsp")
+    try {
+      const report = { root: workspace.path, server: "typescript", language: "typescript", sample: "index.ts", evidence: [], status: "configured" as const, verified: true, detail: "verified", capabilities: { documentSymbolProvider: true } }
+      configure.mockResolvedValue([report])
+      prepare.mockResolvedValue([{ ...report, status: "missing", verified: false, detail: "Server disappeared", capabilities: {} }])
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, {})
+      await hooks.config!({ lsp: true } as never)
+      const result = await hooks.tool!.patchline_lsp_status!.execute({}, { worktree: workspace.path, abort: new AbortController().signal, ask: async () => {} } as never)
+      expect(result).toContain("missing")
+      expect(result).not.toContain('"verified": true')
+      expect(prepare).toHaveBeenCalledWith(workspace.path, expect.objectContaining({ install: false }))
+    } finally { configure.mockRestore(); prepare.mockRestore(); await workspace.cleanup() }
+  })
+
+  it("does not restore LSP tools when status refresh finishes after disable", async () => {
+    const workspace = await temporaryWorkspace()
+    const configure = vi.spyOn(lspManager, "configureProjectLsp").mockResolvedValue([])
+    const prepare = vi.spyOn(lspManager, "prepareProjectLsp")
+    try {
+      let finish!: (reports: Awaited<ReturnType<typeof lspManager.prepareProjectLsp>>) => void
+      let started!: () => void
+      const ready = new Promise<void>((resolve) => { started = resolve })
+      prepare.mockImplementation(() => { started(); return new Promise((resolve) => { finish = resolve }) })
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, {})
+      const status = hooks.tool!.patchline_lsp_status!
+      await hooks.config!({ lsp: true } as never)
+      const pending = status.execute({}, { worktree: workspace.path, abort: new AbortController().signal, ask: async () => {} } as never)
+      await ready
+      await hooks.config!({ lsp: false } as never)
+      finish([{ root: workspace.path, server: "typescript", language: "typescript", sample: "index.ts", evidence: [], status: "configured", verified: true, detail: "verified", capabilities: { documentSymbolProvider: true } }])
+      await expect(pending).rejects.toThrow(/configuration.*changed|superseded/i)
+      expect(hooks.tool).not.toHaveProperty("patchline_lsp")
+    } finally { configure.mockRestore(); prepare.mockRestore(); await workspace.cleanup() }
+  })
+
+  it("rejects an older status refresh when a newer refresh has completed", async () => {
+    const workspace = await temporaryWorkspace()
+    const prepare = vi.spyOn(lspManager, "prepareProjectLsp")
+    try {
+      let finish!: (reports: Awaited<ReturnType<typeof lspManager.prepareProjectLsp>>) => void
+      let started!: () => void
+      const ready = new Promise<void>((resolve) => { started = resolve })
+      prepare.mockImplementationOnce(() => { started(); return new Promise((resolve) => { finish = resolve }) }).mockResolvedValue([])
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { lspAutoSetup: false })
+      const status = hooks.tool!.patchline_lsp_status!
+      const context = { worktree: workspace.path, abort: new AbortController().signal, ask: async () => {} } as never
+      const older = status.execute({}, context)
+      await ready
+      expect(await status.execute({}, context)).toContain('"projects": []')
+      finish([])
+      await expect(older).rejects.toThrow(/superseded/i)
+    } finally { prepare.mockRestore(); await workspace.cleanup() }
+  })
+  it("omits LSP tool schemas when LSP is explicitly disabled", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never)
+      await hooks.config!({ lsp: false } as never)
+      expect(hooks.tool).not.toHaveProperty("patchline_lsp")
+      expect(hooks.tool).not.toHaveProperty("patchline_lsp_status")
+      expect(hooks.tool).toHaveProperty("patchline_grep")
+      expect(hooks.tool).toHaveProperty("ast_search")
+      await hooks.config!({ lsp: true } as never)
+      expect(hooks.tool).toHaveProperty("patchline_lsp")
+      expect(hooks.tool).toHaveProperty("patchline_lsp_status")
+    } finally { await workspace.cleanup() }
+  })
   it("provides one provider-neutral policy with concrete tool-call guidance", async () => {
     const workspace = await temporaryWorkspace()
     try {
@@ -19,6 +389,8 @@ describe("OpenCode plugin", () => {
       expect(output.system[1]).toContain("Omit unused optional fields")
       expect(output.system[1]).toContain("*** Begin Patch")
       expect(output.system[1]).toContain("never invent a snapshot")
+      expect(output.system[1]).toContain("When the exact path is known, read that file directly")
+      expect(output.system[1]).toContain("Locate only when the path or target is unknown")
     } finally {
       await workspace.cleanup()
     }
@@ -869,7 +1241,7 @@ describe("OpenCode plugin", () => {
     }
   })
 
-  it.each(["write", "classic", "hashline", "batch"])("runs configured validation after %s mutations", async (kind) => {
+  it.each(["write", "classic", "hashline", "batch", "adaptive", "adaptiveHashline"])("runs configured validation after %s mutations", async (kind) => {
     const workspace = await temporaryWorkspace()
     try {
       const hooks = await PatchlinePlugin({ directory: workspace.path, worktree: workspace.path } as never, { validationCommands: { default: `"${process.execPath}" -e "process.exit(1)"` } })
@@ -878,15 +1250,22 @@ describe("OpenCode plugin", () => {
       if (kind === "write") result = await hooks.tool!.write!.execute({ filePath: "a.ts", content: "before\n" }, context)
       else if (kind === "classic") result = await hooks.tool!.patchline_apply_patch!.execute({ patchText: "*** Begin Patch\n*** Add File: a.ts\n+before\n*** End Patch" }, context)
       else {
-        await writeFile(path.join(workspace.path, "a.ts"), "before\n")
+        await writeFile(path.join(workspace.path, "a.ts"), "before\n// preserved\n// preserved too\n// untouched\n")
         const read = await hooks.tool!.read!.execute({ filePath: "a.ts" }, context)
         const snapshot = typeof read === "string" ? "" : String(read.metadata?.snapshot)
         const tag = typeof read === "string" ? "" : String(read.metadata?.tag)
-        result = kind === "hashline"
+        result = kind === "adaptiveHashline"
+          ? await hooks.tool!.patchline_execute!.execute({ strategy: "hashline", operations: [{ filePath: "a.ts", snapshot, hashlinePatch: `[a.ts#${tag}]\nPUT 1.=1:\n+after` }] }, context)
+          : kind === "adaptive"
+          ? await hooks.tool!.patchline_execute!.execute({ strategy: "exact", operations: [{ filePath: "a.ts", snapshot, oldString: "before", newString: "after" }] }, context)
+          : kind === "hashline"
           ? await hooks.tool!.patchline_apply_patch!.execute({ patchText: `[a.ts#${tag}]\nPUT 1.=1:\n+after` }, context)
           : await hooks.tool!.patchline_edit_batch!.execute({ edits: [{ filePath: "a.ts", snapshot, oldString: "before", newString: "after" }] }, context)
       }
       expect(result).toMatchObject({ metadata: { status: "applied", writes: 1, validation: "failed" } })
+      expect(typeof result === "string" ? result : result.output).toContain("Validation failed")
+      expect(typeof result === "string" ? result : result.output).toContain("exit 1")
+      expect(typeof result === "string" ? result : result.output).toContain("process.exit(1)")
       expect(context.ask).toHaveBeenCalledWith(expect.objectContaining({ permission: "bash" }))
     } finally { await workspace.cleanup() }
   })

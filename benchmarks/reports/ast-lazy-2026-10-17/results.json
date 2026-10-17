@@ -1,0 +1,16 @@
+{
+  "scope": "Current dist only; five fresh Node processes, OS caches uncontrolled; one first and five reused-module AST calls per process. No before baseline or provider-token evidence.",
+  "node": "22.22.2",
+  "fixture": "export function gateExample(value: number): string {\n  return value\n}\n",
+  "pattern": "export function $A($$$B): $C { $$$D }",
+  "allCallsMatchedExactlyOneNode": true,
+  "allProcessesNativeLoadedAfterImport": false,
+  "allProcessesNativeLoadedAfterSearch": true,
+  "samples": [
+    {"importMs":20.7814,"firstSearchMs":16.4825,"warmSearchMs":[2.8628,3.0577,2.8345,2.0950,1.9589]},
+    {"importMs":18.6903,"firstSearchMs":15.7859,"warmSearchMs":[2.5846,2.7164,3.5037,3.2347,2.5554]},
+    {"importMs":21.2889,"firstSearchMs":17.8522,"warmSearchMs":[2.7899,3.8380,2.5715,3.1796,2.4647]},
+    {"importMs":19.8255,"firstSearchMs":16.5751,"warmSearchMs":[2.3475,2.9024,2.0034,2.4298,2.1410]},
+    {"importMs":19.4338,"firstSearchMs":16.0823,"warmSearchMs":[2.6616,2.5525,2.5159,2.7330,2.3682]}
+  ]
+}

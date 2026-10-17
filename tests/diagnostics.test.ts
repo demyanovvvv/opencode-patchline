@@ -25,6 +25,7 @@ describe("diagnostic commands", () => {
     const result = await runDiagnosticCommand(command, workspace, 10_000, 30)
 
     expect(result.ok).toBe(true)
+    expect(result.timedOut).toBe(false)
     expect(result.output.length).toBeLessThanOrEqual(20_000)
     expect(result.output).toContain("diagnostics truncated")
   })
@@ -49,6 +50,8 @@ describe("diagnostic commands", () => {
 
     expect(Date.now() - startedAt).toBeLessThan(2_000)
     expect(result.ok).toBe(false)
+    expect(result.timedOut).toBe(true)
+    expect(result.output).toContain("Diagnostics timed out after 100 ms.")
   })
 
   it("aborts promptly and terminates descendants when the tool context is cancelled", async () => {

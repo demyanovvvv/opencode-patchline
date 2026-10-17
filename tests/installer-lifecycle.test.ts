@@ -14,6 +14,20 @@ async function workspace() {
 }
 
 describe("installer lifecycle", () => {
+  it("preserves compact profile options when replacing and deduplicating a pinned plugin", async () => {
+    const root = await workspace()
+    const file = path.join(root, "opencode.json")
+    const options = { toolProfile: "compact", validation: "none" }
+    await writeFile(file, JSON.stringify({ plugin: [["opencode-patchline@1.0.0", options], "other", "opencode-patchline"] }))
+    expect(await installPatchline({
+      cwd: root, yes: true, noLsp: true, noHost: true, stdout: () => undefined,
+      hasCommand: async () => true, runCommand: async () => 0,
+    })).toBe(0)
+    expect(parse(await readFile(file, "utf8")).plugin).toEqual([["opencode-patchline", options], "other"])
+    expect(await uninstallPatchline({ cwd: root, yes: true, stdout: () => undefined, runCommand: async () => 0 })).toBe(0)
+    expect(parse(await readFile(file, "utf8")).plugin).toEqual(["other"])
+  })
+
   it("forces replacement when installing over a pinned version", async () => {
     const root = await workspace()
     await writeFile(path.join(root, "opencode.json"), '{"plugin":["opencode-patchline@1.0.0","other"]}')

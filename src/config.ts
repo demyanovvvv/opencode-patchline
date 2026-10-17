@@ -3,6 +3,7 @@ import { z } from "zod"
 const configSchema = z
   .object({
     mode: z.enum(["precision", "compatibility", "disabled"]).default("precision"),
+    toolProfile: z.enum(["extended", "compact"]).default("extended"),
     maxInitialReadLines: z.number().int().min(1).max(2_000).default(120),
     maxSearchResults: z.number().int().min(1).max(500).default(30),
     maxDiagnostics: z.number().int().min(1).max(500).default(30),

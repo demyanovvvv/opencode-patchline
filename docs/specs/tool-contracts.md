@@ -6,7 +6,17 @@ Status: Accepted
 state. Its conversation renderer is registered alongside every other server
 tool; prepared/configured/installed is not a verified LSP connection.
 
-`read` accepts `filePath`, `offset`, and `limit`. Supplied `offset` and `limit`
+`read` accepts `filePath`, `offset`, `anchor`, and `limit`. Optional `anchor` is
+nonempty literal text matched against the LF-normalized file, not a regex. It
+must occur exactly once (including overlapping occurrences); the returned page
+starts at the line containing that occurrence. Missing/ambiguous anchors,
+directory anchors, and combining `anchor` with `offset` are `INVALID_ARGUMENT`.
+Missing/ambiguous match errors include up to eight candidate line numbers and
+`details.truncated`; repeated occurrences on one line remain distinct matches.
+Only nine occurrences are inspected to determine truncation. Candidate hints
+do not create a snapshot or mark any source lines as observed.
+Existing size/output limits and observed-range snapshot guards apply equally
+to anchored reads. Supplied `offset` and `limit`
 values must be positive integers; invalid direct service calls are rejected
 instead of silently clamped. `maxInitialReadLines` controls the default file page
 and directory page cap. Explicit file limits may request up to 2,000 lines.
@@ -16,7 +26,12 @@ Empty files report zero source lines. File pages are bounded to 20,000 character
 and include only complete source lines. Responses expose `requestedLimit`,
 `truncated`, and `nextOffset`; only rendered lines become observed anchors.
 `edit` accepts `filePath`, `snapshot`, and either
-`oldString`/`newString` or a Hashline patch. `write` accepts `filePath` and
+exact strings or a Hashline patch in the extended profile. In compact precision,
+only exact-string arguments are exposed; supplying `hashlinePatch` directly is
+`INVALID_ARGUMENT` before permissions or filesystem activity. Extended exact
+and Hashline semantics are unchanged.
+
+The exact-string form uses `oldString`/`newString`. `write` accepts `filePath` and
 `content`, creating only new files. `patchline_execute` accepts a list of
 snapshot-anchored operations and selects exact, Hashline, recoverable batch, or
 standard-tool fallback execution when `strategy` is `auto`. Precision mutations
@@ -44,6 +59,19 @@ recovery decisions. Mutation tools expose the same validation states:
 `not_configured`, `passed`, or `failed`; validation failure does not change an
 already-applied mutation into a zero-write result. Mutation cancellation is
 propagated from OpenCode and partial cancellation reports rollback details.
+
+Compact `edit` and `patchline_edit_batch` append an already-computed display
+diff to their human-readable summaries when it is complete and at most 2,000
+characters per file. Oversized or incomplete previews are omitted with an
+explicit notice rather than clipped inside a hunk. The aggregate response
+retains the 20,000-character output budget; validation failures precede summaries
+and previews. Previews are omitted altogether on failed validation or when their
+combined summaries and previews exceed 19,000 characters, reserving room for
+diagnostic status and preventing aggregate truncation inside a hunk.
+Display context does not grant observed-line edit rights and does
+not replace stale, identity, preservation or validation checks. Extended output
+is unchanged. This preview is a usability change, not evidence of fewer model
+reads or provider tokens.
 
 File reads reject files larger than 8 MiB before loading them and reject a
 requested range containing a line longer than 20,000 characters before creating

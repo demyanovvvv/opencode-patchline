@@ -1,0 +1,618 @@
+{
+  "schemaVersion": 1,
+  "stage": "offline-check",
+  "createdAt": "2026-10-16T23:39:13.334Z",
+  "model": "not selected (offline)",
+  "variant": null,
+  "environment": {},
+  "limits": {
+    "maxSessions": 6,
+    "steps": 16,
+    "timeoutMs": 180000
+  },
+  "runs": [],
+  "local": [
+    {
+      "name": "anchor-read-replay",
+      "passed": true,
+      "detail": "10,000-line fixture; byte-identical five-line pages; 20 paired warm samples with balanced alternating order; first read is process-local, not OS-cold; local calls/chars are not provider tokens",
+      "data": {
+        "grepRead": {
+          "firstReadMs": 24.521100000000047,
+          "warm": {
+            "count": 20,
+            "minMs": 6.239499999999907,
+            "meanMs": 7.85642499999999,
+            "p50Ms": 7.34839999999997,
+            "p95Ms": 9.580699999999979,
+            "p99Ms": 15.295099999999934,
+            "maxMs": 15.295099999999934
+          },
+          "toolCalls": 2,
+          "outputChars": 623
+        },
+        "anchor": {
+          "firstReadMs": 7.0692000000000235,
+          "warm": {
+            "count": 20,
+            "minMs": 3.5611999999999853,
+            "meanMs": 4.430255000000017,
+            "p50Ms": 4.50120000000004,
+            "p95Ms": 5.476600000000076,
+            "p99Ms": 6.232200000000034,
+            "maxMs": 6.232200000000034
+          },
+          "toolCalls": 1,
+          "outputChars": 419
+        },
+        "pairs": [
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 8.217300000000023,
+            "anchorMs": 4.9319000000000415
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 8.633199999999988,
+            "anchorMs": 4.729900000000043
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 8.394400000000019,
+            "anchorMs": 4.6054000000000315
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 8.377200000000016,
+            "anchorMs": 4.587499999999977
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 15.295099999999934,
+            "anchorMs": 4.50120000000004
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 8.555799999999977,
+            "anchorMs": 4.703199999999924
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 6.7444000000000415,
+            "anchorMs": 4.347700000000032
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 7.822599999999966,
+            "anchorMs": 3.9026999999999816
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 7.361600000000067,
+            "anchorMs": 3.8354000000000497
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 6.655699999999911,
+            "anchorMs": 6.232200000000034
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 6.419800000000009,
+            "anchorMs": 4.655399999999986
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 6.909400000000005,
+            "anchorMs": 4.643800000000056
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 6.918999999999983,
+            "anchorMs": 3.931600000000003
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 7.760400000000004,
+            "anchorMs": 3.7630000000000337
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 9.580699999999979,
+            "anchorMs": 3.999400000000037
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 6.270899999999983,
+            "anchorMs": 4.562000000000012
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 6.406700000000001,
+            "anchorMs": 3.84800000000007
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 7.34839999999997,
+            "anchorMs": 3.786999999999921
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 6.239499999999907,
+            "anchorMs": 3.5611999999999853
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 7.2164000000000215,
+            "anchorMs": 5.476600000000076
+          }
+        ],
+        "pageEqualityVerified": true
+      }
+    },
+    {
+      "name": "batch-edit-replay",
+      "passed": true,
+      "detail": "Two observed files; identical final bytes verified for sequential and atomic batch edits; setup/read excluded, local tool time only, not provider tokens or model quality.",
+      "data": {
+        "firstEdit": {
+          "sequential": 15.955500000000029,
+          "batch": 10.36869999999999
+        },
+        "sequential": {
+          "count": 20,
+          "minMs": 9.067700000000059,
+          "meanMs": 10.709224999999998,
+          "p50Ms": 10.63409999999999,
+          "p95Ms": 11.842100000000073,
+          "p99Ms": 11.914299999999912,
+          "maxMs": 11.914299999999912,
+          "toolCalls": 2
+        },
+        "batch": {
+          "count": 20,
+          "minMs": 9.061499999999796,
+          "meanMs": 10.944195000000002,
+          "p50Ms": 10.655899999999974,
+          "p95Ms": 13.674400000000105,
+          "p99Ms": 14.586099999999988,
+          "maxMs": 14.586099999999988,
+          "toolCalls": 1
+        },
+        "pairs": [
+          {
+            "order": [
+              "batch",
+              "sequential"
+            ],
+            "sequentialMs": 10.719600000000014,
+            "batchMs": 10.055500000000052
+          },
+          {
+            "order": [
+              "sequential",
+              "batch"
+            ],
+            "sequentialMs": 11.779499999999985,
+            "batchMs": 11.34050000000002
+          },
+          {
+            "order": [
+              "batch",
+              "sequential"
+            ],
+            "sequentialMs": 11.30860000000007,
+            "batchMs": 10.808400000000006
+          },
+          {
+            "order": [
+              "sequential",
+              "batch"
+            ],
+            "sequentialMs": 11.585199999999986,
+            "batchMs": 14.586099999999988
+          },
+          {
+            "order": [
+              "batch",
+              "sequential"
+            ],
+            "sequentialMs": 11.637499999999932,
+            "batchMs": 13.360500000000002
+          },
+          {
+            "order": [
+              "sequential",
+              "batch"
+            ],
+            "sequentialMs": 10.888000000000147,
+            "batchMs": 10.365300000000161
+          },
+          {
+            "order": [
+              "batch",
+              "sequential"
+            ],
+            "sequentialMs": 10.63409999999999,
+            "batchMs": 9.517699999999877
+          },
+          {
+            "order": [
+              "sequential",
+              "batch"
+            ],
+            "sequentialMs": 9.067700000000059,
+            "batchMs": 9.901299999999992
+          },
+          {
+            "order": [
+              "batch",
+              "sequential"
+            ],
+            "sequentialMs": 9.912399999999934,
+            "batchMs": 11.518399999999929
+          },
+          {
+            "order": [
+              "sequential",
+              "batch"
+            ],
+            "sequentialMs": 9.926999999999907,
+            "batchMs": 9.23960000000011
+          },
+          {
+            "order": [
+              "batch",
+              "sequential"
+            ],
+            "sequentialMs": 9.9221,
+            "batchMs": 9.061499999999796
+          },
+          {
+            "order": [
+              "sequential",
+              "batch"
+            ],
+            "sequentialMs": 10.978900000000067,
+            "batchMs": 10.234500000000025
+          },
+          {
+            "order": [
+              "batch",
+              "sequential"
+            ],
+            "sequentialMs": 9.241800000000012,
+            "batchMs": 9.79040000000009
+          },
+          {
+            "order": [
+              "sequential",
+              "batch"
+            ],
+            "sequentialMs": 10.086099999999988,
+            "batchMs": 10.655899999999974
+          },
+          {
+            "order": [
+              "batch",
+              "sequential"
+            ],
+            "sequentialMs": 10.240299999999934,
+            "batchMs": 9.932199999999966
+          },
+          {
+            "order": [
+              "sequential",
+              "batch"
+            ],
+            "sequentialMs": 10.432299999999941,
+            "batchMs": 11.124399999999923
+          },
+          {
+            "order": [
+              "batch",
+              "sequential"
+            ],
+            "sequentialMs": 11.842100000000073,
+            "batchMs": 11.442600000000084
+          },
+          {
+            "order": [
+              "sequential",
+              "batch"
+            ],
+            "sequentialMs": 10.52150000000006,
+            "batchMs": 11.472899999999981
+          },
+          {
+            "order": [
+              "batch",
+              "sequential"
+            ],
+            "sequentialMs": 11.914299999999912,
+            "batchMs": 13.674400000000105
+          },
+          {
+            "order": [
+              "sequential",
+              "batch"
+            ],
+            "sequentialMs": 11.545499999999947,
+            "batchMs": 10.801799999999957
+          }
+        ],
+        "finalBytesEqualityVerified": true
+      }
+    },
+    {
+      "name": "Patchline: BOM / CRLF / Unicode сохранены",
+      "passed": true,
+      "detail": "2 разогрева + 10 измерений; p50 6.56 мс, p95 8.48 мс. Это время инструментов, не модели.",
+      "data": {
+        "count": 10,
+        "minMs": 5.95939999999996,
+        "meanMs": 6.864889999999946,
+        "p50Ms": 6.559199999999919,
+        "p95Ms": 8.477399999999989,
+        "p99Ms": 8.477399999999989,
+        "maxMs": 8.477399999999989
+      }
+    },
+    {
+      "name": "Patchline: устаревшая правка отклонена",
+      "passed": true,
+      "detail": "Детерминированная внешняя запись после чтения; новое содержимое сохранено."
+    },
+    {
+      "name": "Patchline: конфликт batch не вызывает частичную запись",
+      "passed": true,
+      "detail": "Первый файл и внешнее изменение второго сохранены."
+    },
+    {
+      "name": "Эталон: Сохранение пользовательских правок",
+      "passed": true,
+      "detail": "1 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Точечное исправление",
+      "passed": true,
+      "detail": "3 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Одна строка в большом файле",
+      "passed": true,
+      "detail": "2 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Сигнатура и два вызова",
+      "passed": true,
+      "detail": "3 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Похожие фрагменты",
+      "passed": true,
+      "detail": "1 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Связанные правки",
+      "passed": true,
+      "detail": "1 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Валидация запроса",
+      "passed": true,
+      "detail": "2 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Ошибка типов",
+      "passed": true,
+      "detail": "2 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Поиск в монорепозитории",
+      "passed": true,
+      "detail": "1 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Расширение поведения",
+      "passed": true,
+      "detail": "1 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: CRLF и Unicode",
+      "passed": true,
+      "detail": "2 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Смешанные окончания строк",
+      "passed": true,
+      "detail": "1 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Согласованность двух модулей",
+      "passed": true,
+      "detail": "1 поведенческих проверок"
+    }
+  ],
+  "notes": [
+    "Сравнение полной интеграции: host tool-selection и plugin precision. Основные выводы относятся к интеграции целиком.",
+    "Время включает загрузку процесса и обмен с провайдером; проверочные тесты выполняются после замера.",
+    "Схемы инструментов и системная политика отличаются как часть вмешательства. Кеш провайдера не контролируется.",
+    "Тарифы модели не заданы; нулевая стоимость в OpenCode не интерпретируется как бесплатность."
+  ],
+  "toolProfile": "extended",
+  "toolProfiles": {
+    "extended": {
+      "tools": [
+        {
+          "name": "ast_search",
+          "schemaBytes": 413
+        },
+        {
+          "name": "edit",
+          "schemaBytes": 488
+        },
+        {
+          "name": "patchline_apply_patch",
+          "schemaBytes": 498
+        },
+        {
+          "name": "patchline_diagnostics",
+          "schemaBytes": 297
+        },
+        {
+          "name": "patchline_edit_batch",
+          "schemaBytes": 616
+        },
+        {
+          "name": "patchline_execute",
+          "schemaBytes": 736
+        },
+        {
+          "name": "patchline_grep",
+          "schemaBytes": 417
+        },
+        {
+          "name": "patchline_route_search",
+          "schemaBytes": 299
+        },
+        {
+          "name": "patchline_summary",
+          "schemaBytes": 251
+        },
+        {
+          "name": "read",
+          "schemaBytes": 485
+        },
+        {
+          "name": "write",
+          "schemaBytes": 338
+        }
+      ],
+      "schemaBytes": 4838,
+      "policyBytes": 2556
+    },
+    "compact": {
+      "tools": [
+        {
+          "name": "ast_search",
+          "schemaBytes": 413
+        },
+        {
+          "name": "edit",
+          "schemaBytes": 424
+        },
+        {
+          "name": "patchline_diagnostics",
+          "schemaBytes": 297
+        },
+        {
+          "name": "patchline_edit_batch",
+          "schemaBytes": 616
+        },
+        {
+          "name": "patchline_grep",
+          "schemaBytes": 417
+        },
+        {
+          "name": "read",
+          "schemaBytes": 485
+        },
+        {
+          "name": "write",
+          "schemaBytes": 338
+        }
+      ],
+      "schemaBytes": 2990,
+      "policyBytes": 2168
+    },
+    "scope": "plugin-only; lsp:false; JSON bytes, not provider tokens"
+  },
+  "integrity": {
+    "complete": false,
+    "missing": [],
+    "unexpected": [],
+    "duplicates": [],
+    "ungraded": [],
+    "unmeasured": [],
+    "invalidDurations": []
+  },
+  "analysis": {
+    "pairs": 0,
+    "bothSuccessful": 0,
+    "timeSaving": null,
+    "tokenSaving": null,
+    "stock": null,
+    "patchline": null,
+    "successfulPairs": {
+      "pairs": 0,
+      "bothSuccessful": 0,
+      "timeSaving": null,
+      "tokenSaving": null
+    },
+    "timeConfidence95": null,
+    "tokenConfidence95": null,
+    "confidenceMethod": "2000 task-cluster paired bootstrap samples, seed 127019; unavailable below 10 pairs / 3 tasks",
+    "fullProjection": null
+  }
+}

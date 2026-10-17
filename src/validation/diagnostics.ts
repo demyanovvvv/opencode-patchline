@@ -3,6 +3,7 @@ import { PatchlineError } from "../errors.js"
 
 export type DiagnosticsResult = {
   ok: boolean
+  timedOut: boolean
   command?: string | undefined
   output: string
   exitCode?: number | undefined
@@ -66,9 +67,9 @@ export async function runDiagnosticCommand(command: string, worktree: string, ti
       const lines = output.split(/\r?\n/)
       const linesTruncated = lines.length > maxLines
       const bounded = linesTruncated ? lines.slice(0, maxLines).join("\n") : output
-      const suffix = outputTruncated || linesTruncated ? "\n... diagnostics truncated" : ""
+      const suffix = `${outputTruncated || linesTruncated ? "\n... diagnostics truncated" : ""}${timedOut ? `\nDiagnostics timed out after ${timeoutMs} ms.` : ""}`
       const contentLimit = MAX_OUTPUT_CHARS - suffix.length
-      resolve({ ok: !timedOut && code === 0, command, output: `${bounded.slice(0, contentLimit)}${suffix}`.trim(), exitCode: code })
+      resolve({ ok: !timedOut && code === 0, timedOut, command, output: `${bounded.slice(0, contentLimit)}${suffix}`.trim(), exitCode: code })
     }
     const stop = (reason: "abort" | "timeout"): void => {
       if (settled || timedOut || aborted) return

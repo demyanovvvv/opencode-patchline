@@ -4,6 +4,7 @@ coverage/
 *.tgz
 benchmarks/reports/latest.json
 benchmarks/reports/latest.md
+benchmarks/reports/comparison*/
 .opencode-host/
 .opencode-patchline-state.json
 .opencode/.opencode-patchline-state.json

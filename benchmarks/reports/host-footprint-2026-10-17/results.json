@@ -1,0 +1,10 @@
+{
+  "scope": "Installed host experimental/tool endpoint; lsp:false; openai/gpt-4.1 schema selector only; no model calls. Registry JSON bytes, not final provider request or tokens.",
+  "stockBinary": "temporary opencode-windows-x64 stock runtime",
+  "patchlineBinary": "installed integrated 1.19.0+patchline.1.4.0",
+  "results": [
+    {"profile":"stock","count":12,"schemaBytes":22977,"ids":["invalid","question","bash","read","glob","grep","edit","write","task","webfetch","todowrite","skill"]},
+    {"profile":"extended","count":24,"schemaBytes":29580,"ids":["invalid","question","bash","read","glob","grep","edit","write","task","webfetch","todowrite","skill","apply_patch","patchline_execute","read","edit","write","patchline_apply_patch","patchline_grep","ast_search","patchline_route_search","patchline_edit_batch","patchline_diagnostics","patchline_summary"]},
+    {"profile":"compact","count":20,"schemaBytes":27820,"ids":["invalid","question","bash","read","glob","grep","edit","write","task","webfetch","todowrite","skill","apply_patch","read","edit","write","patchline_grep","ast_search","patchline_edit_batch","patchline_diagnostics"]}
+  ]
+}

@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { inspectCapabilities } from "./compatibility.js"
-import { installPatchline, uninstallPatchline, upgradePatchlineHost, type InstallerOptions } from "./installer.js"
+import type { inspectCapabilities } from "./compatibility.js"
+import type { InstallerOptions } from "./installer.js"
 import { installerArguments, installerHelp } from "./installation/arguments.js"
 import { DEFAULT_CONFIG, parseConfig } from "./config.js"
 import { lspGuide, renderLspGuide } from "./lsp-guide.js"
-import { prepareProjectLsp } from "./lsp/manager.js"
 import type { PatchlineErrorCode } from "./errors.js"
 
 type Output = (line: string) => void
@@ -55,7 +54,7 @@ function parseConfigArgument(value: string | undefined): Record<string, unknown>
 export async function runCli(args: readonly string[], options: CliOptions = {}): Promise<number> {
   const stdout = options.stdout ?? ((line) => console.log(line))
   const stderr = options.stderr ?? ((line) => console.error(line))
-  const inspect = options.inspect ?? inspectCapabilities
+  const inspect = options.inspect ?? (async () => (await import("./compatibility.js")).inspectCapabilities())
   const command = args[0] ?? "doctor"
 
   if ((command === "lsp" && ["check", "setup"].includes(args[1] ?? "check") && !options.inspect) || (command === "doctor" && args.includes("--lsp") && !options.inspect)) {
@@ -63,6 +62,7 @@ export async function runCli(args: readonly string[], options: CliOptions = {}):
     if (directoryIndex >= 0 && (!args[directoryIndex + 1] || args[directoryIndex + 1]!.startsWith("--"))) { stderr("--directory requires a path"); return 1 }
     const directory = path.resolve(directoryIndex >= 0 ? args[directoryIndex + 1]! : process.cwd())
     try {
+      const { prepareProjectLsp } = await import("./lsp/manager.js")
       const projects = await prepareProjectLsp(directory, { install: command === "lsp" && args[1] === "setup" })
       const ok = projects.every((project) => ["configured", "native", "custom"].includes(project.status))
       if (args.includes("--json")) writeJson(stdout, { directory, projects, verified: false })
@@ -148,6 +148,7 @@ export async function runCli(args: readonly string[], options: CliOptions = {}):
       stderr("Usage: opencode-patchline host-upgrade --opencode-version <stable-version> [--host-binary <path>] [--expected-host-version <version>] [--rebuild]")
       return 1
     }
+    const { upgradePatchlineHost } = await import("./installer.js")
     return await upgradePatchlineHost({ ...options.installer, stdout, stderr, opencodeVersion: values["--opencode-version"]!, rebuildHost: args.includes("--rebuild"), ...(values["--host-binary"] ? { hostBinary: values["--host-binary"] } : {}), ...(values["--expected-host-version"] ? { expectedHostVersion: values["--expected-host-version"] } : {}) })
   }
 
@@ -155,6 +156,7 @@ export async function runCli(args: readonly string[], options: CliOptions = {}):
     try {
       const parsed = installerArguments(command, args.slice(1))
       if (parsed.help) { stdout(installerHelp(command, parsed.options.language)); return 0 }
+      const { installPatchline, uninstallPatchline } = await import("./installer.js")
       const installerOptions = { ...options.installer, ...parsed.options, stdout, stderr }
       return command === "install" ? await installPatchline(installerOptions) : await uninstallPatchline(installerOptions)
     } catch (error) {

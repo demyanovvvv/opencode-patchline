@@ -6,8 +6,8 @@ export type LineIndex = {
 
 export function buildLineIndex(text: string): LineIndex {
   const starts: number[] = text.length === 0 ? [] : [0]
-  for (let index = 0; index < text.length; index++) {
-    if (text.charCodeAt(index) === 10 && index + 1 < text.length) starts.push(index + 1)
+  for (let index = text.indexOf("\n"); index >= 0; index = text.indexOf("\n", index + 1)) {
+    if (index + 1 < text.length) starts.push(index + 1)
   }
   return {
     starts,

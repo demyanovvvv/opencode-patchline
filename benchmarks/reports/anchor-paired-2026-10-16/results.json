@@ -1,0 +1,423 @@
+{
+  "schemaVersion": 1,
+  "stage": "offline-check",
+  "createdAt": "2026-10-16T20:57:24.082Z",
+  "model": "not selected (offline)",
+  "variant": null,
+  "environment": {},
+  "limits": {
+    "maxSessions": 6,
+    "steps": 16,
+    "timeoutMs": 180000
+  },
+  "runs": [],
+  "local": [
+    {
+      "name": "anchor-read-replay",
+      "passed": true,
+      "detail": "10,000-line fixture; byte-identical five-line pages; 20 paired warm samples with balanced alternating order; first read is process-local, not OS-cold; local calls/chars are not provider tokens",
+      "data": {
+        "grepRead": {
+          "firstReadMs": 26.188499999999976,
+          "warm": {
+            "count": 20,
+            "minMs": 6.751699999999914,
+            "meanMs": 8.124239999999968,
+            "p50Ms": 7.826000000000022,
+            "p95Ms": 9.996099999999956,
+            "p99Ms": 10.324199999999905,
+            "maxMs": 10.324199999999905
+          },
+          "toolCalls": 2,
+          "outputChars": 623
+        },
+        "anchor": {
+          "firstReadMs": 8.794499999999971,
+          "warm": {
+            "count": 20,
+            "minMs": 3.939300000000003,
+            "meanMs": 4.420594999999997,
+            "p50Ms": 4.373699999999985,
+            "p95Ms": 5.265800000000013,
+            "p99Ms": 5.527300000000082,
+            "maxMs": 5.527300000000082
+          },
+          "toolCalls": 1,
+          "outputChars": 419
+        },
+        "pairs": [
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 8.755499999999984,
+            "anchorMs": 4.471900000000005
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 10.324199999999905,
+            "anchorMs": 4.5471
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 8.542599999999993,
+            "anchorMs": 5.265800000000013
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 9.6558,
+            "anchorMs": 4.323999999999955
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 9.996099999999956,
+            "anchorMs": 4.373699999999985
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 8.004699999999957,
+            "anchorMs": 4.281499999999937
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 7.357399999999984,
+            "anchorMs": 4.560400000000072
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 8.318099999999959,
+            "anchorMs": 4.502100000000041
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 7.620299999999929,
+            "anchorMs": 4.701000000000022
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 9.211599999999976,
+            "anchorMs": 5.527300000000082
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 6.97829999999999,
+            "anchorMs": 4.6206999999999425
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 7.510599999999954,
+            "anchorMs": 4.02679999999998
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 7.826000000000022,
+            "anchorMs": 4.055600000000027
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 6.751699999999914,
+            "anchorMs": 3.9668000000000347
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 8.810600000000022,
+            "anchorMs": 4.508100000000013
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 6.948399999999992,
+            "anchorMs": 4.0564999999999145
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 6.764099999999985,
+            "anchorMs": 3.9449999999999363
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 6.865399999999909,
+            "anchorMs": 4.007400000000075
+          },
+          {
+            "order": [
+              "anchor",
+              "grep-read"
+            ],
+            "grepReadMs": 7.3827,
+            "anchorMs": 3.939300000000003
+          },
+          {
+            "order": [
+              "grep-read",
+              "anchor"
+            ],
+            "grepReadMs": 8.860699999999952,
+            "anchorMs": 4.730899999999906
+          }
+        ],
+        "pageEqualityVerified": true
+      }
+    },
+    {
+      "name": "Patchline: BOM / CRLF / Unicode сохранены",
+      "passed": true,
+      "detail": "2 разогрева + 10 измерений; p50 7.58 мс, p95 9.48 мс. Это время инструментов, не модели.",
+      "data": {
+        "count": 10,
+        "minMs": 6.81899999999996,
+        "meanMs": 7.910130000000004,
+        "p50Ms": 7.58380000000011,
+        "p95Ms": 9.483499999999822,
+        "p99Ms": 9.483499999999822,
+        "maxMs": 9.483499999999822
+      }
+    },
+    {
+      "name": "Patchline: устаревшая правка отклонена",
+      "passed": true,
+      "detail": "Детерминированная внешняя запись после чтения; новое содержимое сохранено."
+    },
+    {
+      "name": "Patchline: конфликт batch не вызывает частичную запись",
+      "passed": true,
+      "detail": "Первый файл и внешнее изменение второго сохранены."
+    },
+    {
+      "name": "Эталон: Сохранение пользовательских правок",
+      "passed": true,
+      "detail": "1 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Точечное исправление",
+      "passed": true,
+      "detail": "3 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Одна строка в большом файле",
+      "passed": true,
+      "detail": "2 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Сигнатура и два вызова",
+      "passed": true,
+      "detail": "3 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Похожие фрагменты",
+      "passed": true,
+      "detail": "1 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Связанные правки",
+      "passed": true,
+      "detail": "1 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Валидация запроса",
+      "passed": true,
+      "detail": "2 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Ошибка типов",
+      "passed": true,
+      "detail": "2 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Поиск в монорепозитории",
+      "passed": true,
+      "detail": "1 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Расширение поведения",
+      "passed": true,
+      "detail": "1 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: CRLF и Unicode",
+      "passed": true,
+      "detail": "2 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Смешанные окончания строк",
+      "passed": true,
+      "detail": "1 поведенческих проверок"
+    },
+    {
+      "name": "Эталон: Согласованность двух модулей",
+      "passed": true,
+      "detail": "1 поведенческих проверок"
+    }
+  ],
+  "notes": [
+    "Сравнение полной интеграции: host tool-selection и plugin precision. Основные выводы относятся к интеграции целиком.",
+    "Время включает загрузку процесса и обмен с провайдером; проверочные тесты выполняются после замера.",
+    "Схемы инструментов и системная политика отличаются как часть вмешательства. Кеш провайдера не контролируется.",
+    "Тарифы модели не заданы; нулевая стоимость в OpenCode не интерпретируется как бесплатность."
+  ],
+  "toolProfile": "extended",
+  "toolProfiles": {
+    "extended": {
+      "tools": [
+        {
+          "name": "ast_search",
+          "schemaBytes": 413
+        },
+        {
+          "name": "edit",
+          "schemaBytes": 488
+        },
+        {
+          "name": "patchline_apply_patch",
+          "schemaBytes": 498
+        },
+        {
+          "name": "patchline_diagnostics",
+          "schemaBytes": 297
+        },
+        {
+          "name": "patchline_edit_batch",
+          "schemaBytes": 616
+        },
+        {
+          "name": "patchline_execute",
+          "schemaBytes": 736
+        },
+        {
+          "name": "patchline_grep",
+          "schemaBytes": 417
+        },
+        {
+          "name": "patchline_route_search",
+          "schemaBytes": 299
+        },
+        {
+          "name": "patchline_summary",
+          "schemaBytes": 251
+        },
+        {
+          "name": "read",
+          "schemaBytes": 485
+        },
+        {
+          "name": "write",
+          "schemaBytes": 338
+        }
+      ],
+      "schemaBytes": 4838,
+      "policyBytes": 2255
+    },
+    "compact": {
+      "tools": [
+        {
+          "name": "ast_search",
+          "schemaBytes": 413
+        },
+        {
+          "name": "edit",
+          "schemaBytes": 488
+        },
+        {
+          "name": "patchline_diagnostics",
+          "schemaBytes": 297
+        },
+        {
+          "name": "patchline_edit_batch",
+          "schemaBytes": 616
+        },
+        {
+          "name": "patchline_grep",
+          "schemaBytes": 417
+        },
+        {
+          "name": "read",
+          "schemaBytes": 485
+        },
+        {
+          "name": "write",
+          "schemaBytes": 338
+        }
+      ],
+      "schemaBytes": 3054,
+      "policyBytes": 1867
+    },
+    "scope": "plugin-only; lsp:false; JSON bytes, not provider tokens"
+  },
+  "integrity": {
+    "complete": false,
+    "missing": [],
+    "unexpected": [],
+    "duplicates": [],
+    "ungraded": [],
+    "unmeasured": []
+  },
+  "analysis": {
+    "pairs": 0,
+    "bothSuccessful": 0,
+    "timeSaving": null,
+    "tokenSaving": null,
+    "stock": null,
+    "patchline": null,
+    "successfulPairs": {
+      "pairs": 0,
+      "bothSuccessful": 0,
+      "timeSaving": null,
+      "tokenSaving": null
+    },
+    "timeConfidence95": null,
+    "tokenConfidence95": null,
+    "confidenceMethod": "2000 task-cluster paired bootstrap samples, seed 127019; unavailable below 10 pairs / 3 tasks",
+    "fullProjection": null
+  }
+}

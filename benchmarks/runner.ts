@@ -33,20 +33,22 @@ try {
     toolCallsSaved: 0,
     durationMs: Math.round((performance.now() - started) * 100) / 100,
   }
-  const repeatedReadSamples: number[] = []
+  const repeatedReadSamples: Array<{ durationMs: number; lineIndexReused: boolean }> = []
   for (let index = 0; index < 5; index++) {
     const repeatedStarted = performance.now()
-    await new ReadService(snapshots).read({ sessionId: "benchmark", worktree, filePath: "large.ts", offset: 1_000 + index, limit: 30 })
-    repeatedReadSamples.push(Math.round((performance.now() - repeatedStarted) * 100) / 100)
+    const repeated = await new ReadService(snapshots).read({ sessionId: "benchmark", worktree, filePath: "large.ts", offset: 1_000 + index, limit: 30 })
+    if (!isFileReadResult(repeated)) throw new Error("Repeated benchmark read unexpectedly returned a directory")
+    repeatedReadSamples.push({ durationMs: Math.round((performance.now() - repeatedStarted) * 100) / 100, lineIndexReused: repeated.lineIndexReused })
   }
   const repeatedRead = {
     fileBytes: Buffer.byteLength(before, "utf8"),
     offset: 1_000,
     limit: 30,
     runs: repeatedReadSamples.length,
-    lineIndexReused: true,
+    lineIndexReused: repeatedReadSamples.every((sample) => sample.lineIndexReused),
+    samples: repeatedReadSamples,
     rssBytes: process.memoryUsage().rss,
-    latencyMs: summarizeLatencies(repeatedReadSamples),
+    latencyMs: summarizeLatencies(repeatedReadSamples.map((sample) => sample.durationMs)),
   }
   const grepDirectory = path.join(worktree, "grep")
   await mkdir(grepDirectory, { recursive: true })

@@ -1,5 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { describe, expect, it } from "vitest"
 import { astSearchFile, collectBoundedAstMatches, type AstTraversalNode } from "../src/search/ast.js"
 import { readBoundedUtf8Bytes } from "../src/io/bounded-file.js"
@@ -9,6 +11,15 @@ import { routeSearch } from "../src/search/router.js"
 import { temporaryWorkspace } from "./helpers/workspace.js"
 
 describe("search", () => {
+  it("defers the native AST parser until a valid search needs it", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "main.ts"), "const value = 1\n")
+      const code = `import { createRequire } from 'node:module';const require=createRequire(import.meta.url);const {astSearchFile}=await import('./src/search/ast.ts');const loaded=()=>Object.keys(require.cache).some(file=>file.includes('@ast-grep'));const states=[loaded()];try{await astSearchFile({worktree:${JSON.stringify(workspace.path)},filePath:'main.ts',pattern:'$A',maxResults:0})}catch{}states.push(loaded());const result=await astSearchFile({worktree:${JSON.stringify(workspace.path)},filePath:'main.ts',pattern:'const $A = $B',maxResults:1});states.push(loaded());console.log(JSON.stringify({states,matches:result.matches.length}))`
+      const { stdout } = await promisify(execFile)(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], { cwd: process.cwd() })
+      expect(JSON.parse(stdout)).toEqual({ states: [false, false, true], matches: 1 })
+    } finally { await workspace.cleanup() }
+  })
   it("bounds AST traversal after one match beyond the requested result limit", () => {
     const visited: string[] = []
     const node = (name: string, children: AstTraversalNode[] = []): AstTraversalNode => ({
@@ -32,6 +43,70 @@ describe("search", () => {
     const result = await runOpenCodeLspClient({ find: { symbols: async (input) => { calls.push(input); return [{ name: "value" }] } } }, { worktree: "C:/worktree", query: "value" })
     expect(JSON.parse(result)).toEqual([{ name: "value" }])
     expect(calls).toEqual([{ query: { query: "value", directory: "C:/worktree" }, signal: expect.any(AbortSignal) }])
+  })
+
+  it("does not call SDK symbols without a connected active LSP client", async () => {
+    let calls = 0
+    await expect(runOpenCodeLspClient({
+      lsp: { status: async () => ({ data: [] }) },
+      find: { symbols: async () => { calls++; return { data: [] } } },
+    }, { worktree: "C:/worktree", query: "value" })).rejects.toMatchObject({
+      code: "CAPABILITY_UNAVAILABLE", message: expect.stringContaining("ast_search"),
+    })
+    expect(calls).toBe(0)
+  })
+
+  it.each([undefined, null, {}, { data: null }, { data: {} }, "[]"])("rejects malformed SDK symbols response %j", async (response) => {
+    await expect(runOpenCodeLspClient({
+      find: { symbols: async () => response },
+    }, { worktree: "C:/worktree", query: "value" })).rejects.toMatchObject({ code: "DIAGNOSTICS_UNAVAILABLE" })
+  })
+
+  it("allows legitimate empty SDK search results with a connected client", async () => {
+    const calls: unknown[] = []
+    const result = await runOpenCodeLspClient({
+      lsp: { status: async (input) => { calls.push(input); return { data: [{ status: "connected" }] } } },
+      find: { symbols: async () => ({ data: [] }) },
+    }, { worktree: "C:/worktree", query: "missing" })
+    expect(JSON.parse(result)).toEqual({ data: [] })
+    expect(calls).toEqual([{ query: { directory: "C:/worktree" } }])
+  })
+
+  it.each([{ error: { message: "offline" } }, { data: null }, [{ status: "disconnected" }]])("does not search with unavailable SDK status %j", async (status) => {
+    let calls = 0
+    await expect(runOpenCodeLspClient({
+      lsp: { status: async () => status },
+      find: { symbols: async () => { calls++; return [] } },
+    }, { worktree: "C:/worktree", query: "value" })).rejects.toBeDefined()
+    expect(calls).toBe(0)
+  })
+
+  it("bounds a stalled SDK status probe by the shared request deadline", async () => {
+    let calls = 0
+    await expect(runOpenCodeLspClient({
+      lsp: { status: async () => new Promise(() => {}) },
+      find: { symbols: async () => { calls++; return [] } },
+    }, { worktree: "C:/worktree", query: "value", timeoutMs: 10 })).rejects.toMatchObject({ code: "DIAGNOSTICS_UNAVAILABLE" })
+    expect(calls).toBe(0)
+  })
+
+  it("does not launch symbols when cancellation occurs during SDK status", async () => {
+    const controller = new AbortController()
+    let calls = 0
+    let finishStatus!: (value: unknown) => void
+    let started!: () => void
+    const statusStarted = new Promise<void>((resolve) => { started = resolve })
+    const result = runOpenCodeLspClient({
+      lsp: { status: () => { started(); return new Promise((resolve) => { finishStatus = resolve }) } },
+      find: { symbols: async () => { calls++; return [] } },
+    }, { worktree: "C:/worktree", query: "value", signal: controller.signal })
+    const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" })
+    await statusStarted
+    controller.abort()
+    await rejected
+    finishStatus({ data: [{ status: "connected" }] })
+    await Promise.resolve()
+    expect(calls).toBe(0)
   })
 
   it("routes semantic, structural and literal queries", () => {
@@ -60,6 +135,17 @@ describe("search", () => {
     expect(() => interpretLspOutput("diagnostics", "", "language server crashed", 1)).toThrowError(expect.objectContaining({
       code: "DIAGNOSTICS_UNAVAILABLE",
     }))
+  })
+
+  it("does not report clean diagnostics when the CLI produced no result", () => {
+    for (const output of ["", " \n\t"]) {
+      expect(() => interpretLspOutput("diagnostics", output, "enabled LSP servers", 0)).toThrowError(expect.objectContaining({
+        code: "DIAGNOSTICS_UNAVAILABLE",
+        message: expect.stringContaining("no diagnostics result"),
+      }))
+    }
+    expect(interpretLspOutput("diagnostics", "[]", "", 0)).toBe("[]")
+    expect(interpretLspOutput("diagnostics", "{}", "", 0)).toBe("{}")
   })
 
   it("bounds capability failure details returned from OpenCode startup logs", () => {
@@ -379,6 +465,15 @@ describe("search", () => {
     } finally {
       await workspace.cleanup()
     }
+  })
+
+  it("rejects disabled LSP before resolving files or starting the bridge", async () => {
+    await expect(runOpenCodeLspBridge({
+      worktree: path.join(process.cwd(), "nonexistent-disabled-lsp-worktree"),
+      operation: "documentSymbol",
+      filePath: "missing.ts",
+      configuration: { lsp: false },
+    })).rejects.toMatchObject({ code: "CAPABILITY_UNAVAILABLE", message: expect.stringMatching(/disabled/i) })
   })
 
   it("passes Windows LSP queries as literal arguments instead of shell commands", async () => {
