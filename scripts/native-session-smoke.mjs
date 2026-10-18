@@ -15,14 +15,17 @@ let index = 0
 const failures = []
 const compact = process.argv.includes("--compact")
 const patch = (old) => `*** Begin Patch\n*** Update File: first.txt\n@@\n-before\n+after\n*** Update File: second.txt\n@@\n-${old}\n+after\n*** End Patch`
-const steps = [["apply_patch", { patchText: patch("missing") }], ["read", { filePath: "second.txt", ...compact ? { anchor: "before", limit: 5 } : { offset: 1, limit: 5 } }], ["apply_patch", { patchText: patch("before") }], ...compact ? [["read", { filePath: "exact.txt", anchor: "original", limit: 5 }], ["edit", {}]] : [["patchline_summary", {}]]]
+const steps = [...compact ? [["read", {}], ["read", { filePath: "second.txt", anchor: "before", offset: 1, limit: 5 }]] : [], ["apply_patch", { patchText: patch("missing") }], ["read", { filePath: "second.txt", ...compact ? { anchor: "before", limit: 5 } : { offset: 1, limit: 5 } }], ["apply_patch", { patchText: patch("before") }], ...compact ? [["read", { filePath: "exact.txt", anchor: "original", limit: 5 }], ["edit", {}]] : [["patchline_summary", {}]]]
 const provider = createServer(async (request, response) => {
   try {
     let raw = ""
     for await (const chunk of request) raw += chunk
     const body = JSON.parse(raw)
+    if (process.argv.includes("--serial-tools")) assert.equal(body.parallel_tool_calls, false, "Host did not forward serial tool-call option")
     const main = body.tools?.some((tool) => tool.function?.name === "apply_patch")
     if (compact && main) {
+      const system = body.messages.filter((message) => message.role === "system").map((message) => typeof message.content === "string" ? message.content : JSON.stringify(message.content)).join("\n")
+      assert.ok(system.includes('read({"filePath":"src/main.ts","anchor":"function main","limit":40}) replaces grep then read'), "Compact anchor policy did not reach provider system messages")
       const names = body.tools.map((tool) => tool.function?.name)
       for (const hidden of ["patchline_execute", "patchline_apply_patch", "patchline_route_search", "patchline_lsp_status", "patchline_summary"]) assert.ok(!names.includes(hidden), `Compact exposed ${hidden}`)
       assert.equal(new Set(names).size, names.length, "Duplicate model tool names")
@@ -30,16 +33,28 @@ const provider = createServer(async (request, response) => {
       assert.ok(edit.required.includes("snapshot"), "Compact edit lost required snapshot")
       assert.ok(edit.properties.oldString && edit.properties.newString, "Compact exact edit fields missing")
       assert.ok(!("hashlinePatch" in edit.properties), "Compact exposed hashline input")
-      const read = body.tools.find((tool) => tool.function?.name === "read").function.parameters
-      assert.ok(read.properties.anchor && read.properties.limit, "Anchor read fields missing from provider schema")
+       const read = body.tools.find((tool) => tool.function?.name === "read").function.parameters
+       assert.ok(read.properties.anchor && read.properties.limit, "Anchor read fields missing from provider schema")
+       assert.ok(read.required?.includes("filePath"), "Provider read schema lost required filePath")
+       assert.equal(read.properties.filePath.type, "string", "Provider read filePath is not a string")
     }
-    const current = main ? index++ : -1
+    if (main) {
+      const readTool = body.tools.find((tool) => tool.function?.name === "read")?.function
+      assert.ok(readTool, "Provider read tool missing")
+      assert.deepEqual(readTool.parameters.not, { required: ["anchor", "offset"] }, "Provider read schema lost selector exclusion")
+      assert.ok(readTool.description.includes('"filePath":"src/main.ts","offset":1,"limit":80'), "Provider read description lost offset example")
+      assert.ok(readTool.description.includes('"anchor":"function main"'), "Provider read description lost anchor example")
+      assert.match(readTool.parameters.properties.offset.description, /Omit this property entirely when using anchor/)
+      assert.match(readTool.parameters.properties.anchor.description, /Omit this property entirely when using offset/)
+    }
+    const position = main ? index++ : -1
+    const current = compact && position >= 0 ? position - 2 : position
     if (current === 1) {
       assert.equal(await readFile(path.join(root, "first.txt"), "utf8"), "before\n")
       assert.equal(await readFile(path.join(root, "second.txt"), "utf8"), "before\n")
       assert.match(JSON.stringify(body.messages), /Failed to find expected lines|context does not match/i)
     }
-    const step = main ? steps[current] : undefined
+    const step = main ? steps[position] : undefined
     const snapshotFor = (file) => {
       const output = body.messages.flatMap((message) => message.role === "tool" ? [message.content] : []).filter((content) => typeof content === "string").findLast((content) => content.includes(`Path: ${file}`))
       const snapshot = /Snapshot: (\S+)/.exec(output ?? "")?.[1]
@@ -89,6 +104,11 @@ try {
   await new Promise((resolve) => reservation.close(resolve))
   const environment = createSmokeEnvironment(root)
   environment.OPENCODE_CONFIG_CONTENT = JSON.stringify({ plugin: [[fileURLToPath(new URL("../dist/plugin.js", import.meta.url)), { toolProfile: compact ? "compact" : "extended", lspAutoSetup: false, lspAutoInstall: false }]], lsp: false, permission: "allow", enabled_providers: ["fixture"], provider: { fixture: { name: "Controlled session fixture", npm: "@ai-sdk/openai-compatible", options: { baseURL: `http://127.0.0.1:${provider.address().port}/v1`, apiKey: "fixture" }, models: { "gpt-5": { name: "gpt-5", limit: { context: 64000, output: 4000 } } } } } })
+  if (process.argv.includes("--serial-tools")) {
+    const config = JSON.parse(environment.OPENCODE_CONFIG_CONTENT)
+    config.provider.fixture.models["gpt-5"].options = { parallel_tool_calls: false }
+    environment.OPENCODE_CONFIG_CONTENT = JSON.stringify(config)
+  }
   child = spawn("opencode", ["serve", "--hostname", "127.0.0.1", "--port", String(port)], { cwd: root, env: environment, shell: process.platform === "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
   let logs = ""
   for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => { logs = (logs + chunk).slice(-8000) })
@@ -112,6 +132,15 @@ try {
   assert.ok(messagesResponse.ok)
   const messages = await messagesResponse.json()
   const tools = messages.flatMap((message) => message.parts ?? []).filter((part) => part.type === "tool")
+  if (compact) {
+    const reads = tools.filter((part) => part.tool === "read")
+    assert.equal(reads[0].state.status, "error")
+    assert.deepEqual(reads[0].state.input, {})
+    assert.match(reads[0].state.error, /INVALID_ARGUMENT.*nonempty filePath/)
+    assert.doesNotMatch(reads[0].state.error, /replaceAll|TypeError/)
+    assert.equal(reads[1].state.status, "error")
+    assert.match(reads[1].state.error, /anchor.*offset/i)
+  }
   const diagnostic = JSON.stringify({ index, tools: tools.map((part) => ({ tool: part.tool, status: part.state.status, error: part.state.error, metadata: part.state.metadata })), infos: messages.map((message) => message.info), logs }).slice(-8000)
   assert.ok(tools.some((part) => part.tool === "apply_patch" && part.state.status === "error"), diagnostic)
   assert.ok(tools.some((part) => part.tool === "apply_patch" && part.state.status === "error"), diagnostic)

@@ -4,7 +4,11 @@ import { detectLspProjects, type LspProject } from "./projects.js"
 import { LSP_SERVERS, type ServerRecipe } from "./registry.js"
 import { findExecutable, runLspCommand } from "./process.js"
 import { installNpmServer, lspStorageDirectory } from "./store.js"
-import { verifyLspServer } from "./health.js"
+import { fingerprintLspCommand, verifyLspServer } from "./health.js"
+
+export async function fingerprintLspReports(reports: readonly LspReport[]): Promise<string> {
+  return JSON.stringify(await Promise.all(reports.filter((report) => report.verified && report.command).map(async (report) => [report.root, await fingerprintLspCommand(report.command!, report.root)])))
+}
 
 export type LspEntry = { disabled?: boolean; command?: string[]; extensions?: string[]; initialization?: Record<string, unknown>; env?: Record<string, string> }
 export type LspConfiguration = { lsp?: false | true | Record<string, LspEntry> }

@@ -4,6 +4,56 @@ import { performance } from "node:perf_hooks"
 import { createHash } from "node:crypto"
 import { providerUsage, type Json, type Usage } from "./metrics.js"
 
+export class StreamToolCalls {
+  #buffer = ""
+  #complete = true
+  #bytes = 0
+  #calls = new Map<string, { name: string; args: string; argumentFragments: number; emptyArgumentFragments: number; nonStringArgumentFragments: number; missingArgumentFragments: number }>()
+  push(chunk: string) {
+    if (!this.#complete) return
+    this.#bytes += Buffer.byteLength(chunk)
+    if (this.#bytes > 2_000_000) { this.#complete = false; this.#buffer = ""; this.#calls.clear(); return }
+    this.#buffer += chunk
+    const lines = this.#buffer.split("\n")
+    this.#buffer = lines.pop() ?? ""
+    for (const line of lines) {
+      if (!line.startsWith("data:") || line.slice(5).trim() === "[DONE]") continue
+      let event: Json
+      try { event = JSON.parse(line.slice(5).trim()) } catch { this.#complete = false; continue }
+      if (event && typeof event === "object" && event.choices === undefined && event.usage) continue
+      if (!event || !Array.isArray(event.choices)) { this.#complete = false; continue }
+      for (const choice of event.choices) {
+        if (!choice || (choice.delta?.tool_calls !== undefined && !Array.isArray(choice.delta.tool_calls))) { this.#complete = false; continue }
+        for (const delta of choice.delta?.tool_calls ?? []) {
+          if (!delta) { this.#complete = false; continue }
+          const key = `${choice.index ?? 0}:${delta.index ?? 0}`
+          if (!this.#calls.has(key) && this.#calls.size >= 128) { this.#complete = false; continue }
+          const call = this.#calls.get(key) ?? { name: "", args: "", argumentFragments: 0, emptyArgumentFragments: 0, nonStringArgumentFragments: 0, missingArgumentFragments: 0 }
+          if (typeof delta.function?.name === "string") call.name += delta.function.name
+          if (typeof delta.function?.arguments === "string") {
+            call.argumentFragments++
+            if (!delta.function.arguments.length) call.emptyArgumentFragments++
+            call.args += delta.function.arguments
+          } else if (delta.function && Object.hasOwn(delta.function, "arguments")) call.nonStringArgumentFragments++
+          else call.missingArgumentFragments++
+          this.#calls.set(key, call)
+        }
+      }
+    }
+  }
+  finish(ended = true) {
+    if (this.#buffer) this.push("\n")
+    return { complete: ended && this.#complete, calls: [...this.#calls.values()].map(({ name, args, ...fragments }) => {
+      let value: Json | null = null
+      let validJson = false
+      try { value = JSON.parse(args); validJson = true } catch { /* Partial or invalid arguments. */ }
+      return { name, ...fragments, argumentsBytes: Buffer.byteLength(args), argumentsSha256: createHash("sha256").update(args).digest("hex"), validJson,
+        readPathValid: name === "read" ? typeof value?.filePath === "string" && !!value.filePath.trim() : null,
+        anchorWithOffset: name === "read" ? value?.anchor !== undefined && value?.offset !== undefined : null }
+    }) }
+  }
+}
+
 export class StreamUsage {
   #buffer = ""
   #usage: Usage | null = null
@@ -20,7 +70,7 @@ export class StreamUsage {
   finish() { if (this.#buffer) this.push("\n"); return this.#usage }
 }
 
-export type ProviderCall = { index: number; status: number; durationMs: number; firstByteMs: number | null; usage: Usage | null; requestBytes: number; responseBytes: number; tools: string[]; error: string | null; requestHash: string | null; requestSections: Record<string, number>; messageSections: { systemBytes: number; historyBytes: number; toolResultBytes: number; otherBytes: number; messages: number } | null }
+export type ProviderCall = { index: number; status: number; durationMs: number; firstByteMs: number | null; usage: Usage | null; requestBytes: number; responseBytes: number; tools: string[]; error: string | null; requestHash: string | null; requestSections: Record<string, number>; messageSections: { systemBytes: number; historyBytes: number; toolResultBytes: number; otherBytes: number; messages: number } | null; responseToolCalls?: ReturnType<StreamToolCalls["finish"]> | null }
 export async function createRelay(input: { baseURL: string; apiKey: string; maxRequests: number; timeoutMs: number }) {
   const target = new URL(input.baseURL)
   if (!["http:", "https:"].includes(target.protocol)) throw new Error("Provider baseURL must use HTTP(S)")
@@ -58,6 +108,8 @@ export async function createRelay(input: { baseURL: string; apiKey: string; maxR
         call.status = response.statusCode ?? 502
         res.writeHead(call.status, { "content-type": response.headers["content-type"] ?? "application/json", "cache-control": "no-cache" })
         const parser = new StreamUsage()
+        const toolCalls = new StreamToolCalls()
+        const streaming = String(response.headers["content-type"]).includes("event-stream")
         const decoder = new TextDecoder()
         let json = ""
         response.on("data", (chunk: Buffer) => {
@@ -65,7 +117,7 @@ export async function createRelay(input: { baseURL: string; apiKey: string; maxR
           call.responseBytes += chunk.length
           const text = decoder.decode(chunk, { stream: true })
           try {
-            if (String(response.headers["content-type"]).includes("event-stream")) parser.push(text)
+            if (streaming) { parser.push(text); toolCalls.push(text) }
             else if (json.length < 8_000_000) json += text
           } catch { call.error = "Usage parser limit" }
           if (!res.write(chunk)) { response.pause(); res.once("drain", () => response.resume()) }
@@ -73,12 +125,13 @@ export async function createRelay(input: { baseURL: string; apiKey: string; maxR
         response.once("end", () => {
           if (json) { try { call.usage = providerUsage(JSON.parse(json).usage) } catch { /* Error/non-JSON response. */ } }
           else call.usage = parser.finish()
+          Object.assign(call, { responseToolCalls: streaming ? toolCalls.finish() : null })
           call.durationMs = performance.now() - start
           clearTimeout(timer)
           active.delete(upstream)
           res.end()
         })
-        response.once("error", () => { call.error = "Upstream stream interrupted"; res.destroy() })
+        response.once("error", () => { Object.assign(call, { responseToolCalls: toolCalls.finish(false) }); call.error = "Upstream stream interrupted"; res.destroy() })
       })
       active.add(upstream)
       const timer = setTimeout(() => upstream.destroy(new Error("Provider timeout")), input.timeoutMs)

@@ -2,11 +2,34 @@
 
 Status: Accepted
 
+An empty SDK workspace-symbol response is returned as `data: []` with a
+`capabilityNote`: it does not prove that the project has no symbols. Some hosts
+expose a placeholder HTTP endpoint even while native LSP works. Use native LSP,
+AST search or literal search to verify. Nonempty SDK responses retain their
+existing representation; this note does not claim that every empty result is
+a capability failure.
+
 Runtime LSP dispatch checks the JSON configuration content associated with cached
 reports as well as its generation. An in-place configuration edit clears reports,
 advances the generation and removes compact LSP exposure before dispatch. A fresh
 configuration setup or successful explicit status refresh establishes a new
-content baseline. Executable/dependency fingerprint invalidation remains separate.
+content baseline. Verified command reports also retain executable/launcher identity
+fingerprints (canonical paths, file identity, size and nanosecond timestamps),
+command arguments, working directory, PATH and NODE_OPTIONS. Project-root and
+ancestor-directory package
+manifests and dependency lock metadata (npm, pnpm, Yarn, Bun, Cargo, Go, uv and
+Poetry) are additional invalidation inputs, checked up to the filesystem root.
+This does not cover arbitrary edits inside installed dependencies. Bare executable names are
+resolved through PATH rather than treated as workspace files. Dispatch rechecks
+these identities before and after asynchronous host operations, revoking compact
+exposure when they change. This is not a transitive dependency-content fingerprint:
+a dependency edit that leaves launcher and lock metadata unchanged remains a
+separate gate.
+Initial configuration publication and explicit refresh recheck configuration
+content after asynchronous fingerprinting; neither publishes stale capabilities
+when the configuration object is edited in place during that wait.
+Runtime fingerprint checks recheck cancellation and generation before revocation;
+an obsolete in-flight check cannot clear capabilities published by a newer setup.
 Explicit status refresh also snapshots configuration content before preparation
 and rejects if it changes in place, rather than treating discarded reports as a
 successful empty discovery or establishing a baseline from an obsolete refresh.

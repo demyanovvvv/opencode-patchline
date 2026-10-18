@@ -15,6 +15,12 @@ PATCHLINE EDITING POLICY
 - Run relevant diagnostics and proportional validation after edits.
 ```
 
+The compact policy includes a generic anchor-read example:
+`read({"filePath":"src/main.ts","anchor":"function main","limit":40})`.
+For a known file and unique literal target this replaces grep followed by read;
+omit `offset` and resolve ambiguity before editing. The example is guidance,
+not evidence of reduced model calls or tokens.
+
 When OpenCode configuration explicitly sets `lsp: false`, Patchline omits
 `patchline_lsp` and `patchline_lsp_status` from its registered tool map. The
 configuration hook applies this before tool registry enumeration in OpenCode
@@ -49,6 +55,14 @@ The compact profile omits adaptive/Hashline routers, search routing, standalone
 LSP status and activity summary. Its policy directs exact edits to `edit` and
 related edits to `patchline_edit_batch`, retaining native patch fallback.
 All mutation guards and validation are shared with the extended profile.
+Compact uses a dedicated policy rather than filtering the extended Hashline
+instructions. Its regression budget is below 1800 UTF-8 bytes (the previous
+filtered policy was 2168 bytes). It retains direct-path discovery avoidance,
+bounded anchor reading, selector exclusion, latest observed snapshots, stale
+recovery, unrelated-code preservation and native-patch mismatch recovery.
+It also requires relevant diagnostics and proportional validation after edits.
+This byte budget measures policy text only; it is not a provider-token budget
+or evidence of fewer model turns. Extended policy remains separately defined.
 Compatibility mode still uses host-native read/edit/write; it does not gain
 precision tools by selecting compact. Switch back to `extended` to restore the
 previous definitions. Configuration changes require an OpenCode restart.

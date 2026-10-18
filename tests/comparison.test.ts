@@ -2,11 +2,97 @@ import { describe, expect, it } from "vitest"
 import path from "node:path"
 import { collectEvents, compareFiles, pairedSummary, providerUsage } from "../benchmarks/comparison/metrics.js"
 import { comparisonTasks } from "../benchmarks/comparison/tasks.js"
-import { attributionSchedule, attributionTreatments, isolatedConfig, isolatedEnvironment, parseOptions } from "../benchmarks/comparison/config.js"
-import { attributionSummary, experimentSummary, validateAttributionRuns, validateManifest } from "../benchmarks/comparison/analysis.js"
+import { attributionSchedule, attributionTreatments, isolatedConfig, isolatedEnvironment, parseOptions, profileDiagnosticSchedule, remainingProfileSchedule, validateProfileResumeRuns, profileSettingsFingerprint } from "../benchmarks/comparison/config.js"
+import { attributionSummary, experimentSummary, validateAttributionRuns, validateManifest, profileDiagnosticSummary } from "../benchmarks/comparison/analysis.js"
+
+it("vetoes observed quality loss without claiming non-inferiority from no losses", () => {
+  const stock = { taskId: "quality", repeat: 0, mode: "stock" as const, durationMs: 100, tokens: 200, success: true }
+  const treatment = { ...stock, mode: "patchline" as const, durationMs: 50, tokens: 100, success: false }
+  expect(experimentSummary([stock, treatment]).quality).toMatchObject({ status: "veto", regressions: [{ taskId: "quality", repeat: 0 }] })
+  expect(experimentSummary([stock, { ...treatment, success: true }]).quality).toMatchObject({ status: "not-established", regressions: [] })
+  expect(experimentSummary([]).quality).toMatchObject({ status: "not-established", regressions: [] })
+})
 import { localChecks, measureToolProfiles } from "../benchmarks/comparison/local.js"
 
 describe("comparison measurement integrity", () => {
+  it("pins profile model, execution limits and provider configuration without exposing secrets", () => {
+    const settings = { model: "provider/model", steps: 8, timeoutMs: 180000, provider: { apiKey: "private-secret", baseURL: "https://example.test" } }
+    const original = profileSettingsFingerprint(settings)
+    expect(original).toMatch(/^[a-f0-9]{64}$/)
+    for (const change of [{ model: "provider/other" }, { steps: 9 }, { timeoutMs: 190000 }, { provider: { ...settings.provider, apiKey: "changed" } }]) {
+      expect(profileSettingsFingerprint({ ...settings, ...change })).not.toBe(original)
+    }
+    expect(profileSettingsFingerprint(settings)).toBe(original)
+  })
+  it("rejects corrupt resume outcomes and accepts interrupted dispatches without fabricated results", () => {
+    const dispatched = profileDiagnosticSchedule().slice(0, 5)
+    const runs = dispatched.slice(0, 4).map((entry) => ({ ...entry, mode: "patchline", gradingStatus: "complete", success: true, measurementArtifact: { file: "attempt-123.json", sha256: "a".repeat(64) } }))
+    expect(() => validateProfileResumeRuns(dispatched, runs)).not.toThrow()
+    expect(() => validateProfileResumeRuns(dispatched, [{ ...runs[0]!, mode: "stock" }])).toThrow(/results/)
+    for (const corrupt of [null, {}, [null], [...runs, runs[0]!], [{ ...runs[0]!, taskId: "unexpected" }], [{ ...runs[0]!, success: undefined }], [{ ...runs[0]!, success: "true" }], [{ ...runs[0]!, measurementArtifact: undefined }], [{ ...runs[0]!, measurementArtifact: " " }], [{ ...runs[0]!, gradingStatus: "pending" }]]) {
+      expect(() => validateProfileResumeRuns(dispatched, corrupt)).toThrow(/results/)
+    }
+  })
+  it("counts interrupted profile dispatches as consumed and rejects non-prefix ledgers", () => {
+    const schedule = profileDiagnosticSchedule()
+    expect(remainingProfileSchedule(schedule.slice(0, 5))).toEqual(schedule.slice(5))
+    expect(remainingProfileSchedule(schedule)).toEqual([])
+    expect(() => remainingProfileSchedule([schedule[1]!])).toThrow(/prefix/)
+    expect(() => remainingProfileSchedule([schedule[0]!, schedule[0]!])).toThrow(/prefix/)
+    expect(() => remainingProfileSchedule([...schedule, schedule[0]!])).toThrow(/prefix/)
+  })
+  it("withholds profile contrasts for duplicate, missing, ungraded or unknown-usage sessions", () => {
+    const runs = profileDiagnosticSchedule().map((entry) => ({ ...entry, success: true, gradingStatus: "complete", durationMs: 100, usage: { total: 200 } }))
+    expect(profileDiagnosticSummary(runs).integrity.complete).toBe(true)
+    expect(profileDiagnosticSummary(runs).compactVsExtended).toEqual({ tokenSavings: 0, timeSavings: 0 })
+    for (const invalid of [runs.slice(1), [...runs, runs[0]!], runs.map((r, i) => i ? r : { ...r, gradingStatus: "pending" }), runs.map((r, i) => i ? r : { ...r, usage: { total: null } })]) {
+      expect(profileDiagnosticSummary(invalid).integrity.complete).toBe(false)
+      expect(profileDiagnosticSummary(invalid).compactVsExtended).toBeNull()
+    }
+    expect(profileDiagnosticSummary(runs).acceptance).toBe("not-established-diagnostic")
+  })
+  it("rejects nonfinite profile contrasts even when individual totals are finite", () => {
+    const runs = profileDiagnosticSchedule().map((entry) => ({ ...entry, success: true, gradingStatus: "complete", durationMs: entry.toolProfile === "extended" ? Number.MIN_VALUE : 1e300, usage: { total: 200 } }))
+    const summary = profileDiagnosticSummary(runs)
+    expect(summary.integrity.complete).toBe(false)
+    expect(summary.compactVsExtended).toBeNull()
+  })
+  it("requires explicit bounded authorization for attribution execution", () => {
+    expect(() => parseOptions(["run-attribution", "--input", "manifest.json"])).toThrow(/18/)
+    const options = parseOptions(["run-attribution", "--input", "manifest.json", "--max-sessions", "18"])
+    expect(options.command).toBe("run-attribution")
+    expect(options.maxSessions).toBe(18)
+    expect(() => parseOptions(["run-attribution", "--input", "manifest.json", "--max-sessions", "19"])).toThrow(/18/)
+  })
+  it("rejects overflowing attribution aggregates instead of producing NaN savings", () => {
+    const runs = attributionSchedule().map((entry) => ({ ...entry, durationMs: Number.MAX_VALUE, gradingStatus: "complete", usage: { total: Number.MAX_VALUE }, success: true }))
+    const summary = attributionSummary(runs)
+    expect(summary.integrity.complete).toBe(false)
+    expect(summary.treatments.stock.tokens).toBeNull()
+    expect(summary.treatments.stock.durationMs).toBeNull()
+    expect(summary.optimizedVsStock).toBeNull()
+  })
+  it("withholds attribution savings when a graded session lacks a boolean success result", () => {
+    const runs = attributionSchedule().map((entry) => ({ ...entry, durationMs: 10, gradingStatus: "complete", usage: { total: 100 }, success: true }))
+    const invalid = runs.map((run, index) => index === 0 ? { ...run, success: "false" } : run)
+    expect(attributionSummary(invalid as never).optimizedVsOriginal).toBeNull()
+    expect(attributionSummary(invalid as never).integrity.complete).toBe(false)
+  })
+  it("rejects missing attribution artifact paths with a preflight error", () => {
+    expect(() => attributionTreatments({ stockBinary: undefined, integratedBinary: "host", originalPlugin: "old", optimizedPlugin: "new" } as never)).toThrow(/explicit host and plugin paths/)
+    expect(() => attributionTreatments({ integratedBinary: "host", originalPlugin: "old", optimizedPlugin: "new" } as never)).toThrow(/explicit host and plugin paths/)
+  })
+  it("isolates original-versus-stock attribution from optimized costs", () => {
+    const runs = attributionSchedule().map((entry) => ({
+      ...entry, gradingStatus: "complete", success: true,
+      durationMs: entry.treatment === "stock" ? 100 : entry.treatment === "original" ? 75 : 50,
+      usage: { total: entry.treatment === "stock" ? 200 : entry.treatment === "original" ? 180 : 100 },
+    }))
+    const summary = attributionSummary(runs)
+    expect(summary.originalVsStock).toEqual({ tokenSavings: 0.1, timeSavings: 0.25 })
+    expect(summary.optimizedVsOriginal?.tokenSavings).toBeCloseTo(80 / 180)
+    expect(summary.optimizedVsStock).toEqual({ tokenSavings: 0.5, timeSavings: 0.5 })
+  })
   it.each(["original-plugin", "optimized-plugin"])("rejects attribution-only --%s in the primary live runner", (option) => {
     expect(() => parseOptions(["run", "--max-sessions", "6", `--${option}`, "plugin.js"])).toThrow(/only.*prepare-attribution/)
   })
@@ -22,8 +108,10 @@ describe("comparison measurement integrity", () => {
     expect(summary.integrity.complete).toBe(true)
     expect(summary.treatments.original).toEqual({ sessions: 6, successful: 0, tokens: 600, durationMs: 60 })
     expect(summary.optimizedVsOriginal).toEqual({ tokenSavings: 0.2, timeSavings: 0 })
+    expect(summary.originalVsStock).toEqual({ tokenSavings: 0, timeSavings: 0 })
     expect(summary.acceptance).toBe("not-established-pilot")
     expect(attributionSummary(runs.slice(1)).optimizedVsOriginal).toBeNull()
+    expect(attributionSummary(runs.slice(1)).originalVsStock).toBeNull()
   })
   it("validates attribution completeness independently from two-mode pairs", () => {
     const runs = attributionSchedule().map((entry) => ({ ...entry, durationMs: 10, gradingStatus: "complete", usage: { total: 100 } }))

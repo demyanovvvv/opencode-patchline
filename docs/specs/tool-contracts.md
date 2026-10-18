@@ -6,11 +6,24 @@ Status: Accepted
 state. Its conversation renderer is registered alongside every other server
 tool; prepared/configured/installed is not a verified LSP connection.
 
+In precision mode, hosts exposing `jsonSchema` in `tool.definition` receive an
+additional provider-facing `not: { required: ["anchor", "offset"] }` constraint.
+Runtime selector rejection remains authoritative; older hosts without that
+schema hook retain runtime validation. This does not guarantee model compliance.
+
 `read` accepts `filePath`, `offset`, `anchor`, and `limit`. Optional `anchor` is
+validated after a required nonempty string `filePath`; invalid paths are rejected
+with `INVALID_ARGUMENT` before permission callbacks or path handling. The anchor is
 nonempty literal text matched against the LF-normalized file, not a regex. It
 must occur exactly once (including overlapping occurrences); the returned page
 starts at the line containing that occurrence. Missing/ambiguous anchors,
 directory anchors, and combining `anchor` with `offset` are `INVALID_ARGUMENT`.
+Selector validation errors explicitly instruct callers to retry with `filePath`
+and one selector, omitting the other property entirely; `limit` may be retained.
+Rejected selector combinations create no snapshot and authorize no edit.
+Both tool profiles publish separate offset/anchor call examples and explicitly
+require omitting unused selector properties, rather than supplying defaults or
+empty placeholders. This guidance does not relax argument validation.
 Missing/ambiguous match errors include up to eight candidate line numbers and
 `details.truncated`; repeated occurrences on one line remain distinct matches.
 Only nine occurrences are inspected to determine truncation. Candidate hints

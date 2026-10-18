@@ -1,9 +1,42 @@
 import { spawn } from "node:child_process"
+import { createHash } from "node:crypto"
+import { stat, realpath } from "node:fs/promises"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { terminateProcessTree } from "../validation/diagnostics.js"
+import { findExecutable } from "./process.js"
 
 export type LspHealth = { verified: true; capabilities: Record<string, unknown> }
+
+// A cheap executable/launcher identity guard, not a transitive dependency digest.
+export async function fingerprintLspCommand(command: readonly string[], cwd: string): Promise<string> {
+  const hash = createHash("sha256").update(JSON.stringify({ command, cwd, path: process.env.PATH, nodeOptions: process.env.NODE_OPTIONS }))
+  for (let directory = path.resolve(cwd);;) {
+    for (const file of ["package.json", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb", "Cargo.lock", "go.mod", "go.sum", "uv.lock", "poetry.lock"]) {
+      const candidate = path.join(directory, file)
+      try {
+        const info = await stat(candidate, { bigint: true })
+        hash.update(JSON.stringify([candidate, info.dev.toString(), info.ino.toString(), info.size.toString(), info.mtimeNs.toString(), info.ctimeNs.toString()]))
+      } catch { hash.update(JSON.stringify([candidate, "unavailable"])) }
+    }
+    const parent = path.dirname(directory)
+    if (parent === directory) break
+    directory = parent
+  }
+  for (const [index, argument] of command.entries()) {
+    if (argument.startsWith("-")) continue
+    const resolved = index === 0 && !path.isAbsolute(argument) && !argument.includes("/") && !argument.includes("\\") ? await findExecutable(argument) : undefined
+    const candidate = path.resolve(cwd, resolved?.[0] ?? argument)
+    try {
+      const canonical = await realpath(candidate)
+      const info = await stat(canonical, { bigint: true })
+      hash.update(JSON.stringify([index, canonical, info.dev.toString(), info.ino.toString(), info.size.toString(), info.mtimeNs.toString(), info.ctimeNs.toString()]))
+    } catch {
+      hash.update(JSON.stringify([index, candidate, "unavailable"]))
+    }
+  }
+  return hash.digest("hex")
+}
 
 const MAX_PROBE_HEADER_BYTES = 8_192
 const MAX_PROBE_OUTPUT_BYTES = 1_048_576

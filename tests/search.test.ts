@@ -68,7 +68,7 @@ describe("search", () => {
       lsp: { status: async (input) => { calls.push(input); return { data: [{ status: "connected" }] } } },
       find: { symbols: async () => ({ data: [] }) },
     }, { worktree: "C:/worktree", query: "missing" })
-    expect(JSON.parse(result)).toEqual({ data: [] })
+    expect(JSON.parse(result)).toMatchObject({ data: [], capabilityNote: expect.stringContaining("not proof") })
     expect(calls).toEqual([{ query: { directory: "C:/worktree" } }])
   })
 

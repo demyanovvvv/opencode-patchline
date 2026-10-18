@@ -15,7 +15,7 @@ import { ReadService } from "./read-service.js"
 import { astSearchFile } from "./search/ast.js"
 import { grepWorkspace } from "./search/grep.js"
 import { runOpenCodeLspBridge, runOpenCodeLspClient } from "./search/lsp.js"
-import { configureProjectLsp, prepareProjectLsp, type LspConfiguration, type LspReport } from "./lsp/manager.js"
+import { configureProjectLsp, prepareProjectLsp, fingerprintLspReports, type LspConfiguration, type LspReport } from "./lsp/manager.js"
 import { routeSearch } from "./search/router.js"
 import { ScopedSnapshotStore } from "./snapshot/store.js"
 import { LocalMetrics } from "./telemetry/metrics.js"
@@ -176,8 +176,15 @@ function parseNewFilePatch(patchText: string): Array<{ path: string; content: st
 export const PatchlinePlugin: Plugin = async (input, options) => {
   const config = parseConfig(options ?? {})
   if (config.mode === "disabled") return {}
-  const policy = config.toolProfile === "compact" ? POLICY.split("\n").filter((line) => !line.includes("patchline_apply_patch") && !line.includes('"strategy":"exact"')).join("\n")
-    + (config.mode === "precision" ? '\n- Use edit with filePath, snapshot, oldString and newString for a local exact edit; use patchline_edit_batch for several related edits. Omit unused optional fields.' : '\n- Use the standard edit tool for local changes in compatibility mode.') : POLICY
+  const policy = config.toolProfile === "compact" ? `PATCHLINE EDITING POLICY
+- Known path: read directly; skip discovery. Otherwise use available LSP for symbols, grep for text, AST for structure.
+- Read only needed lines. Use read with anchor for unique literal text: read({"filePath":"src/main.ts","anchor":"function main","limit":40}) replaces grep then read; omit offset. Resolve ambiguity first. Always supply filePath; omit unused fields.
+- Preserve unrelated code/formatting. Patchline edits require the latest read snapshot and observed lines; never invent tags. If stale, reread.
+- Choose tools by scope and supported operations. File size alone does not select the editing tool. Native apply_patch needs no Patchline snapshot; reread after native changes before Patchline edits.
+- On native "Failed to find expected lines", reread the affected range and rebuild exact context/line breaks. Never repeat the same patch, guess, or overwrite to bypass rejection.
+- Use JSON tool arguments. newString: "" intentionally deletes text.
+- Run relevant diagnostics and proportional validation after edits.
+${config.mode === "precision" ? '- Use edit with filePath, snapshot, oldString, newString; patchline_edit_batch for related edits.' : '- Use standard edit for local changes in compatibility mode.'}` : POLICY
   const snapshots = new ScopedSnapshotStore({ ttlMs: config.snapshotTtlMs, maxSnapshots: config.maxSnapshots, maxBytes: config.maxSnapshotBytes })
   const reads = new ReadService(snapshots, config.maxInitialReadLines)
   const edits = new EditService(snapshots, config)
@@ -186,6 +193,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
   const nativeFailureCalls = new Set<string>()
   let lspConfiguration: LspConfiguration = {}
   let lspReports: LspReport[] = []
+  let lspToolchainFingerprint = "[]"
   let lspConfigurationGeneration = 0
   let lspConfigurationContent = JSON.stringify(lspConfiguration.lsp)
   const supportsLspOperation = (operation: string) => lspReports.some((report) => report.verified && (
@@ -211,16 +219,19 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
   }
 
   const readTool = tool({
-    description: "Read a minimal existing source range and create a Patchline snapshot with stable line anchors.",
+    description: 'Read a minimal existing source range and create a Patchline snapshot with stable line anchors. Always provide filePath. Choose offset OR anchor, never both. Example: {"filePath":"src/main.ts","offset":1,"limit":80}. Anchor example: {"filePath":"src/main.ts","anchor":"function main","limit":40}. Omit unused properties entirely.',
     args: {
       filePath: tool.schema.string().describe("Absolute or worktree-relative file path"),
-      offset: tool.schema.number().int().min(1).optional().describe("First line, 1-based"),
-      anchor: tool.schema.string().min(1).optional().describe("Unique literal text; start at its line instead of offset (LF-normalized)"),
+      offset: tool.schema.number().int().min(1).optional().describe("First line, 1-based. Omit this property entirely when using anchor; do not supply a default offset."),
+      anchor: tool.schema.string().min(1).optional().describe("Unique nonempty literal text; start at its line (LF-normalized). Omit this property entirely when using offset; do not supply an empty placeholder."),
       limit: tool.schema.number().int().min(1).optional().describe("Maximum lines; defaults to Patchline policy"),
     },
     async execute(args, context) {
       const started = Date.now()
       try {
+            if (typeof args?.filePath !== "string" || !args.filePath.trim()) {
+              throw new PatchlineError("INVALID_ARGUMENT", "Read requires a nonempty filePath string.")
+            }
             progress(context, "permission", args.filePath, { kind: "read", path: args.filePath })
             await context.ask({ permission: "read", patterns: [args.filePath], always: ["*"] , metadata: { path: args.filePath } })
             progress(context, "reading", args.filePath, { kind: "read", path: args.filePath })
@@ -256,7 +267,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
                   },
                 }
       } catch (error) {
-        failure(context, error, "reading", args.filePath, { kind: "read", writes: 0 })
+        failure(context, error, "reading", args?.filePath, { kind: "read", writes: 0 })
         return Promise.reject(toolError(error))
       }
     },
@@ -351,6 +362,17 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
   })
 
   const hooks: Hooks = {
+    async "tool.definition"(hookInput, output) {
+      if (hookInput.toolID !== "read" || config.mode !== "precision") return
+      const definition = output as typeof output & { jsonSchema?: Record<string, unknown> }
+      if (definition.jsonSchema) {
+        const schema = definition.jsonSchema
+        const exclusion = { not: { required: ["anchor", "offset"] } }
+        definition.jsonSchema = "not" in schema
+          ? { allOf: [schema, exclusion] }
+          : { ...schema, ...exclusion }
+      }
+    },
     async config(openCodeConfig) {
       const generation = ++lspConfigurationGeneration
       lspConfiguration = openCodeConfig as LspConfiguration
@@ -373,7 +395,11 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
       }
       if (generation !== lspConfigurationGeneration) return
       lspConfigurationContent = JSON.stringify(lspConfiguration.lsp)
+      const preparedConfigurationContent = lspConfigurationContent
+      const fingerprint = await fingerprintLspReports(reports)
+      if (generation !== lspConfigurationGeneration || JSON.stringify(lspConfiguration.lsp) !== preparedConfigurationContent) return
       lspReports = reports
+      lspToolchainFingerprint = fingerprint
       if (config.toolProfile === "compact") {
         const operations = (["workspaceSymbol", "documentSymbol"] as const).filter(supportsLspOperation)
         if (operations.length === 0) delete hooks.tool!.patchline_lsp
@@ -403,7 +429,11 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
           context.abort.throwIfAborted()
           if (generation !== lspConfigurationGeneration || JSON.stringify(configuration.lsp) !== configurationContent) throw new PatchlineError("CAPABILITY_UNAVAILABLE", "LSP configuration changed or status refresh was superseded. Retry status with the current configuration.")
           if (sameRoot && generation === lspConfigurationGeneration) {
+            const fingerprint = await fingerprintLspReports(reports)
+            context.abort.throwIfAborted()
+            if (generation !== lspConfigurationGeneration || JSON.stringify(configuration.lsp) !== configurationContent) throw new PatchlineError("CAPABILITY_UNAVAILABLE", "LSP configuration changed during refresh. Retry with the current configuration.")
             lspReports = reports
+            lspToolchainFingerprint = fingerprint
             lspConfigurationContent = JSON.stringify(configuration.lsp)
             if (config.toolProfile === "compact") {
               const operations = (["workspaceSymbol", "documentSymbol"] as const).filter(supportsLspOperation)
@@ -695,8 +725,18 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
         async execute(args, context) {
           const details = { kind: "lsp", operation: args.operation, query: args.query, path: args.filePath }
           const generation = lspConfigurationGeneration
-          const assertCurrent = () => {
+          const assertCurrent = async () => {
             context.abort.throwIfAborted()
+            const fingerprint = await fingerprintLspReports(lspReports)
+            context.abort.throwIfAborted()
+            if (generation !== lspConfigurationGeneration) throw new PatchlineError("CAPABILITY_UNAVAILABLE", "LSP configuration changed. Retry with the current capabilities.")
+            if (fingerprint !== lspToolchainFingerprint) {
+              lspConfigurationGeneration++
+              lspReports = []
+              lspToolchainFingerprint = "[]"
+              if (config.toolProfile === "compact") delete hooks.tool!.patchline_lsp
+              throw new PatchlineError("CAPABILITY_UNAVAILABLE", "LSP toolchain changed. Refresh capabilities before retrying.")
+            }
             if (JSON.stringify(lspConfiguration.lsp) !== lspConfigurationContent) {
               lspConfigurationContent = JSON.stringify(lspConfiguration.lsp)
               lspConfigurationGeneration++
@@ -706,7 +746,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
             if (generation !== lspConfigurationGeneration) throw new PatchlineError("CAPABILITY_UNAVAILABLE", "LSP configuration changed. Retry with the current capabilities.")
           }
           try {
-            assertCurrent()
+            await assertCurrent()
             if (lspConfiguration.lsp === false) throw new PatchlineError("CAPABILITY_UNAVAILABLE", "OpenCode LSP is disabled by configuration.")
             if (config.toolProfile === "compact" && !supportsLspOperation(args.operation)) throw new PatchlineError("CAPABILITY_UNAVAILABLE", `No verified capability for LSP ${args.operation}; use available text/AST tools or configured diagnostics.`)
             progress(context, "permission", "Patchline · LSP", details)
@@ -722,7 +762,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
               if (!projects.some(Boolean)) throw new PatchlineError("CAPABILITY_UNAVAILABLE", "No verified document-symbol capability for this file's project; use available text/AST tools.")
             }
             if (args.filePath) await context.ask({ permission: "read", patterns: [args.filePath], always: ["*"], metadata: { path: args.filePath } })
-            assertCurrent()
+            await assertCurrent()
             progress(context, "searching", "Patchline · LSP", details)
             let output: string | undefined
             if (args.operation === "workspaceSymbol" && args.query !== undefined) {
@@ -731,7 +771,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
               }
             }
             try {
-              assertCurrent()
+              await assertCurrent()
               output ??= await runOpenCodeLspBridge({ worktree: context.worktree, operation: args.operation, query: args.query, filePath: resolvedFile?.canonical, signal: context.abort, configuration: lspConfiguration })
             } catch (error) {
               if (config.toolProfile === "compact" && generation === lspConfigurationGeneration && error instanceof PatchlineError && error.code === "CAPABILITY_UNAVAILABLE" && await realpath(context.worktree) === await realpath(input.worktree)) {
@@ -742,7 +782,7 @@ export const PatchlinePlugin: Plugin = async (input, options) => {
               }
               throw error
             }
-            assertCurrent()
+            await assertCurrent()
             return { title: `Patchline · ${args.operation}`, output, metadata: { ...details, status: "observed", stage: "completed" } }
           } catch (error) {
             failure(context, error, "searching", args.filePath, { ...details, writes: 0 })

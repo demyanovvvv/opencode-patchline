@@ -5,14 +5,249 @@ import os from "node:os"
 import path from "node:path"
 import { Script } from "node:vm"
 import { describe, expect, it } from "vitest"
-import { createRelay, StreamUsage } from "../benchmarks/comparison/relay.js"
+import { createRelay, StreamUsage, StreamToolCalls } from "../benchmarks/comparison/relay.js"
 import { evaluateTask, materialize, prepareTaskWorkspace, recordMeasuredRun, saveMeasurementArtifact } from "../benchmarks/comparison/evaluate.js"
 import { comparisonTasks } from "../benchmarks/comparison/tasks.js"
+import { profileDiagnosticSchedule, parseOptions, reserveProfileDispatch, loadProfileDispatches, verifyProfileIdentity, verifyProfileMeasurementArtifacts, profileSettingsFingerprint } from "../benchmarks/comparison/config.js"
 import { markdownReport, renderReport } from "../benchmarks/comparison/report.js"
 import { fingerprintTree, fixtureGitEnvironment, gitIndexFingerprint, initializeFixtureRepository, runProcess, verifyReproducibleBuild } from "../benchmarks/comparison/process.js"
-import { fingerprintAttributionArtifacts, saveAttributionManifest, verifyAttributionManifest } from "../benchmarks/comparison/config.js"
+import { dispatchAttributionSchedule, fingerprintAttributionArtifacts, saveAttributionManifest, verifyAttributionManifest, reserveAttributionDispatch, loadAttributionDispatches, validateAttributionResumeRuns } from "../benchmarks/comparison/config.js"
 
 describe("comparison runtime", () => {
+  it("shows quality veto in Markdown and HTML despite positive savings", () => {
+    const report = { stage: "full", model: "fixture", integrity: { complete: true }, notes: [], runs: [
+      { taskId: "quality", title: "Quality", repeat: 0, mode: "stock", success: true, durationMs: 100, usage: { total: 200 } },
+      { taskId: "quality", title: "Quality", repeat: 0, mode: "patchline", success: false, durationMs: 50, usage: { total: 100 } },
+    ] }
+    expect(markdownReport(report)).toContain("QUALITY VETO: quality#0")
+    expect(renderReport(report)).toContain("QUALITY VETO: quality#0")
+    expect(markdownReport({ ...report, runs: [] })).toContain("Качество: отсутствие регрессии не доказано.")
+    const html = renderReport({ ...report, runs: report.runs.map((run) => ({ ...run, taskId: "</script><img src=x onerror=alert(1)>" })) })
+    expect(html).not.toContain("</script><img")
+    expect(html).toContain("\\u003c/script>")
+    expect(html).toContain("document.getElementById('quality').textContent=D.qualityNotice")
+    expect(renderReport({ ...report, runs: [] })).toContain("Качество: отсутствие регрессии не доказано.")
+  })
+  it("binds attribution settings to the parsed provider configuration", async () => {
+    const runner = await readFile(new URL("../benchmarks/comparison/runner.ts", import.meta.url), "utf8")
+    expect(runner).toContain("report.environment.settingsFingerprint = profileSettingsFingerprint({ model, steps: options.steps, timeoutMs: options.timeoutMs, provider })")
+  })
+  it("rejects attribution resume with changed or missing execution settings", () => {
+    const settings = { model: "provider/model", steps: 8, timeoutMs: 180000, provider: { baseURL: "https://example.test/v1" } }
+    const fingerprint = profileSettingsFingerprint(settings)
+    for (const changed of [{ ...settings, model: "provider/other" }, { ...settings, steps: 9 }, { ...settings, timeoutMs: 1 }, { ...settings, provider: { baseURL: "https://other.test/v1" } }]) {
+      expect(() => validateAttributionResumeRuns([], 0, [], { saved: fingerprint, current: profileSettingsFingerprint(changed) })).toThrow(/settings/i)
+    }
+    expect(() => validateAttributionResumeRuns([], 0, [], { saved: undefined, current: fingerprint })).toThrow(/settings/i)
+    expect(() => validateAttributionResumeRuns([], 0, [], { saved: fingerprint, current: fingerprint })).not.toThrow()
+  })
+  it("resumes past an interrupted attribution slot while preserving measured evidence", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "patchline-attribution-resume-"))
+    try {
+      const schedule = ["stock", "original", "optimized"].map((treatment) => ({ taskId: "targeted", repeat: 0, treatment, mode: treatment === "stock" ? "stock" : "patchline" }))
+      await reserveAttributionDispatch(root, schedule, 0)
+      const measurement = { ...schedule[0]!, errors: [], usage: { total: 123 }, durationMs: 456 }
+      const measurementArtifact = await saveMeasurementArtifact(root, measurement)
+      const run = { ...measurement, measurementArtifact, gradingStatus: "complete", success: true }
+      await reserveAttributionDispatch(root, schedule, 1)
+      const consumed = await loadAttributionDispatches(root, schedule)
+      validateAttributionResumeRuns(schedule, consumed, [run])
+      await verifyProfileMeasurementArtifacts(root, [run])
+      expect(consumed).toBe(2)
+      await reserveAttributionDispatch(root, schedule, consumed)
+      expect(await loadAttributionDispatches(root, schedule)).toBe(3)
+      await verifyProfileMeasurementArtifacts(root, [run])
+      expect(run.usage.total).toBe(123)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+  it("accepts actual completed attribution grading and rejects undispatched or duplicate results", () => {
+    const entry = { taskId: "targeted", repeat: 0, treatment: "stock", mode: "stock" }
+    const run = { ...entry, gradingStatus: "complete", success: true }
+    expect(() => validateAttributionResumeRuns([entry], 1, [run])).not.toThrow()
+    for (const runs of [[run, run], [{ ...run, gradingStatus: "completed" }], [{ ...run, treatment: "optimized" }], [null]]) expect(() => validateAttributionResumeRuns([entry], 1, runs)).toThrow()
+    expect(() => validateAttributionResumeRuns([entry], 0, [run])).toThrow()
+  })
+  it("reports token evaluation without monetary pricing commentary", () => {
+    const report = { stage: "offline-check", model: "offline", runs: [], notes: [] }
+    expect(markdownReport(report)).not.toMatch(/Стоимость|тариф/i)
+    expect(markdownReport(report)).toContain("Экономия токенов")
+    expect(markdownReport(report)).toContain("Точность эталонного diff")
+    expect(renderReport(report)).not.toMatch(/Стоимость|тариф|бесплатн/i)
+  })
+  it("allows only one concurrent reservation of an attribution slot", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "patchline-attribution-race-"))
+    try {
+      const schedule = [{ taskId: "targeted", repeat: 0, treatment: "stock", mode: "stock" }]
+      const attempts = await Promise.allSettled(Array.from({ length: 8 }, () => reserveAttributionDispatch(root, schedule, 0)))
+      expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1)
+      expect(await loadAttributionDispatches(root, schedule)).toBe(1)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+  it("durably reserves attribution slots without retrying interrupted dispatches", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "patchline-attribution-ledger-"))
+    try {
+      const schedule = [{ taskId: "targeted", repeat: 0, mode: "stock", treatment: "stock" }, { taskId: "targeted", repeat: 0, mode: "patchline", treatment: "original" }]
+      await expect(reserveAttributionDispatch(root, schedule, 1)).rejects.toThrow(/order/)
+      await reserveAttributionDispatch(root, schedule, 0)
+      expect(await loadAttributionDispatches(root, schedule)).toBe(1)
+      await expect(reserveAttributionDispatch(root, schedule, 0)).rejects.toThrow()
+      await expect(loadAttributionDispatches(root, [{ ...schedule[0]!, treatment: "optimized" }, schedule[1]!])).rejects.toThrow(/identity/)
+      await reserveAttributionDispatch(root, schedule, 1)
+      expect(await loadAttributionDispatches(root, schedule)).toBe(2)
+      await rm(path.join(root, "attribution-dispatch-01.json"))
+      await expect(loadAttributionDispatches(root, schedule)).rejects.toThrow(/gap/)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+  it("verifies resumed raw measurement bytes and dispatch identity", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "patchline-resume-artifact-"))
+    try {
+      const entry = profileDiagnosticSchedule()[0]!
+      const measurementArtifact = await saveMeasurementArtifact(root, { ...entry, errors: ["Session timeout"] })
+      const run = { ...entry, errors: ["Session timeout"], measurementArtifact }
+      await expect(verifyProfileMeasurementArtifacts(root, [run])).resolves.toBeUndefined()
+      await expect(verifyProfileMeasurementArtifacts(root, [{ ...run, errors: [...run.errors, "Evaluation failed"] }])).resolves.toBeUndefined()
+      await expect(verifyProfileMeasurementArtifacts(root, [{ ...run, errors: [] }])).rejects.toThrow(/measurement/)
+      await expect(verifyProfileMeasurementArtifacts(root, [{ ...run, errors: ["replacement"] }])).rejects.toThrow(/measurement/)
+      await expect(verifyProfileMeasurementArtifacts(root, [{ ...run, usage: { total: 1 } }])).rejects.toThrow(/measurement/)
+      await expect(verifyProfileMeasurementArtifacts(root, [{ ...run, repeat: 99 }])).rejects.toThrow(/measurement/)
+      await writeFile(path.join(root, measurementArtifact.file), "{}")
+      await expect(verifyProfileMeasurementArtifacts(root, [run])).rejects.toThrow(/measurement/)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+  it("rejects changed profile artifacts after measurement before grading", async () => {
+    await expect(verifyProfileIdentity("before", async () => "after")).rejects.toThrow(/artifacts changed/)
+    await expect(verifyProfileIdentity("before", async () => "before")).resolves.toBeUndefined()
+  })
+  it("durably reserves a profile dispatch before execution and rejects duplicate reservations", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "patchline-profile-ledger-"))
+    try {
+      const entry = profileDiagnosticSchedule()[0]!
+      await reserveProfileDispatch(root, [], entry)
+      expect(JSON.parse(await readFile(path.join(root, "profile-dispatch-00.json"), "utf8"))).toMatchObject({ index: 0, entry, state: "dispatched" })
+      expect(await loadProfileDispatches(root)).toEqual([entry])
+      await expect(reserveProfileDispatch(root, [], entry)).rejects.toThrow()
+      await expect(reserveProfileDispatch(root, [entry], entry)).rejects.toThrow(/prefix/)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+  it("rejects dispatch ledger gaps and malformed records instead of treating them as unused authorization", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "patchline-profile-ledger-gap-"))
+    try {
+      await writeFile(path.join(root, "profile-dispatch-01.json"), "{}")
+      await expect(loadProfileDispatches(root)).rejects.toThrow(/ledger/)
+      await rm(path.join(root, "profile-dispatch-01.json"))
+      await writeFile(path.join(root, "profile-dispatch-00.json"), "{")
+      await expect(loadProfileDispatches(root)).rejects.toThrow()
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+  it("requires explicit twelve-session authorization for profile diagnostics", () => {
+    expect(() => parseOptions(["run-profiles"])).toThrow(/12/)
+    expect(() => parseOptions(["run-profiles", "--max-sessions", "18"])).toThrow(/12/)
+    expect(parseOptions(["run-profiles", "--max-sessions", "12"])).toMatchObject({ command: "run-profiles", maxSessions: 12, repeats: 2, steps: 8 })
+    expect(() => parseOptions(["run-profiles", "--max-sessions", "12", "--repeats", "5"])).toThrow(/fixed design/)
+  })
+  it("requires profile resume input to be the output directory results file", () => {
+    expect(() => parseOptions(["run-profiles", "--max-sessions", "12", "--out", "resume", "--input", "other/results.json"])).toThrow(/resume input/)
+    expect(parseOptions(["run-profiles", "--max-sessions", "12", "--out", "resume", "--input", "resume/results.json"]).input).toBe(path.resolve("resume/results.json"))
+  })
+  it("pins the authorized profile diagnostic to twelve balanced sessions", () => {
+    const schedule = profileDiagnosticSchedule()
+    expect(schedule).toHaveLength(12)
+    expect(new Set(schedule.map((entry) => JSON.stringify(entry))).size).toBe(12)
+    expect(schedule.slice(0, 2).map((entry) => entry.toolProfile)).toEqual(["extended", "compact"])
+    expect(schedule.slice(6, 8).map((entry) => entry.toolProfile)).toEqual(["compact", "extended"])
+    for (const task of ["targeted", "large-file", "three-files"]) expect(schedule.filter((entry) => entry.taskId === task)).toHaveLength(4)
+  })
+  it("does not label interrupted tool streams complete", () => {
+    const parser = new StreamToolCalls()
+    parser.push('data: {"choices":[]}\n\n')
+    expect(parser.finish(false).complete).toBe(false)
+  })
+  it("separates choice indices and caps the number of reconstructed calls", () => {
+    const parser = new StreamToolCalls()
+    for (let index = 0; index < 129; index++) {
+      parser.push(`data: ${JSON.stringify({ choices: [{ index, delta: { tool_calls: [{ index: 0, function: { name: "read", arguments: "{}" } }] } }] })}\n\n`)
+    }
+    const result = parser.finish()
+    expect(result.complete).toBe(false)
+    expect(result.calls).toHaveLength(128)
+    expect(result.calls.every((call) => call.validJson && !call.readPathValid)).toBe(true)
+  })
+  it("bounds tool telemetry and tolerates malformed provider frames", () => {
+    for (const value of ["null", '{"choices":{}}', '{"choices":[null]}', '{"choices":[{"delta":{"tool_calls":{}}}]}']) {
+      const parser = new StreamToolCalls()
+      expect(() => parser.push(`data: ${value}\n\n`)).not.toThrow()
+      expect(parser.finish().complete).toBe(false)
+    }
+    const parser = new StreamToolCalls()
+    parser.push("x".repeat(2_000_001))
+    expect(parser.finish()).toEqual({ complete: false, calls: [] })
+  })
+  it("summarizes fragmented provider tool arguments without persisting their content", () => {
+    const parser = new StreamToolCalls()
+    const frame = (index: number, name: string | undefined, args: string) => `data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index, function: { name, arguments: args } }] } }] })}\n\n`
+    const text = frame(0, "read", '{"filePath":"secret.ts",') + frame(0, undefined, '"anchor":"private","offset":1}') + frame(1, "read", "{}")
+    for (let i = 0; i < text.length; i += 7) parser.push(text.slice(i, i + 7))
+    const result = parser.finish()
+    expect(result.complete).toBe(true)
+    expect(result.calls).toMatchObject([{ name: "read", validJson: true, readPathValid: true, anchorWithOffset: true }, { name: "read", validJson: true, readPathValid: false, anchorWithOffset: false }])
+    expect(JSON.stringify(result)).not.toMatch(/secret|private/)
+    expect(result.calls[1]!.argumentsSha256).toBe(createHash("sha256").update("{}").digest("hex"))
+  })
+  it("reconstructs interleaved three-call argument streams at every transport split", () => {
+    const args = ["greeting.mjs", "app.mjs", "preview.mjs"].map((filePath) => JSON.stringify({ filePath, limit: 40 }))
+    const frame = (calls: unknown[]) => `data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: calls } }] })}\r\n\r\n`
+    const stream = frame(args.map((_, index) => ({ index, id: `call-${index}`, function: { name: "read", arguments: "" } })))
+      + [2, 0, 1].map((index) => frame([{ index, function: { arguments: args[index]!.slice(0, 12) } }])).join("")
+      + frame([1, 2, 0].map((index) => ({ index, function: { arguments: args[index]!.slice(12) } })))
+      + "data: [DONE]\r\n\r\n"
+    for (let split = 0; split <= stream.length; split++) {
+      const parser = new StreamToolCalls()
+      parser.push(stream.slice(0, split))
+      parser.push(stream.slice(split))
+      expect(parser.finish()).toMatchObject({ complete: true, calls: args.map((value) => ({ name: "read", argumentsBytes: Buffer.byteLength(value), argumentsSha256: createHash("sha256").update(value).digest("hex"), validJson: true, readPathValid: true, anchorWithOffset: false })) })
+    }
+  })
+  it("distinguishes missing, empty and non-string streamed arguments without retaining content", () => {
+    const parser = new StreamToolCalls()
+    for (const fn of [{ name: "read" }, { arguments: "" }, { arguments: { filePath: "private" } }]) parser.push(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index: 2, function: fn }] } }] })}\n\n`)
+    expect(parser.finish().calls[0]).toMatchObject({ argumentFragments: 1, emptyArgumentFragments: 1, nonStringArgumentFragments: 1, missingArgumentFragments: 1 })
+    expect(JSON.stringify(parser.finish())).not.toContain("private")
+  })
+  it("rejects an invalid attribution manifest before local checks or credentials", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "comparison-attribution-preflight-"))
+    try {
+      const input = path.join(root, "manifest.json")
+      await writeFile(input, "null")
+      const result = await runProcess(process.execPath, ["--import", "tsx", "benchmarks/comparison/runner.ts", "run-attribution", "--input", input, "--max-sessions", "18", "--provider-config", path.join(root, "missing.json"), "--out", path.join(root, "out")], { cwd: process.cwd(), env: process.env, timeoutMs: 30000 })
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain("Attribution preparation design changed or is invalid")
+      expect(result.stdout).not.toContain("Running local safety checks")
+      await expect(readFile(path.join(root, "out", "results.json"))).rejects.toMatchObject({ code: "ENOENT" })
+    } finally { await rm(root, { recursive: true, force: true }) }
+  }, 35000)
+  it("reports attribution separately from two-mode completeness", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "comparison-attribution-report-"))
+    try {
+      const input = path.join(root, "input.json")
+      await writeFile(input, JSON.stringify({ stage: "attribution-pilot", model: "controlled/model", notes: ["cache uncontrolled"], preparation: { corpusSha256: "pinned-corpus" }, runs: [{ taskId: "<script>alert(1)</script>", treatment: "stock", repeat: 0, success: false, durationMs: 10, usage: null, gradingStatus: "complete" }] }))
+      const result = await runProcess(process.execPath, ["--import", "tsx", "benchmarks/comparison/runner.ts", "report", "--input", input, "--out", path.join(root, "out")], { cwd: process.cwd(), env: process.env, timeoutMs: 30000 })
+      expect(result.code, result.stderr).toBe(0)
+      const report = JSON.parse(await readFile(path.join(root, "out", "results.json"), "utf8"))
+      expect(report.analysis.acceptance).toBe("not-established-pilot")
+      expect(report.analysis.integrity.missing).toHaveLength(18)
+      expect(report.analysis.originalVsStock).toBeNull()
+      const html = await readFile(path.join(root, "out", "index.html"), "utf8")
+      expect(html).toContain("not-established-pilot")
+      expect(html).toContain("originalVsStock")
+      expect(html).toContain("gradingStatus")
+      expect(html).toContain("controlled/model")
+      expect(html).toContain("pinned-corpus")
+      expect(html).toContain("cache uncontrolled")
+      expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;")
+      expect(html).not.toContain("<script>")
+      expect(await readFile(path.join(root, "out", "results.csv"), "utf8")).toContain('\"<script>alert(1)</script>\",\"stock\",\"0\",\"false\",\"10\",\"\"')
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
   it("prepares attribution through the CLI without provider configuration or executable hosts", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "comparison-prepare-cli-"))
     try {
@@ -28,6 +263,12 @@ describe("comparison runtime", () => {
       const retry = await runProcess(process.execPath, args, { cwd: process.cwd(), env: process.env, timeoutMs: 30000 })
       expect(retry.code).not.toBe(0)
       expect(await readFile(filename, "utf8")).toBe(before)
+      await writeFile(paths[3]!, "changed optimized plugin")
+      const execute = await runProcess(process.execPath, ["--import", "tsx", "benchmarks/comparison/runner.ts", "run-attribution", "--input", filename, "--max-sessions", "18", "--stock-bin", paths[0]!, "--patchline-bin", paths[1]!, "--original-plugin", paths[2]!, "--optimized-plugin", paths[3]!, "--provider-config", path.join(root, "missing-credentials.json"), "--out", path.join(root, "execution")], { cwd: process.cwd(), env: process.env, timeoutMs: 30000 })
+      expect(execute.code).not.toBe(0)
+      expect(execute.stderr).toContain("Attribution artifacts changed")
+      expect(execute.stderr).not.toContain("missing-credentials")
+      await expect(readFile(path.join(root, "execution", "results.json"))).rejects.toMatchObject({ code: "ENOENT" })
     } finally { await rm(root, { recursive: true, force: true }) }
   }, 35000)
   it("refuses preparation output inside a measured plugin distribution", async () => {
@@ -48,15 +289,75 @@ describe("comparison runtime", () => {
       const input = { stockBinary: path.join(root, "stock"), integratedBinary: path.join(root, "host"), originalPlugin: path.join(root, "dist", "original"), optimizedPlugin: path.join(root, "dist", "optimized") }
       for (const [key, file] of Object.entries(input)) await writeFile(file, key)
       const artifacts = await fingerprintAttributionArtifacts(input)
+      expect(artifacts[1]!.dependencies).toBeNull()
+      const absentManifest = await saveAttributionManifest(path.join(root, "absent-dependencies.json"), input, artifacts)
+      await mkdir(path.join(root, "node_modules"))
+      await writeFile(path.join(root, "node_modules", "dependency.js"), "original dependency")
+      await expect(verifyAttributionManifest(absentManifest, input)).rejects.toThrow(/changed/)
+      const withDependencies = await fingerprintAttributionArtifacts(input)
+      artifacts.splice(0, artifacts.length, ...withDependencies)
+      await expect(saveAttributionManifest(path.join(root, "node_modules", "manifest.json"), input, artifacts)).rejects.toThrow(/inside.*measured/)
       expect(artifacts).toHaveLength(3)
       expect(artifacts[1]!.binary).toEqual(artifacts[2]!.binary)
       expect(artifacts[1]!.plugin?.sha256).toMatch(/^[a-f0-9]{64}$/)
       expect(artifacts[1]!.plugin?.sha256).not.toBe(artifacts[2]!.plugin?.sha256)
       expect(artifacts[1]!.distribution?.sha256).toMatch(/^[a-f0-9]{64}$/)
+      expect(artifacts[1]!.dependencies?.sha256).toMatch(/^[a-f0-9]{64}$/)
       const manifestPath = path.join(root, "manifest.json")
       await saveAttributionManifest(manifestPath, input, artifacts)
       const saved = await readFile(manifestPath, "utf8")
+      await writeFile(path.join(root, "node_modules", "dependency.js"), "changed dependency")
+      await expect(verifyAttributionManifest(JSON.parse(saved), input)).rejects.toThrow(/changed/)
+      await writeFile(path.join(root, "node_modules", "dependency.js"), "original dependency")
+      const dispatched: string[] = []
+      const checkpoints: number[] = []
+      await expect(dispatchAttributionSchedule(JSON.parse(saved), input, async (entry) => {
+        if (entry.treatment === "original") throw new Error("session failed")
+        return entry.treatment
+      }, async (results) => { checkpoints.push(results.length) })).rejects.toThrow("session failed")
+      expect(checkpoints).toEqual([1])
+      const checkpointDispatches: string[] = []
+      await expect(dispatchAttributionSchedule(JSON.parse(saved), input, async (entry) => {
+        checkpointDispatches.push(entry.treatment)
+        return entry
+      }, async () => { throw new Error("checkpoint persistence failed") })).rejects.toThrow("checkpoint persistence failed")
+      expect(checkpointDispatches).toEqual(["stock"])
+      const bindings: string[] = []
+      await dispatchAttributionSchedule(JSON.parse(saved), input, async (entry, artifact) => {
+        expect(artifact.treatment).toBe(entry.treatment)
+        bindings.push(artifact.binary.path)
+      })
+      expect(bindings[0]).toBe(await import("node:fs/promises").then((fs) => fs.realpath(input.stockBinary)))
+      const detachedManifest = JSON.parse(saved)
+      await dispatchAttributionSchedule(detachedManifest, input, async (_entry, artifact) => {
+        artifact.binary.path = "callback-local mutation"
+      })
+      expect(detachedManifest).toEqual(JSON.parse(saved))
+      const controller = new AbortController()
+      const cancelledDispatches: string[] = []
+      await expect(dispatchAttributionSchedule(JSON.parse(saved), input, async (entry) => {
+        cancelledDispatches.push(entry.treatment)
+        controller.abort(new Error("pilot cancelled"))
+      }, undefined, controller.signal)).rejects.toThrow("pilot cancelled")
+      expect(cancelledDispatches).toEqual(["stock"])
+      await expect(dispatchAttributionSchedule(JSON.parse(saved), input, async (entry) => {
+        dispatched.push(entry.treatment)
+        await writeFile(input.optimizedPlugin, "mutated after first dispatch")
+      })).rejects.toThrow(/changed/)
+      expect(dispatched).toEqual(["stock"])
+      await writeFile(input.optimizedPlugin, "optimizedPlugin")
+      const dispatchedResults = await dispatchAttributionSchedule(JSON.parse(saved), input, async (entry) => ({ ...entry, success: false, usage: null }))
+      expect(dispatchedResults).toEqual(JSON.parse(saved).schedule.map((entry: object) => ({ ...entry, success: false, usage: null })))
       await expect(verifyAttributionManifest(JSON.parse(saved), input)).resolves.toBeUndefined()
+      const verification = await runProcess(process.execPath, ["--import", "tsx", "benchmarks/comparison/runner.ts", "verify-attribution", "--input", manifestPath, "--stock-bin", input.stockBinary, "--patchline-bin", input.integratedBinary, "--original-plugin", input.originalPlugin, "--optimized-plugin", input.optimizedPlugin], { cwd: process.cwd(), env: process.env, timeoutMs: 30000 })
+      expect(verification.code, verification.stderr).toBe(0)
+      expect(verification.stdout).toContain("Attribution preparation verified")
+      expect(JSON.parse(saved).harnessTree.sha256).toMatch(/^[a-f0-9]{64}$/)
+      expect(JSON.parse(saved).sourceTree.sha256).toMatch(/^[a-f0-9]{64}$/)
+      expect(JSON.parse(saved).lockfileSha256).toMatch(/^[a-f0-9]{64}$/)
+      await expect(verifyAttributionManifest({ ...JSON.parse(saved), sourceTree: { sha256: "stale" } }, input)).rejects.toThrow(/source.*changed/i)
+      await expect(verifyAttributionManifest({ ...JSON.parse(saved), lockfileSha256: "stale" }, input)).rejects.toThrow(/lockfile.*changed/i)
+      await expect(verifyAttributionManifest({ ...JSON.parse(saved), harnessTree: { sha256: "stale" } }, input)).rejects.toThrow(/harness.*changed/i)
       await expect(verifyAttributionManifest({ ...JSON.parse(saved), schedule: [] }, input)).rejects.toThrow(/design/)
       await expect(verifyAttributionManifest({ ...JSON.parse(saved), model: "different/model" }, input)).rejects.toThrow(/design/)
       await expect(verifyAttributionManifest(null as never, input)).rejects.toThrow(/design/)
@@ -281,10 +582,17 @@ describe("comparison runtime", () => {
     expect(new StreamUsage().finish()).toBeNull()
   })
 
+  it("accepts usage-only SSE frames without inventing tool calls", () => {
+    const stream = new StreamToolCalls()
+    stream.push('data: {"usage":{"prompt_tokens":10,"completion_tokens":2}}\n\ndata: [DONE]\n\n')
+    expect(stream.finish()).toEqual({ complete: true, calls: [] })
+  })
+
   it("forwards real streaming bytes and records provider calls without credentials", async () => {
     const upstream = createServer((req, res) => {
       expect(req.headers.authorization).toBe("Bearer do-not-persist")
       res.writeHead(200, { "content-type": "text/event-stream" })
+      res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { name: "read", arguments: '{"filePath":"confidential.ts"}' } }] } }] })}\n\n`)
       res.end('data: {"usage":{"prompt_tokens":10,"completion_tokens":2}}\n\ndata: [DONE]\n\n')
     })
     await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve))
@@ -303,6 +611,8 @@ describe("comparison runtime", () => {
       const bytes = (entries: unknown[]) => entries.reduce<number>((sum, entry) => sum + Buffer.byteLength(JSON.stringify(entry)), 0)
       expect(relay.calls[0]?.messageSections).toEqual({ systemBytes: bytes(messages.slice(0, 2)), historyBytes: bytes(messages.slice(2, 3)), toolResultBytes: bytes(messages.slice(3)), otherBytes: 0, messages: 4 })
       expect(JSON.stringify(relay.calls)).not.toContain("Привет")
+      expect(JSON.stringify(relay.calls)).not.toContain("confidential.ts")
+      expect(relay.calls[0]).toMatchObject({ responseToolCalls: { complete: true, calls: [{ name: "read", validJson: true, readPathValid: true }] } })
     } finally { await relay.close(); await new Promise<void>((resolve) => upstream.close(() => resolve())) }
   })
 

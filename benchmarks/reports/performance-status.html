@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Patchline — тесты и результаты улучшений</title>
+<style>
+body{font:16px system-ui,sans-serif;background:#101827;color:#e5edf8;max-width:1050px;margin:40px auto;padding:0 24px;line-height:1.6}h1,h2{color:#fff}.card{background:#1c2940;padding:20px;border-radius:12px;margin:20px 0}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:12px;border-bottom:1px solid #394760}.good{color:#79e3af}.bad{color:#ffaaa4}.note{color:#b8c7dd}code{overflow-wrap:anywhere}a{color:#8fcaff}
+</style>
+<h1>Patchline: тесты и измеренные изменения</h1>
+<p class="note">Обновлено 18 октября 2026. Свежие тесты текущего worktree; сравнение производительности — сохранённый пилот v10, не новый модельный прогон.</p>
+<section class="card"><h2>Свежий прогон тестов</h2>
+<p class="good"><strong>73 файла прошли · 697 тестов passed · 1 skipped</strong></p>
+<p>Команда: <code>npm test</code>. Продолжительность 22,77 с. Один пропущенный тест не считается пройденным.</p></section>
+<section class="card"><h2>Stock / исходный / оптимизированный Patchline</h2>
+<p>18 сессий: три задачи × три режима × два повтора. Все режимы: 6/6 успешных сессий. Пилот описательный: отсутствие потери качества на независимом корпусе не доказано.</p>
+<table><thead><tr><th>Метрика</th><th>Stock</th><th>Исходный</th><th>Оптимизированный</th></tr></thead><tbody>
+<tr><td>Все provider tokens, включая cache</td><td>242 626</td><td>261 890</td><td>273 533</td></tr>
+<tr><td>Время сессий, с</td><td>209,67</td><td>251,79</td><td>248,26</td></tr>
+<tr><td>Модельные шаги</td><td>36</td><td>36</td><td>40</td></tr>
+<tr><td>Сумма времени инструментов, мс</td><td>4 064</td><td>3 853</td><td>3 551</td></tr>
+<tr><td>Байты схем на запрос</td><td>14 900</td><td>18 184</td><td>17 132</td></tr>
+</tbody></table></section>
+<section class="card"><h2>Где есть улучшение</h2><ul>
+<li class="good">Время инструментов относительно stock: −12,62% (4064 → 3551 мс). Сумма длительностей инструментов не равна времени всей сессии.</li>
+<li class="good">Схемы относительно исходного Patchline: −5,79% байтов на запрос. Байты не являются оценкой токенов.</li>
+<li class="good">Время сессий относительно исходного Patchline: −1,40% в этом пилоте. Статистическая устойчивость не установлена.</li>
+</ul><h2>Где улучшения нет</h2><ul>
+<li class="bad">Относительно stock: +12,74% токенов и +18,41% времени.</li>
+<li class="bad">Относительно исходного Patchline: +4,45% токенов.</li>
+<li>Четыре дополнительных модельных шага перекрывают локальное ускорение инструментов.</li>
+</ul><p><strong>Цель −20% токенов и −10% времени относительно stock не достигнута.</strong> Основная серия 130 сессий, независимый holdout и оставшиеся platform/isolation gates не завершены.</p></section>
+<section class="card"><h2>Источники и воспроизводимость</h2>
+<p>Свежие тесты: терминальный вывод <code>npm test</code> от 18 октября 2026, начало 22:24:23.</p>
+<p>Измерения: <code>C:/Users/demya/AppData/Local/Temp/opencode/patchline-attribution-anchor-run-v10/results.json</code> и <code>summary.md</code>. Итоги инструментов и схем агрегированы из providerCalls/events этих сессий.</p>
+<p>План: <a href="../../docs/patchline-performance-improvement-plan.md">patchline-performance-improvement-plan.md</a>. Неудачные и прерванные диагностики не заменены успешными результатами и не включены в v10.</p></section>
+</html>

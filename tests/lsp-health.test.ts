@@ -1,9 +1,64 @@
 import { expect, it } from "vitest"
-import { verifyLspServer } from "../src/lsp/health.js"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { fingerprintLspCommand, verifyLspServer } from "../src/lsp/health.js"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
+
+it("invalidates a nested project fingerprint after an ancestor workspace lock changes", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "patchline-workspace-lock-"))
+  try {
+    const project = path.join(root, "packages", "app")
+    await mkdir(project, { recursive: true })
+    const command = [process.execPath, "--stdio"]
+    const before = await fingerprintLspCommand(command, project)
+    await writeFile(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: 9\n")
+    const installed = await fingerprintLspCommand(command, project)
+    expect(installed).not.toBe(before)
+    await rm(path.join(root, "pnpm-lock.yaml"))
+    expect(await fingerprintLspCommand(command, project)).not.toBe(installed)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it("invalidates fingerprints after project dependency lock changes", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "patchline-lock-fingerprint-"))
+  try {
+    const command = [process.execPath, "--stdio"]
+    const before = await fingerprintLspCommand(command, root)
+    await writeFile(path.join(root, "package-lock.json"), '{"lockfileVersion":3}')
+    const installed = await fingerprintLspCommand(command, root)
+    expect(installed).not.toBe(before)
+    await writeFile(path.join(root, "package-lock.json"), '{"lockfileVersion":2}')
+    expect(await fingerprintLspCommand(command, root)).not.toBe(installed)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it("fingerprints bare executables through PATH rather than the workspace", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "patchline-path-fingerprint-"))
+  const previous = process.env.PATH
+  try {
+    process.env.PATH = root
+    const binary = path.join(root, process.platform === "win32" ? "fixture-server.exe" : "fixture-server")
+    await writeFile(binary, "before")
+    const before = await fingerprintLspCommand(["fixture-server"], process.cwd())
+    await writeFile(binary, "after")
+    expect(await fingerprintLspCommand(["fixture-server"], process.cwd())).not.toBe(before)
+  } finally { process.env.PATH = previous; await rm(root, { recursive: true, force: true }) }
+})
+
+it("invalidates command fingerprints when a launcher script changes at the same path", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "patchline-health-fingerprint-"))
+  try {
+    const script = path.join(root, "server.js")
+    await writeFile(script, "old")
+    const before = await fingerprintLspCommand([process.execPath, script], root)
+    expect(before).toMatch(/^[a-f0-9]{64}$/)
+    await writeFile(script, "new")
+    expect(await fingerprintLspCommand([process.execPath, script], root)).not.toBe(before)
+    await rm(script)
+    expect(await fingerprintLspCommand([process.execPath, script], root)).not.toBe(before)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
 
 it("verifies an actual JSON-RPC initialize response and shuts down the server", async () => {
   const code = `let data='';process.stdin.on('data',chunk=>{data+=chunk;while(data.includes('\\r\\n\\r\\n')){const split=data.indexOf('\\r\\n\\r\\n');const length=Number(/Content-Length: (\\d+)/i.exec(data.slice(0,split))[1]);if(Buffer.byteLength(data.slice(split+4))<length)return;const body=data.slice(split+4,split+4+length);data=data.slice(split+4+length);const request=JSON.parse(body);if(request.id){const result=request.method==='initialize'?{capabilities:{documentSymbolProvider:true}}:null;const response=JSON.stringify({jsonrpc:'2.0',id:request.id,result});process.stdout.write('Content-Length: '+Buffer.byteLength(response)+'\\r\\n\\r\\n'+response)}if(request.method==='exit')process.exit(0)}})`

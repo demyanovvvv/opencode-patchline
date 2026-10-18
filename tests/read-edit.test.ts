@@ -10,6 +10,25 @@ import { buildLineIndex, sliceIndexedLines } from "../src/preservation/line-inde
 import { temporaryWorkspace } from "./helpers/workspace.js"
 
 describe("read and exact edit", () => {
+  it("explains how to recover from conflicting read selectors without creating a snapshot", async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await writeFile(path.join(workspace.path, "pricing.mjs"), "header\ndiscountedPrice\ntail\n")
+      const snapshots = new ScopedSnapshotStore()
+      const reads = new ReadService(snapshots)
+      const scope = { sessionId: "s", worktree: workspace.path, filePath: "pricing.mjs" }
+      await expect(reads.read({ ...scope, anchor: "discountedPrice", offset: 1, limit: 1 })).rejects.toMatchObject({
+        code: "INVALID_ARGUMENT", writes: 0,
+        message: expect.stringContaining("omit offset entirely"),
+      })
+      expect(snapshots.size).toBe(0)
+      const recovered = await reads.read({ ...scope, anchor: "discountedPrice", limit: 1 })
+      expect(recovered.offset).toBe(2)
+      expect(recovered.output).toContain("2:discountedPrice")
+      expect(recovered.output).not.toContain("tail")
+      expect(await readFile(path.join(workspace.path, "pricing.mjs"), "utf8")).toBe("header\ndiscountedPrice\ntail\n")
+    } finally { await workspace.cleanup() }
+  })
   it("returns bounded line candidates for ambiguous anchors without authorizing edits", async () => {
     const workspace = await temporaryWorkspace()
     try {

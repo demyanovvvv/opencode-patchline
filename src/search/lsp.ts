@@ -44,7 +44,10 @@ export async function runOpenCodeLspClient(client: LspBridgeClient, input: { wor
   if (result && typeof result === "object" && "error" in result && result.error) throw new PatchlineError("DIAGNOSTICS_UNAVAILABLE", `OpenCode SDK symbols failed: ${boundedErrorDetail(JSON.stringify(result.error))}`)
   const symbols = result && typeof result === "object" && "data" in result ? (result as { data: unknown }).data : result
   if (!Array.isArray(symbols)) throw new PatchlineError("DIAGNOSTICS_UNAVAILABLE", "OpenCode SDK returned an invalid symbols response; use ast_search or patchline_grep.")
-  const output = JSON.stringify(result)
+  const output = JSON.stringify(symbols.length ? result : {
+    data: symbols,
+    capabilityNote: "Empty SDK workspace-symbol results are not proof that no symbols exist: some OpenCode hosts expose a placeholder endpoint. Verify with native LSP, ast_search or patchline_grep.",
+  })
   return output.length <= MAX_OUTPUT_CHARS ? output : `${output.slice(0, MAX_OUTPUT_CHARS)}\n... LSP result truncated; narrow the query.`
 }
 

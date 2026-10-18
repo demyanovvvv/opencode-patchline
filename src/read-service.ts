@@ -59,7 +59,7 @@ export class ReadService {
 
   async read(request: ReadRequest): Promise<ReadResult> {
     if (request.anchor !== undefined && (request.anchor.length === 0 || request.offset !== undefined)) {
-      throw new PatchlineError("INVALID_ARGUMENT", "Read anchor must be nonempty and cannot be combined with offset.", { path: request.filePath })
+      throw new PatchlineError("INVALID_ARGUMENT", "Read anchor must be nonempty and cannot be combined with offset. Retry with filePath and either anchor (omit offset entirely) or offset (omit anchor entirely); keep limit if needed.", { path: request.filePath })
     }
     if (request.offset !== undefined && (!Number.isInteger(request.offset) || request.offset < 1)) {
       throw new PatchlineError("INVALID_ARGUMENT", "Read offset must be a positive integer.", { path: request.filePath })
